@@ -7,8 +7,8 @@ How the engineering skills should consume this repo's domain documentation when 
 This repo is a monorepo with multiple contexts. Read `CONTEXT-MAP.md` at the root — it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
 
 Planned contexts (per `docs/first_draft.md`):
-- `frontend/` — the PWA UI (TypeScript/React/Svelte, Web Speech API, 3D graph viz)
-- `backend/` — the Rust/Axum orchestrator and LightRAG graph engine
+- `frontend/` — the PWA UI (TypeScript/SvelteKit, Deepgram Nova-3 STT, `3d-force-graph` + graphology viz)
+- `backend/` — the Rust/Axum orchestrator and custom Rust graph engine (petgraph + SQLite/sqlite-vec)
 - `infrastructure/` — Docker Compose, reverse proxy, CI/CD, hosting
 
 ## Before exploring, read these
