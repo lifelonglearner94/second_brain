@@ -15,7 +15,10 @@
 
 services:
   edge:
-    image: second-brain-edge:${EDGE_TAG:-latest}
+    # ${REGISTRY:-} is empty for local dev (image: second-brain-edge) and set
+    # to ghcr.io/<owner>/ in deploy.env on the VPS (ADR-0003 / ADR-0007). The
+    # EDGE_TAG fallback keeps local dev on `latest` when deploy.env is absent.
+    image: ${REGISTRY:-}second-brain-edge:${EDGE_TAG:-latest}
     build:
       context: .
       dockerfile: infrastructure/edge/Dockerfile
@@ -28,7 +31,8 @@ services:
     restart: unless-stopped
 
   backend:
-    image: second-brain-backend:${BACKEND_TAG:-latest}
+    # See edge: ${REGISTRY:-} switches between local dev and GHCR on the VPS.
+    image: ${REGISTRY:-}second-brain-backend:${BACKEND_TAG:-latest}
     build:
       context: backend
       dockerfile: Dockerfile
