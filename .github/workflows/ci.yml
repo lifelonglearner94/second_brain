@@ -76,11 +76,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # ADR-0004 / issue #30: assert no Dockerfile ENV/ARG/COPY bakes a secret
-      # literal, so images stay public-safe artifacts. GHA-blind: this job
-      # never reads/writes/references infrastructure/.env — it only scans
-      # Dockerfiles (and may read .env.example, which carries no values).
-      - name: scan all Dockerfiles for secret literals (ADR-0004)
-        run: bash infrastructure/test/zero-trust.sh
-      - name: self-test (planted secret fails · real Dockerfiles pass)
-        run: bash infrastructure/test/zero-trust-test.sh
+      # ADR-0004 / ADR-0009 / issue #40: assert no Dockerfile ENV/ARG/COPY bakes
+      # a secret literal, so images stay public-safe artifacts. The guard reads
+      # .env.example's [SECRET] legend as the authoritative key-name list
+      # (word-segment heuristic as fallback for unknown keys). --self-test plants
+      # a secret fixture (RED, must fail — incl. URL-form NTFY_WEBHOOK_URL
+      # [SECRET]) then scans the real repo Dockerfiles (GREEN, must pass).
+      # GHA-blind: never reads/writes/references infrastructure/.env — only
+      # Dockerfiles and .env.example (which carries no values).
+      - name: self-test (planted secret fails · .env.example legend · real Dockerfiles pass)
+        run: bash infrastructure/test/zero-trust.sh --self-test
