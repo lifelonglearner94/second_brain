@@ -10,10 +10,18 @@ const BRAINDUMP: Braindump = {
 	created_at: 1_700_000_000
 };
 
-type BraindumpApi = { getBraindump(id: number): Promise<Braindump> };
+type BraindumpApi = {
+	getBraindump(id: number): Promise<Braindump>;
+	editBraindump(id: number, verbatim: string): Promise<Braindump>;
+};
 
 function apiStub(getBraindump: BraindumpApi['getBraindump']): BraindumpApi {
-	return { getBraindump };
+	return {
+		getBraindump,
+		editBraindump: vi.fn<BraindumpApi['editBraindump']>(
+			() => new Promise<Braindump>(() => {})
+		)
+	};
 }
 
 describe('DocumentModal — isolated braindump reader (ADR-0003, ADR-0005)', () => {
