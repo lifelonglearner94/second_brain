@@ -4,9 +4,24 @@ import { createIdb, type PendingCapture, type TopologySnapshot } from '../../src
 
 const SNAPSHOT: TopologySnapshot = {
 	fetchedAt: '2026-07-04T00:00:00Z',
-	nodes: [{ id: 'c1', label: 'sleep' }],
-	edges: [{ source: 'c1', target: 'c2', type: 'affects' }],
-	partitions: [{ conceptId: 'c1', cluster: 0 }]
+	concepts: [
+		{ id: 'c1', label: 'sleep', created_at: '2026-07-01T00:00:00Z' },
+		{ id: 'c2', label: 'melatonin', created_at: '2026-07-02T00:00:00Z' }
+	],
+	edges: [
+		{
+			id: 'e1',
+			source_concept_id: 'c1',
+			target_concept_id: 'c2',
+			original_type: 'affects',
+			current_type: 'affects',
+			created_at: '2026-07-02T00:00:00Z'
+		}
+	],
+	partitions: [
+		{ concept_id: 'c1', partition_id: 0 },
+		{ concept_id: 'c2', partition_id: 1 }
+	]
 };
 
 beforeEach(async () => {

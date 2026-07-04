@@ -1,9 +1,6 @@
-export type TopologySnapshot = {
-	fetchedAt: string;
-	nodes: { id: string; label: string }[];
-	edges: { source: string; target: string; type: string }[];
-	partitions: { conceptId: string; cluster: number }[];
-};
+import type { GlobalTopologySnapshot } from '$lib/api/client';
+
+export type TopologySnapshot = GlobalTopologySnapshot & { fetchedAt: string };
 
 export type PendingCapture = {
 	id: string;
