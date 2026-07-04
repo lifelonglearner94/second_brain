@@ -1,26 +1,28 @@
 //! Braindump ingest routes (issue #5 / #6, ADR-0007).
 //!
-//! The write path, end-to-end through the DB. `POST /braindumps` cleans the
-//! verbatim via Gemini, persists verbatim + cleaned + timestamp immutably, then
-//! runs the extractor (which draws edge types from the ontology) and the
-//! atomic accretion pipeline — identity + provenance + type history + embeddings
-//! (ADR-0001 / ADR-0002 / ADR-0003 / ADR-0010). `GET /braindumps/:id` returns
-//! both renderings. `PATCH /braindumps/:id` is error-correction only: it
-//! overwrites the verbatim in place, re-cleans, re-extracts, and re-runs
-//! accretion (the stale extraction is retracted first — ADR-0007); the id and
-//! created_at are untouched.
+//! Thin HTTP adapters (issue #42): `submit` and `edit` parse + validate
+//! non-empty, then delegate the full ingest pipeline — clean → persist →
+//! ontology → extract → accrete (identity + provenance + type history +
+//! embeddings, ADR-0001/0002/0003/0010) — to [`crate::braindump::ingest`] /
+//! [`crate::braindump::ingest_edit`], log the outcome, and return the stored
+//! braindump as JSON. The pipeline (the spec) lives in `braindump`, not here,
+//! so it is unit-testable without an HTTP roundtrip. `GET /braindumps/:id`
+//! returns both renderings; `PATCH /braindumps/:id` is error-correction only
+//! (overwrites in place, re-cleans, re-extracts, re-runs accretion with the
+//! stale extraction retracted first — ADR-0007; id and created_at untouched);
+//! `DELETE /braindumps/:id` cascades through the graph.
 //!
-//! All three sit behind the auth middleware (registered in [`crate::routes`]
-//! under the protected layer). The cleaner is [`crate::llm::Llm::clean`];
-//! extraction is a method on the same [`crate::llm::Llm`] seam; the accretion
-//! pipeline is [`crate::graph::ingest_extraction`].
+//! All sit behind the auth middleware (registered in [`crate::routes`] under
+//! the protected layer). The cleaner, extractor, and embedder are all methods
+//! on the single [`crate::llm::Llm`] seam; the accretion pipeline is
+//! [`crate::graph::ingest_extraction`].
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use serde::Deserialize;
 
-use crate::braindump::{get_braindump, insert_braindump, overwrite_verbatim, Braindump};
+use crate::braindump::{self, get_braindump, Braindump};
 use crate::error::{Error, Result};
 use crate::graph;
 use crate::state::AppState;
@@ -33,9 +35,10 @@ pub struct BraindumpRequest {
     pub verbatim: String,
 }
 
-/// `POST /braindumps` — submit a braindump. Cleans the verbatim via the LLM
-/// seam, persists verbatim + cleaned + timestamp immutably, then runs extraction
-/// + atomic accretion (ADR-0001 / ADR-0002 / ADR-0003 / ADR-0010).
+/// `POST /braindumps` — submit a braindump. A thin HTTP adapter (issue #42):
+/// parse + validate non-empty, delegate the full ingest pipeline
+/// (clean → persist → ontology → extract → accrete, ADR-0007) to
+/// [`braindump::ingest`], log the outcome, and return the stored braindump.
 pub async fn submit(
     State(state): State<AppState>,
     Json(body): Json<BraindumpRequest>,
@@ -44,21 +47,7 @@ pub async fn submit(
     if verbatim.trim().is_empty() {
         return Err(Error::BadRequest("verbatim must be non-empty".into()));
     }
-    let cleaned = state.llm.clean(&verbatim).await?;
-    let braindump = insert_braindump(&state.db, &verbatim, &cleaned).await?;
-    let ontology = graph::ontology_slugs(&state.db).await?;
-    let extraction = state
-        .llm
-        .extract(&braindump.verbatim, &ontology)
-        .await?;
-    let outcome = graph::ingest_extraction(
-        &state.db,
-        state.llm.as_ref(),
-        braindump.id,
-        &braindump.verbatim,
-        extraction,
-    )
-    .await?;
+    let (braindump, outcome) = braindump::ingest(&state.db, state.llm.as_ref(), &verbatim).await?;
     tracing::debug!(
         braindump_id = braindump.id,
         created = outcome.concepts_created,
@@ -80,11 +69,14 @@ pub async fn read(State(state): State<AppState>, Path(id): Path<i64>) -> Result<
     Ok(Json(braindump))
 }
 
-/// `PATCH /braindumps/:id` — error-correction only (ADR-0007). Overwrites the
-/// verbatim in place, re-runs the cleaner on the corrected text, re-extracts,
-/// and re-runs accretion (the stale extraction is retracted first). The id and
-/// created_at are untouched; substantive thinking-evolution spawns a new
-/// braindump, never edits the old one.
+/// `PATCH /braindumps/:id` — error-correction only (ADR-0007). A thin HTTP
+/// adapter (issue #42): parse + validate non-empty, delegate the full
+/// re-ingest pipeline (clean → overwrite-in-place → ontology → extract →
+/// accrete, with the stale extraction retracted first) to
+/// [`braindump::ingest_edit`], log the outcome, and return the braindump.
+/// `404` if no braindump with `id` exists. The id and created_at are
+/// untouched; substantive thinking-evolution spawns a new braindump, never
+/// edits the old one.
 pub async fn edit(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -94,23 +86,11 @@ pub async fn edit(
     if verbatim.trim().is_empty() {
         return Err(Error::BadRequest("verbatim must be non-empty".into()));
     }
-    let cleaned = state.llm.clean(&verbatim).await?;
-    let Some(braindump) = overwrite_verbatim(&state.db, id, &verbatim, &cleaned).await? else {
+    let Some((braindump, outcome)) =
+        braindump::ingest_edit(&state.db, state.llm.as_ref(), id, &verbatim).await?
+    else {
         return Err(Error::NotFound(format!("braindump {id} not found")));
     };
-    let ontology = graph::ontology_slugs(&state.db).await?;
-    let extraction = state
-        .llm
-        .extract(&braindump.verbatim, &ontology)
-        .await?;
-    let outcome = graph::ingest_extraction(
-        &state.db,
-        state.llm.as_ref(),
-        braindump.id,
-        &braindump.verbatim,
-        extraction,
-    )
-    .await?;
     tracing::debug!(
         braindump_id = braindump.id,
         created = outcome.concepts_created,

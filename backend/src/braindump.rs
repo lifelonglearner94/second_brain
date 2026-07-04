@@ -1,17 +1,26 @@
-//! Braindump persistence (issue #5 / ADR-0007).
+//! Braindump ingest + persistence (issue #5 / #42, ADR-0007).
 //!
 //! A braindump is an immutable thought-snapshot: verbatim (user-confirmed
 //! text at submit), cleaned (LLM-produced rendering), and a timestamp. Edits
 //! are error-correction only — they overwrite the verbatim in place and
 //! re-clean; substantive thinking-evolution spawns a new braindump, never
-//! edits the old one. Extraction is stubbed in this slice (the extractor seam
-//! lives in [`crate::extractor`]); this module is pure persistence.
+//! edits the old one.
+//!
+//! This module owns the ingest pipeline — clean → persist → ontology →
+//! extract → accrete (ADR-0007) — as [`ingest`] (submit) / [`ingest_edit`]
+//! (error-correction). The HTTP handlers in [`crate::routes::braindump`] are
+//! thin adapters (parse, validate non-empty, delegate, log); the pipeline is
+//! unit-testable without an HTTP roundtrip. The accretion step delegates to
+//! [`crate::graph::ingest_extraction`] (identity + provenance + type history +
+//! embeddings, ADR-0001/0002/0003/0010).
 
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{now_seconds, Db};
 use crate::error::Result;
+use crate::graph::{self, IngestOutcome};
+use crate::llm::Llm;
 
 /// One immutable thought-snapshot. `verbatim` is the user-confirmed text at
 /// submit (overwritable only via the edit/error-correction path); `cleaned`
@@ -108,9 +117,63 @@ pub async fn overwrite_verbatim(
     .await
 }
 
+/// The Braindump ingest pipeline for the submit path (ADR-0007): clean the
+/// verbatim via the LLM seam, persist verbatim + cleaned + timestamp
+/// immutably, then run extraction + atomic accretion (ontology → extract →
+/// [`crate::graph::ingest_extraction`], ADR-0001/0002/0003/0010). Returns the
+/// stored braindump and the accretion outcome so the caller can log it. This
+/// is the spec — the sequence the `submit` HTTP handler delegates to, so the
+/// pipeline is exercisable without an HTTP roundtrip. The edit path differs
+/// only in its persist step; see [`ingest_edit`].
+pub async fn ingest(
+    db: &Db,
+    llm: &dyn Llm,
+    verbatim: &str,
+) -> Result<(Braindump, IngestOutcome)> {
+    let cleaned = llm.clean(verbatim).await?;
+    let braindump = insert_braindump(db, verbatim, &cleaned).await?;
+    let outcome = accrete(db, llm, &braindump).await?;
+    Ok((braindump, outcome))
+}
+
+/// The Braindump ingest pipeline for the edit path (ADR-0007 error-correction):
+/// clean the corrected verbatim, overwrite it in place (id + created_at
+/// untouched), then re-run extraction + accretion (the stale extraction is
+/// retracted first inside [`crate::graph::ingest_extraction`]). Returns `None`
+/// if no braindump with `id` exists — the caller (the `edit` HTTP handler)
+/// maps that to `404`. Substantive thinking-evolution spawns a new braindump
+/// via [`ingest`], never this.
+pub async fn ingest_edit(
+    db: &Db,
+    llm: &dyn Llm,
+    id: i64,
+    verbatim: &str,
+) -> Result<Option<(Braindump, IngestOutcome)>> {
+    let cleaned = llm.clean(verbatim).await?;
+    let Some(braindump) = overwrite_verbatim(db, id, verbatim, &cleaned).await? else {
+        return Ok(None);
+    };
+    let outcome = accrete(db, llm, &braindump).await?;
+    Ok(Some((braindump, outcome)))
+}
+
+/// The shared post-persist core of the ingest pipeline (ADR-0007): load the
+/// governed ontology, extract concepts + edges via the LLM seam, and run the
+/// atomic accretion. This is the 90% that the `submit` and `edit` handlers
+/// used to duplicate inline (issue #42); the only step that differs between
+/// them is the persist call that produces the [`Braindump`] passed in here.
+async fn accrete(db: &Db, llm: &dyn Llm, braindump: &Braindump) -> Result<IngestOutcome> {
+    let ontology = graph::ontology_slugs(db).await?;
+    let extraction = llm.extract(&braindump.verbatim, &ontology).await?;
+    graph::ingest_extraction(db, llm, braindump.id, &braindump.verbatim, extraction).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
+    use crate::graph;
+    use crate::llm::Llm;
 
     #[tokio::test]
     async fn insert_then_get_returns_stored_braindump() {
@@ -156,5 +219,184 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         let got = overwrite_verbatim(&db, 9999, "x", "X").await.unwrap();
         assert!(got.is_none());
+    }
+
+    // --- issue #42: braindump::ingest owns the full pipeline (no HTTP) ---
+
+    /// In-memory Db with the vec0 embedding tables at the fake LLM's dim, so the
+    /// accretion step can store/retrieve embeddings without an `AppState`.
+    fn test_db() -> Db {
+        let db = Db::open_in_memory().unwrap();
+        db.ensure_vec_tables(64).unwrap();
+        db
+    }
+
+    /// An LLM scripted for the ingest pipeline: `clean` trims (the FakeLlm
+    /// contract), `extract` returns a fixed concept+edge set so the accretion
+    /// step has real work, and `embed_*` uses the deterministic token-bucket
+    /// vector. Lets `ingest` run clean → persist → ontology → extract →
+    /// accrete end-to-end with no network and no HTTP roundtrip.
+    struct IngestLlm {
+        result: ExtractionResult,
+    }
+
+    #[async_trait::async_trait]
+    impl Llm for IngestLlm {
+        async fn clean(&self, verbatim: &str) -> Result<String> {
+            Ok(verbatim.trim().to_string())
+        }
+        async fn generate_pinned(&self, _: &str, user: &str) -> Result<String> {
+            Ok(user.to_string())
+        }
+        async fn synthesize(&self, _: &str, _: &str) -> Result<String> {
+            Ok("IngestLlm::synthesize (unused by ingest tests)".to_string())
+        }
+        async fn extract(&self, _: &str, _: &[String]) -> Result<ExtractionResult> {
+            Ok(self.result.clone())
+        }
+        async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+            Ok(crate::embedding::deterministic_vector(text, 64))
+        }
+        async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+            Ok(crate::embedding::deterministic_vector(text, 64))
+        }
+        fn dim(&self) -> usize {
+            64
+        }
+    }
+
+    fn maria_endangers_q3() -> ExtractionResult {
+        ExtractionResult {
+            concepts: vec![
+                ExtractedConcept {
+                    label: "Maria".into(),
+                },
+                ExtractedConcept {
+                    label: "Q3 launch".into(),
+                },
+            ],
+            edges: vec![ExtractedEdge {
+                from_label: "Maria".into(),
+                type_slug: "endangers".into(),
+                to_label: "Q3 launch".into(),
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_runs_clean_persist_ontology_extract_accrete_without_http() {
+        let db = test_db();
+        let llm = IngestLlm {
+            result: maria_endangers_q3(),
+        };
+        let (braindump, outcome) = ingest(&db, &llm, "  maria endangers the q3 launch  ")
+            .await
+            .unwrap();
+
+        // clean: cleaned is the trimmed verbatim (FakeLlm contract).
+        assert_eq!(braindump.verbatim, "  maria endangers the q3 launch  ");
+        assert_eq!(braindump.cleaned, "maria endangers the q3 launch");
+        // persist: row fetchable by id with the cleaned rendering.
+        assert!(braindump.id > 0);
+        assert_eq!(
+            get_braindump(&db, braindump.id).await.unwrap().unwrap(),
+            braindump
+        );
+        // ontology → extract → accrete: both concepts + the edge landed with
+        // this braindump as their sole provenance, and the braindump embedding
+        // was stored (accretion ran, not just the persist).
+        assert_eq!(outcome.concepts_created, 2, "{outcome:?}");
+        assert_eq!(outcome.edges_created, 1, "{outcome:?}");
+        let maria = graph::concept_id_for_label(&db, "Maria")
+            .await
+            .unwrap()
+            .unwrap();
+        let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            graph::concept_provenance(&db, maria).await.unwrap(),
+            vec![braindump.id]
+        );
+        assert_eq!(
+            graph::concept_provenance(&db, q3).await.unwrap(),
+            vec![braindump.id]
+        );
+        let edge = graph::find_edge(&db, maria, "endangers", q3)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            graph::edge_provenance(&db, edge.id).await.unwrap(),
+            vec![braindump.id]
+        );
+        assert_eq!(
+            graph::edge_type_history(&db, edge.id).await.unwrap().len(),
+            1,
+            "type history seeded at index 0 (ADR-0003)"
+        );
+        assert!(
+            graph::braindump_embedding_stored(&db, braindump.id)
+                .await
+                .unwrap(),
+            "braindump embedding stored (retrieval backfill)"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_edit_overwrites_in_place_recleans_and_reaccretes_without_http() {
+        let db = test_db();
+        let llm = IngestLlm {
+            result: maria_endangers_q3(),
+        };
+        let (first, first_outcome) = ingest(&db, &llm, "maria endangers q3 launch")
+            .await
+            .unwrap();
+        assert_eq!(first_outcome.concepts_created, 2);
+
+        // Edit: correct the verbatim. Same scripted extraction → Maria/Q3
+        // accrete onto the existing nodes (no duplicates), id + timestamp
+        // are stable, and the cleaned rendering is re-derived.
+        let (edited, edited_outcome) =
+            ingest_edit(&db, &llm, first.id, "  maria endangers q3 launch again  ")
+                .await
+                .unwrap()
+                .expect("row exists");
+        assert_eq!(edited.id, first.id, "id stable across edit (ADR-0007)");
+        assert_eq!(
+            edited.created_at,
+            first.created_at,
+            "timestamp stable across edit (ADR-0007)"
+        );
+        assert_eq!(edited.verbatim, "  maria endangers q3 launch again  ");
+        assert_eq!(edited.cleaned, "maria endangers q3 launch again");
+        // ADR-0007: the edit retracts the stale extraction first, then
+        // re-accretes — so Maria/Q3 (whose only extractor was this braindump)
+        // vanish and are re-created fresh, not accreted. The braindump id is
+        // unchanged, so the re-created concepts carry provenance [first.id].
+        assert_eq!(edited_outcome.concepts_created, 2, "{edited_outcome:?}");
+        assert_eq!(edited_outcome.concepts_accreted, 0, "{edited_outcome:?}");
+        assert_eq!(edited_outcome.edges_created, 1, "{edited_outcome:?}");
+        let maria = graph::concept_id_for_label(&db, "Maria")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            graph::concept_provenance(&db, maria).await.unwrap(),
+            vec![first.id]
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_edit_on_missing_id_is_none() {
+        let db = test_db();
+        let llm = IngestLlm {
+            result: ExtractionResult::default(),
+        };
+        assert!(
+            ingest_edit(&db, &llm, 9999, "x").await.unwrap().is_none(),
+            "editing a missing braindump is None (caller maps to 404)"
+        );
     }
 }
