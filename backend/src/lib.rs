@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod braindump;
 pub mod chat;
+pub mod chat_inference;
 pub mod config;
 pub mod db;
 pub mod delta;

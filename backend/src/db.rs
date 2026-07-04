@@ -293,6 +293,53 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS graph_tombstones_kind_created_at_idx
             ON graph_tombstones(kind, created_at);",
     )?;
+
+    // Issue #11 — chat write-back, structural mode (ADR-0006). Forward-only
+    // additive: two new tables. `chat_inference_proposals` is the
+    // human-gated queue for chat's proposed inferences — a proposal is a
+    // candidate direct edge summarizing a traversable multi-hop path
+    // (structural) or a thematic gap (thematic, issue #13). The
+    // inference-claim is ALWAYS human-gated: no auto-endorse (endorsing an
+    // LLM deduction is the highest-stakes graph mutation), so every row
+    // starts `pending` and only flips to `endorsed`/`rejected` via the
+    // explicit HITL endpoints. `mode` origin-tags the proposal
+    // (`structural_inference` vs `thematic_inference`); structural proposals
+    // carry no Thematic Snapshot (ADR-0009 — their evidence is the graph
+    // itself, captured in `evidence_path`).
+    //
+    // `edge_inference_provenance` is the chat-inference half of edge
+    // provenance, origin-typed by `mode` (ADR-0006). It sits beside the
+    // braindump-origin `edge_provenance` (ADR-0002) so user thoughts and LLM
+    // deductions stay distinguishable: an edge's full `asserted_by` is the
+    // union of both tables. On endorse, a row is inserted linking the
+    // persisted edge to the proposal id; the orphan-edge cascade must
+    // consult both provenance tables so an inference-backed edge survives a
+    // braindump deletion (the inference is its own origin).
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS chat_inference_proposals (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            mode              TEXT NOT NULL,
+            source_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+            target_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+            proposed_type     TEXT NOT NULL,
+            evidence_path     TEXT NOT NULL,
+            rationale         TEXT,
+            status            TEXT NOT NULL DEFAULT 'pending',
+            created_at        INTEGER NOT NULL,
+            resolved_at       INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS chat_inference_proposals_status_idx
+            ON chat_inference_proposals(status);
+
+        CREATE TABLE IF NOT EXISTS edge_inference_provenance (
+            edge_id           INTEGER NOT NULL REFERENCES edges(id) ON DELETE CASCADE,
+            chat_inference_id INTEGER NOT NULL REFERENCES chat_inference_proposals(id) ON DELETE CASCADE,
+            mode              TEXT NOT NULL,
+            created_at        INTEGER NOT NULL,
+            PRIMARY KEY (edge_id, chat_inference_id)
+        );",
+    )?;
     Ok(())
 }
 
@@ -460,6 +507,8 @@ mod tests {
                 "merge_suggestions",
                 "type_proposals",
                 "graph_tombstones",
+                "chat_inference_proposals",
+                "edge_inference_provenance",
             ] {
                 assert!(
                     names.contains(&expected.to_string()),
