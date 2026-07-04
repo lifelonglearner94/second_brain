@@ -13,7 +13,7 @@ export default defineConfig({
 		setupFiles: ['tests/unit/setup-svelte.ts'],
 		server: {
 			deps: {
-				inline: ['@testing-library/svelte', '@testing-library/svelte-core']
+				inline: ['svelte', '@testing-library/svelte', '@testing-library/svelte-core']
 			}
 		}
 	}

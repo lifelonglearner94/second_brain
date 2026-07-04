@@ -22,6 +22,7 @@ export type GraphLink = {
 	target: string;
 	label: string;
 	color: string;
+	asserted_by?: number[];
 };
 
 export type GraphData = {
