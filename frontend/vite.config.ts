@@ -4,6 +4,9 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
 	plugins: [sveltekit(), svelteTesting({ autoCleanup: false })],
+	resolve: {
+		conditions: ['browser']
+	},
 	test: {
 		include: ['tests/unit/**/*.test.ts'],
 		environment: 'jsdom',
