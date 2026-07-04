@@ -2,10 +2,12 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { apiClient } from '$lib/api';
+	import type { GlobalTopologySnapshot, GraphDelta } from '$lib/api/client';
 	import { session } from '$lib/auth/session';
 	import { createIdb } from '$lib/state/idb';
 	import { loadViewport, saveViewport } from '$lib/state/viewport';
 	import { loadSpatialViewGraph } from '$lib/graph/load';
+	import { syncDelta, onWindowFocus } from '$lib/graph/delta-sync';
 	import { buildGraphData, type GraphData, type GraphNode, type GraphLink } from '$lib/graph/build';
 
 	const HIGHLIGHT = '#ffffff';
@@ -89,11 +91,16 @@
 		const idb = createIdb();
 		const savedViewport = loadViewport();
 
+		let currentSnapshot: GlobalTopologySnapshot | null = null;
+		let cursor = 0;
+
 		(async () => {
 			try {
 				const loaded = await loadSpatialViewGraph(apiClient, idb);
 				if (destroyed) return;
 				fetchedAtLabel = loaded.source === 'cache' ? loaded.snapshot.fetchedAt : null;
+				currentSnapshot = loaded.snapshot;
+				cursor = Math.floor(new Date(loaded.snapshot.fetchedAt).getTime() / 1000);
 				const data = buildGraphData(loaded.snapshot);
 				await renderGraph(data, loaded.source === 'cache' ? 'offline' : 'ready');
 			} catch (e) {
@@ -102,6 +109,31 @@
 				status = 'error';
 			}
 		})();
+
+		const stopFocusSync = onWindowFocus(globalThis, () => {
+			void reconcileOnFocus();
+		});
+
+		async function reconcileOnFocus(): Promise<void> {
+			if (destroyed || !currentSnapshot) return;
+			const outcome = await syncDelta({ snapshot: currentSnapshot, cursor }, apiClient);
+			if (destroyed || !outcome.applied) return;
+			currentSnapshot = outcome.state.snapshot;
+			cursor = outcome.state.cursor;
+			if (fg && hasDeltaChanges(outcome.delta)) {
+				fg.graphData(buildGraphData(currentSnapshot));
+			}
+		}
+
+		function hasDeltaChanges(delta: GraphDelta): boolean {
+			return (
+				delta.added_concepts.length > 0 ||
+				delta.added_edges.length > 0 ||
+				delta.deleted_concept_ids.length > 0 ||
+				delta.deleted_edge_ids.length > 0 ||
+				delta.retagged_edges.length > 0
+			);
+		}
 
 		async function renderGraph(data: GraphData, finalStatus: Status) {
 			const [{ default: ForceGraph3D }, { Vector2 }, { UnrealBloomPass }] = await Promise.all([
@@ -161,6 +193,7 @@
 
 		return () => {
 			destroyed = true;
+			stopFocusSync();
 			try {
 				fg?._destructor();
 			} catch {
