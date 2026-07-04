@@ -1,0 +1,5 @@
+# The Consumer Rule: the computational boundary is defined by who consumes the output
+
+ADR-0008 (backend) split graphology's responsibilities — ForceAtlas2 (layout) stays in the frontend, Louvain (community detection) moves to the backend — and justified the split as "visual vs semantic-adjacent." That justification is fuzzy: both algorithms read the entire graph topology, both produce clusters the user perceives, and both outputs are ephemeral. The real distinguishing property is the consumer of the output, not the nature of the math.
+
+The Consumer Rule: the frontend may compute anything whose output is consumed exclusively by the user's display. The backend must compute anything whose output is consumed by the LLM (or any other backend pipeline). Louvain's partition IDs are consumed by the LLM as context for Thematic Inference (the Hypothesis Engine); ForceAtlas2's coordinates are consumed exclusively by pixels. If the frontend computed Louvain, partition IDs would have to be synced back to the server over the network to feed the LLM — violating unidirectional data flow. The backend calculates what things mean; the frontend calculates where things sit.
