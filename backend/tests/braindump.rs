@@ -83,6 +83,7 @@ impl Extractor for CountingExtractor {
     async fn extract(
         &self,
         _verbatim: &str,
+        _ontology_slugs: &[String],
     ) -> second_brain_backend::error::Result<ExtractionResult> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(ExtractionResult::default())
