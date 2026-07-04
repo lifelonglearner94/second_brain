@@ -14,6 +14,7 @@ mod braindump;
 mod health;
 mod merge;
 mod ontology;
+mod retrieval;
 
 /// Build the full router. State is threaded in here (rather than via
 /// `.with_state` on the caller) because the auth middleware needs it at
@@ -49,6 +50,7 @@ pub fn router(state: AppState) -> Router {
         .route("/merge-suggestions", get(merge::list))
         .route("/merge-suggestions/{id}/approve", post(merge::approve))
         .route("/merge-suggestions/{id}/reject", post(merge::reject))
+        .route("/retrieve", post(retrieval::retrieve))
         .route("/admin/logs", get(admin::logs))
         .route_layer(from_fn_with_state(state.clone(), require_session));
 

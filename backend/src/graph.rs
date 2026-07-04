@@ -473,7 +473,7 @@ fn retract_extraction(conn: &rusqlite::Connection, braindump_id: i64) -> Result<
 }
 
 /// f32 slice → little-endian byte blob, the on-disk format sqlite-vec expects.
-fn vec_to_blob(v: &[f32]) -> Vec<u8> {
+pub(crate) fn vec_to_blob(v: &[f32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(v.len() * 4);
     for f in v {
         bytes.extend_from_slice(&f.to_le_bytes());
