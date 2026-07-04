@@ -39,10 +39,10 @@ export type BuildGraphDataOptions = {
 	zStep?: number;
 };
 
-export function buildGraphData(
+export function buildSpatialViewGraph(
 	snapshot: GlobalTopologySnapshot,
 	options: BuildGraphDataOptions = {}
-): GraphData {
+): MultiDirectedGraph {
 	const iterations = options.iterations ?? DEFAULT_ITERATIONS;
 	const zStep = options.zStep ?? DEFAULT_Z_STEP;
 
@@ -53,14 +53,15 @@ export function buildGraphData(
 
 	const knownConcepts = new Set(snapshot.concepts.map((c) => c.id));
 
-	if (snapshot.concepts.length === 0) {
-		return { nodes: [], links: [] };
-	}
-
 	const graph = new MultiDirectedGraph();
 	for (const concept of snapshot.concepts) {
 		const group = partitionByConcept.get(concept.id) ?? NO_PARTITION;
-		graph.addNode(concept.id, { label: concept.label, group, partition: group });
+		graph.addNode(concept.id, {
+			label: concept.label,
+			group,
+			partition: group,
+			color: partitionColor(group)
+		});
 	}
 
 	for (const edge of snapshot.edges) {
@@ -75,26 +76,34 @@ export function buildGraphData(
 		});
 	}
 
-	random.assign(graph, { scale: 100, center: 0 });
-
 	if (graph.order > 0) {
+		random.assign(graph, { scale: 100, center: 0 });
 		forceAtlas2.assign(graph, {
 			iterations,
 			settings: forceAtlas2.inferSettings(graph)
 		});
+		graph.forEachNode((key, attrs) => {
+			const group = (attrs.group as number) ?? NO_PARTITION;
+			graph.setNodeAttribute(key, 'z', group * zStep);
+		});
 	}
 
+	return graph;
+}
+
+export function projectToGraphData(
+	graph: MultiDirectedGraph
+): GraphData {
 	const nodes: GraphNode[] = [];
 	graph.forEachNode((key, attrs) => {
-		const group = (attrs.group as number) ?? NO_PARTITION;
 		const x = attrs.x as number;
 		const y = attrs.y as number;
-		const z = group * zStep;
+		const z = attrs.z as number;
 		nodes.push({
 			id: key,
 			label: (attrs.label as string) ?? key,
-			group,
-			color: partitionColor(group),
+			group: (attrs.group as number) ?? NO_PARTITION,
+			color: (attrs.color as string) ?? partitionColor((attrs.group as number) ?? NO_PARTITION),
 			x,
 			y,
 			z,
@@ -115,4 +124,14 @@ export function buildGraphData(
 	});
 
 	return { nodes, links };
+}
+
+export function buildGraphData(
+	snapshot: GlobalTopologySnapshot,
+	options: BuildGraphDataOptions = {}
+): GraphData {
+	if (snapshot.concepts.length === 0) {
+		return { nodes: [], links: [] };
+	}
+	return projectToGraphData(buildSpatialViewGraph(snapshot, options));
 }
