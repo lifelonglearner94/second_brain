@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { session } from '$lib/auth/session';
+	import { session } from '$lib/state/session.svelte';
 
 	let { children } = $props();
 

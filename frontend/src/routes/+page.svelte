@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { apiClient, type Health } from '$lib/api';
-	import { session } from '$lib/auth/session';
+	import { session } from '$lib/state/session.svelte';
 
 	let health: Health | null = $state(null);
 	let error: string | null = $state(null);

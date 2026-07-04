@@ -1,3 +1,4 @@
+import { createIdb } from './idb';
 import type { IdbStore, PendingCapture } from './idb';
 
 export class PendingCapturesStore {
@@ -20,3 +21,5 @@ export class PendingCapturesStore {
 		this.items = this.items.filter((c) => c.id !== id);
 	}
 }
+
+export const pendingCaptures = new PendingCapturesStore(createIdb());

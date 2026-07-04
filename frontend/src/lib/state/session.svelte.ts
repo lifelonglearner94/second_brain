@@ -1,3 +1,4 @@
+import { apiClient } from '$lib/api';
 import type { Me } from '$lib/api/client';
 
 export type SessionStatus = 'unknown' | 'authenticated' | 'unauthenticated';
@@ -33,3 +34,5 @@ export class SessionStore {
 		this.userId = null;
 	}
 }
+
+export const session = new SessionStore(apiClient);

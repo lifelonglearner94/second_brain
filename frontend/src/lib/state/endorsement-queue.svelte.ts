@@ -1,4 +1,6 @@
+import { apiClient } from '$lib/api';
 import type { ChatInferenceProposal } from '$lib/api/client';
+import { spatialGraph } from '$lib/state/spatial-graph.svelte';
 
 export type EndorsementStatus = 'idle' | 'loading' | 'loaded' | 'error';
 
@@ -44,3 +46,5 @@ export class EndorsementStore {
 		return endorsed;
 	}
 }
+
+export const endorsementQueue = new EndorsementStore(apiClient, spatialGraph);

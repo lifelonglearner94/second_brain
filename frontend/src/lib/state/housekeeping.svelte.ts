@@ -1,3 +1,4 @@
+import { apiClient } from '$lib/api';
 import type {
 	GlobalTopologySnapshot,
 	ConceptMergeSuggestion,
@@ -115,3 +116,5 @@ export class HousekeepingStore {
 		return { edge_types: [...ontology.edge_types, edgeType] };
 	}
 }
+
+export const housekeeping = new HousekeepingStore(apiClient);
