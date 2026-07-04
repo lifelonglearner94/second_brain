@@ -30,3 +30,30 @@ export function detectRendererCapability(env: CapabilityEnv): RendererChoice {
 	}
 	return '3d';
 }
+
+export function probeRendererCapability(): CapabilityEnv {
+	let hasWebGL2 = false;
+	let webglRenderer: string | null = null;
+	try {
+		const canvas = document.createElement('canvas');
+		const gl = canvas.getContext('webgl2') as WebGL2RenderingContext | null;
+		if (gl) {
+			hasWebGL2 = true;
+			const ext = gl.getExtension('WEBGL_debug_renderer_info');
+			if (ext) {
+				webglRenderer = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
+			}
+		}
+	} catch {
+		/* noop */
+	}
+	return {
+		userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+		hasWebGL2,
+		webglRenderer,
+		hardwareConcurrency:
+			typeof navigator !== 'undefined' && typeof navigator.hardwareConcurrency === 'number'
+				? navigator.hardwareConcurrency
+				: 4
+	};
+}

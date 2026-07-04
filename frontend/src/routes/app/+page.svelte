@@ -6,7 +6,15 @@
 	import { createIdb } from '$lib/state/idb';
 	import { loadViewport, saveViewport } from '$lib/state/viewport';
 	import { loadSpatialViewGraph } from '$lib/graph/load';
-	import { buildGraphData, type GraphData, type GraphNode, type GraphLink } from '$lib/graph/build';
+	import {
+		buildSpatialViewGraph,
+		projectToGraphData,
+		type GraphData,
+		type GraphNode,
+		type GraphLink
+	} from '$lib/graph/build';
+	import { detectRendererCapability, probeRendererCapability } from '$lib/graph/capability';
+	import { renderSpatialViewGraph2D, type Render2DHandle } from '$lib/graph/render2d';
 
 	const HIGHLIGHT = '#ffffff';
 
@@ -52,6 +60,8 @@
 
 	let graphContainer = $state<HTMLDivElement | null>(null);
 	let fg: FgInstance | null = null;
+	let handle2d: Render2DHandle | null = null;
+	let rendererChoice: '3d' | '2d' = '3d';
 	async function onLogout() {
 		busy = true;
 		logoutError = null;
@@ -73,15 +83,18 @@
 	}
 
 	function persistViewport() {
-		if (!fg) return;
-		const cam = fg.cameraPosition();
-		saveViewport({
-			cameraX: cam.x,
-			cameraY: cam.y,
-			cameraZ: cam.z,
-			zoom: 0,
-			selectedNodeId
-		});
+		if (fg) {
+			const cam = fg.cameraPosition();
+			saveViewport({
+				cameraX: cam.x,
+				cameraY: cam.y,
+				cameraZ: cam.z,
+				zoom: 0,
+				selectedNodeId
+			});
+		} else if (handle2d) {
+			saveViewport({ cameraX: 0, cameraY: 0, cameraZ: 0, zoom: 0, selectedNodeId });
+		}
 	}
 
 	onMount(() => {
@@ -94,8 +107,14 @@
 				const loaded = await loadSpatialViewGraph(apiClient, idb);
 				if (destroyed) return;
 				fetchedAtLabel = loaded.source === 'cache' ? loaded.snapshot.fetchedAt : null;
-				const data = buildGraphData(loaded.snapshot);
-				await renderGraph(data, loaded.source === 'cache' ? 'offline' : 'ready');
+				const svg = buildSpatialViewGraph(loaded.snapshot);
+				const graphData = projectToGraphData(svg);
+				rendererChoice = detectRendererCapability(probeRendererCapability());
+				if (rendererChoice === '2d') {
+					await renderGraph2D(svg, loaded.source === 'cache' ? 'offline' : 'ready');
+				} else {
+					await renderGraph3D(graphData, loaded.source === 'cache' ? 'offline' : 'ready');
+				}
 			} catch (e) {
 				if (destroyed) return;
 				errorMessage = e instanceof Error ? e.message : String(e);
@@ -103,7 +122,7 @@
 			}
 		})();
 
-		async function renderGraph(data: GraphData, finalStatus: Status) {
+		async function renderGraph3D(data: GraphData, finalStatus: Status) {
 			const [{ default: ForceGraph3D }, { Vector2 }, { UnrealBloomPass }] = await Promise.all([
 				import('3d-force-graph'),
 				import('three'),
@@ -159,6 +178,28 @@
 			status = finalStatus;
 		}
 
+		async function renderGraph2D(
+			svg: ReturnType<typeof buildSpatialViewGraph>,
+			finalStatus: Status
+		) {
+			if (destroyed || !graphContainer) return;
+			handle2d = await renderSpatialViewGraph2D(graphContainer, svg, {
+				selectedNodeId: savedViewport?.selectedNodeId ?? null,
+				onSelectNode: (id, label) => selectNode(id, label)
+			});
+			if (destroyed) {
+				handle2d?.destroy();
+				handle2d = null;
+				return;
+			}
+			if (savedViewport?.selectedNodeId && svg.hasNode(savedViewport.selectedNodeId)) {
+				const label = svg.getNodeAttribute(savedViewport.selectedNodeId, 'label') as string;
+				handle2d.setSelected(savedViewport.selectedNodeId);
+				selectNode(savedViewport.selectedNodeId, label);
+			}
+			status = finalStatus;
+		}
+
 		return () => {
 			destroyed = true;
 			try {
@@ -167,6 +208,12 @@
 				/* noop */
 			}
 			fg = null;
+			try {
+				handle2d?.destroy();
+			} catch {
+				/* noop */
+			}
+			handle2d = null;
 		};
 	});
 </script>
