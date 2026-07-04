@@ -1,7 +1,7 @@
-//! LLM client seam. The braindump *cleaner* and the *extractor* both talk to a
-//! hosted model (Gemini) behind this trait; tests swap in `FakeLlm` so the
-//! ingest pipeline is hermetic. The real Gemini implementation lands in the
-//! extraction slice.
+//! LLM client seam. The braindump *cleaner*, the *extractor*, and the chat
+//! *synthesizer* all talk to a hosted model (Gemini) behind this trait; tests
+//! swap in `FakeLlm` (or a scripted stand-in) so the pipelines are hermetic.
+//! The real Gemini implementation lives in [`crate::gemini`].
 
 use async_trait::async_trait;
 
@@ -17,10 +17,18 @@ pub trait LlmClient: Send + Sync {
     /// ontology refactor job (ADR-0003) so retagging stays deterministic across
     /// API model bumps. Returns the raw text response.
     async fn generate_pinned(&self, system: &str, user: &str) -> Result<String>;
+
+    /// Grounded synthesis over retrieved context (ADR-0005). The caller
+    /// (chat) builds a system prompt carrying the retrieved braindumps + edge
+    /// paths and the citation/silence rules; this returns the model's
+    /// synthesis. Temperature 0 so claims are reproducible, not free-handed.
+    async fn synthesize(&self, system: &str, user: &str) -> Result<String>;
 }
 
 /// A no-op cleaner / generator for tests: returns the verbatim (trimmed) text
-/// and echoes the prompt. Never touches the network.
+/// and echoes the prompt. `synthesize` returns a sentinel marker so any test
+/// that forgets to script the LLM fails loudly rather than silently passing.
+/// Never touches the network.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FakeLlm;
 
@@ -31,5 +39,8 @@ impl LlmClient for FakeLlm {
     }
     async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
         Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("FakeLlm::synthesize called — script an LlmClient in tests".to_string())
     }
 }
