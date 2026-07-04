@@ -7,16 +7,12 @@ import { buildGraphData } from '../../src/lib/graph/build';
 import type { GlobalTopologySnapshot } from '../../src/lib/api/client';
 
 function fakeDeepgramSource(emits: string[]): SttSource {
-	let onChunk: ((chunk: string) => void) | null = null;
 	return {
 		label: 'deepgram' as SttSourceLabel,
 		async start(cb: (chunk: string) => void) {
-			onChunk = cb;
 			for (const chunk of emits) cb(chunk);
 		},
-		async stop() {
-			onChunk = null;
-		}
+		async stop() {}
 	};
 }
 
