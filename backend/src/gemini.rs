@@ -26,8 +26,32 @@ use crate::llm::LlmClient;
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_TEXT_MODEL: &str = "gemini-2.0-flash";
 const DEFAULT_EMBED_MODEL: &str = "text-embedding-004";
-/// Output dimensionality of `text-embedding-004`.
-const GEMINI_EMBED_DIM: usize = 768;
+
+/// Output dimensionality for a Gemini embedding model. Used to size the
+/// `vec0` virtual tables at startup (`ensure_vec_tables`) BEFORE any embed
+/// API call — so it must be derivable from `GEMINI_EMBED_MODEL` without
+/// network I/O. A wrong dim panics at the first insert (vec0 rejects
+/// mismatched-length vectors), which is exactly the issue #35 crash-loop.
+///
+/// Unknown models error loudly rather than silently defaulting: a silent
+/// wrong dim IS the bug, so guessing is worse than failing to boot.
+///
+/// `gemini-embedding-001` also supports a configurable `outputDimensionality`
+/// request field (max 3072); we use its documented default. Operators who
+/// override the output dim must extend this table.
+fn embed_dim_for(model: &str) -> Result<usize> {
+    match model {
+        "text-embedding-004" => Ok(768),
+        // Both gemini-embedding-001 and gemini-embedding-2 default to a
+        // 3072-dim output (per the Gemini API embeddings docs); `embed()`
+        // does not send `outputDimensionality`, so the API returns 3072.
+        "gemini-embedding-001" | "gemini-embedding-2" => Ok(3072),
+        other => Err(Error::Internal(format!(
+            "GEMINI_EMBED_MODEL {other:?} has no known output dimensionality; \
+             add it to embed_dim_for() in backend/src/gemini.rs"
+        ))),
+    }
+}
 
 const CLEAN_SYSTEM: &str = "You clean a braindump's verbatim text into a readable rendering. Preserve meaning and order; fix only transcription artifacts (STT hallucinations, typos, casing, punctuation). Return only the cleaned text, no commentary.";
 
@@ -78,19 +102,31 @@ pub struct GeminiClient {
     api_key: String,
     text_model: String,
     embed_model: String,
+    /// Cached output dim of `embed_model` (validated at construction via
+    /// [`embed_dim_for`]) so [`dim`] stays synchronous and cheap — the vec0
+    /// tables are created at startup before any embed API call.
+    embed_dim: usize,
     /// `None` = `GEMINI_REASONING_EFFORT` unset → don't send `thinkingConfig`.
     reasoning: Option<ReasoningEffort>,
     http: reqwest::Client,
 }
 
 impl GeminiClient {
-    /// Build from env. `None` if `GEMINI_API_KEY` is unset (dev/CI fallback).
-    pub fn from_env() -> Option<Self> {
-        let api_key = std::env::var("GEMINI_API_KEY").ok()?;
+    /// Build from env. `Ok(None)` if `GEMINI_API_KEY` is unset (dev/CI
+    /// fallback to the fake clients). `Err` if the key is set but
+    /// `GEMINI_EMBED_MODEL` is not in [`embed_dim_for`]'s table — a wrong
+    /// dim is the issue #35 crash-loop, so an unknown model must fail loudly
+    /// at startup rather than silently booting with mismatched vec0 tables.
+    pub fn from_env() -> Result<Option<Self>> {
+        let api_key = match std::env::var("GEMINI_API_KEY") {
+            Ok(k) => k,
+            Err(_) => return Ok(None),
+        };
         let text_model =
             std::env::var("GEMINI_TEXT_MODEL").unwrap_or_else(|_| DEFAULT_TEXT_MODEL.to_string());
         let embed_model =
             std::env::var("GEMINI_EMBED_MODEL").unwrap_or_else(|_| DEFAULT_EMBED_MODEL.to_string());
+        let embed_dim = embed_dim_for(&embed_model)?;
         let reasoning = match std::env::var("GEMINI_REASONING_EFFORT") {
             Ok(raw) => match ReasoningEffort::parse(&raw) {
                 Ok(effort) => Some(effort),
@@ -103,15 +139,15 @@ impl GeminiClient {
         };
         let http = reqwest::Client::builder()
             .build()
-            .map_err(|e| tracing::warn!(error = %e, "reqwest client build failed; no Gemini"))
-            .ok()?;
-        Some(Self {
+            .map_err(|e| Error::Internal(format!("reqwest client build failed: {e}")))?;
+        Ok(Some(Self {
             api_key,
             text_model,
             embed_model,
+            embed_dim,
             reasoning,
             http,
-        })
+        }))
     }
 
     async fn generate(&self, system: &str, user: &str, mut config: Value) -> Result<String> {
@@ -234,7 +270,7 @@ impl EmbeddingClient for GeminiClient {
     }
 
     fn dim(&self) -> usize {
-        GEMINI_EMBED_DIM
+        self.embed_dim
     }
 }
 
@@ -467,5 +503,34 @@ mod tests {
         assert_eq!(ReasoningEffort::None.budget(), 0);
         assert!(ReasoningEffort::Low.budget() < ReasoningEffort::Medium.budget());
         assert!(ReasoningEffort::Medium.budget() < ReasoningEffort::High.budget());
+    }
+
+    #[test]
+    fn embed_dim_for_default_text_embedding_004_is_768() {
+        assert_eq!(embed_dim_for(DEFAULT_EMBED_MODEL).unwrap(), 768);
+    }
+
+    #[test]
+    fn embed_dim_for_gemini_embedding_001_is_3072() {
+        // The 3072-dim model from the real infrastructure/.env that crash-looped
+        // the backend before issue #35 — must not map to the 768 default.
+        assert_eq!(embed_dim_for("gemini-embedding-001").unwrap(), 3072);
+    }
+
+    #[test]
+    fn embed_dim_for_gemini_embedding_2_is_3072() {
+        // gemini-embedding-2 is the multimodal successor and, per the Gemini
+        // API docs, shares the same 3072-dim default as gemini-embedding-001.
+        // This is the model actually configured in the live infrastructure/.env,
+        // so locking it in guards the production startup path directly.
+        assert_eq!(embed_dim_for("gemini-embedding-2").unwrap(), 3072);
+    }
+
+    #[test]
+    fn embed_dim_for_unknown_model_errors_loudly() {
+        // A wrong dim is exactly the bug #35 fixes, so an unknown model must
+        // NOT silently fall back to a default — it errors so startup fails
+        // loudly rather than creating vec0 tables at the wrong dimensionality.
+        assert!(embed_dim_for("some-future-model-2099").is_err());
     }
 }

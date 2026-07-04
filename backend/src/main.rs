@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
         Arc<dyn LlmClient>,
         Arc<dyn Extractor>,
         Arc<dyn EmbeddingClient + Send + Sync>,
-    ) = match GeminiClient::from_env() {
+    ) = match GeminiClient::from_env()? {
         Some(gemini) => {
             tracing::info!("gemini seams wired (real Gemini LLM + extractor + embeddings)");
             let llm: Arc<dyn LlmClient> = Arc::new(gemini.clone());
