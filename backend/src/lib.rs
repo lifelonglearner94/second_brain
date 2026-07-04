@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod braindump;
+pub mod chat;
 pub mod config;
 pub mod db;
 pub mod embedding;

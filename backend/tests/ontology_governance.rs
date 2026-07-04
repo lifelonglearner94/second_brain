@@ -134,6 +134,10 @@ impl LlmClient for ScriptedLlm {
     async fn generate_pinned(&self, _system: &str, _user: &str) -> Result<String> {
         Ok(self.slug.lock().unwrap().clone())
     }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        // The ontology refactor tests never exercise chat synthesis.
+        Ok("ScriptedLlm::synthesize (unused by ontology tests)".to_string())
+    }
 }
 
 /// Set scripted embedding vectors for every ontology type's full `type_text`

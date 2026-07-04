@@ -153,6 +153,14 @@ impl LlmClient for GeminiClient {
         // is an operator concern at construction time.
         self.generate(system, user, json!({"temperature": 0})).await
     }
+
+    async fn synthesize(&self, system: &str, user: &str) -> Result<String> {
+        // ADR-0005: grounded synthesis is temperature 0 — claims must be
+        // reproducible, and the citation/silence rules in the system prompt
+        // are load-bearing, not ornamental. Free-handed variance is exactly
+        // what the grounded-synthesis contract forbids.
+        self.generate(system, user, json!({"temperature": 0})).await
+    }
 }
 
 #[async_trait]
