@@ -90,6 +90,33 @@ export type LogsResponse = {
 	capacity: number;
 };
 
+export type EvidenceEdge = {
+	source_concept_id: number;
+	edge_type: string;
+	target_concept_id: number;
+};
+
+export type ThematicSnapshot = {
+	id: number;
+	braindump_ids: number[];
+	concept_ids: number[];
+	captured_at: number;
+};
+
+export type ChatInferenceProposal = {
+	id: number;
+	mode: string;
+	source_concept_id: number;
+	target_concept_id: number;
+	proposed_type: string;
+	evidence_path: EvidenceEdge[];
+	rationale: string | null;
+	status: string;
+	created_at: number;
+	resolved_at: number | null;
+	snapshot: ThematicSnapshot | null;
+};
+
 export interface ApiClient {
 	getHealth(): Promise<Health>;
 	registerBegin(): Promise<RegistrationBegin>;
@@ -101,6 +128,8 @@ export interface ApiClient {
 	recover(): Promise<RecoverResponse>;
 	getGraph(): Promise<GlobalTopologySnapshot>;
 	getAdminLogs(limit?: number): Promise<LogsResponse>;
+	getInferenceProposals(): Promise<ChatInferenceProposal[]>;
+	endorseInferenceProposal(id: number): Promise<ChatInferenceProposal>;
 }
 
 function ok(res: Response): boolean {
@@ -166,6 +195,16 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		async getAdminLogs(limit?: number): Promise<LogsResponse> {
 			const path = limit !== undefined ? `/admin/logs?limit=${limit}` : '/admin/logs';
 			return getJson<LogsResponse>(path, 'GET /admin/logs');
+		},
+		async getInferenceProposals(): Promise<ChatInferenceProposal[]> {
+			return getJson<ChatInferenceProposal[]>('/chat/inferences', 'GET /chat/inferences');
+		},
+		async endorseInferenceProposal(id: number): Promise<ChatInferenceProposal> {
+			return postJson<ChatInferenceProposal>(
+				`/chat/inferences/${id}/endorse`,
+				null,
+				`POST /chat/inferences/${id}/endorse`
+			);
 		}
 	};
 }
