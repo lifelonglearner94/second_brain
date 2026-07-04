@@ -5,6 +5,11 @@
 
 	let busy = $state(false);
 	let error = $state<string | null>(null);
+	let headerTaps = $state(0);
+
+	function onHeaderTap() {
+		headerTaps += 1;
+	}
 
 	async function onLogout() {
 		busy = true;
@@ -23,8 +28,13 @@
 
 <main>
 	<header>
-		<h1>Second Brain</h1>
+		<h1><button type="button" data-testid="app-title" class="title-button" onclick={onHeaderTap}>Second Brain</button></h1>
 		<p class="tagline">Signed in as <code data-testid="user-id">{session.userId}</code></p>
+		{#if headerTaps >= 5}
+			<p class="admin-entry">
+				<a href="/app/admin/logs" data-testid="admin-link">Admin — logs</a>
+			</p>
+		{/if}
 	</header>
 
 	<p class="placeholder" data-testid="app-placeholder">
@@ -58,6 +68,15 @@
 		margin: 0 0 0.25rem;
 		font-size: clamp(1.5rem, 4vw, 2rem);
 	}
+	.title-button {
+		font: inherit;
+		color: inherit;
+		background: transparent;
+		border: 0;
+		padding: 0;
+		margin: 0;
+		cursor: default;
+	}
 	.tagline {
 		margin: 0 0 1.5rem;
 		color: #9aa3b2;
@@ -69,6 +88,14 @@
 	.placeholder {
 		color: #9aa3b2;
 		margin: 0 0 1.5rem;
+	}
+	.admin-entry {
+		margin: 0 0 1.5rem;
+	}
+	.admin-entry a {
+		color: #6b7280;
+		font-size: 0.85rem;
+		text-decoration: underline;
 	}
 	button {
 		padding: 0.75rem 1rem;

@@ -50,6 +50,20 @@ export type LogoutOk = { logged_out: true };
 
 export type RecoverResponse = { error: string; message: string };
 
+export type LogEntry = {
+	timestamp: number;
+	level: string;
+	target: string;
+	message: string;
+	fields: unknown;
+};
+
+export type LogsResponse = {
+	logs: LogEntry[];
+	count: number;
+	capacity: number;
+};
+
 export interface ApiClient {
 	getHealth(): Promise<Health>;
 	registerBegin(): Promise<RegistrationBegin>;
@@ -59,6 +73,7 @@ export interface ApiClient {
 	logout(): Promise<LogoutOk>;
 	getMe(): Promise<Me>;
 	recover(): Promise<RecoverResponse>;
+	getAdminLogs(limit?: number): Promise<LogsResponse>;
 }
 
 function ok(res: Response): boolean {
@@ -117,6 +132,10 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		},
 		async recover(): Promise<RecoverResponse> {
 			return postJson<RecoverResponse>('/auth/recover', null, 'POST /auth/recover');
+		},
+		async getAdminLogs(limit?: number): Promise<LogsResponse> {
+			const path = limit !== undefined ? `/admin/logs?limit=${limit}` : '/admin/logs';
+			return getJson<LogsResponse>(path, 'GET /admin/logs');
 		}
 	};
 }

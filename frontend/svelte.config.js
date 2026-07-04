@@ -11,7 +11,7 @@ const config = {
 			strict: false
 		}),
 		prerender: {
-			entries: ['*', '/login', '/app']
+			entries: ['*', '/login', '/app', '/app/admin/logs']
 		},
 		serviceWorker: {
 			register: true
