@@ -90,6 +90,43 @@ export type LogsResponse = {
 	capacity: number;
 };
 
+export type ConceptMergeSuggestion = {
+	id: number;
+	kind: string;
+	braindump_id: number;
+	new_concept_label: string;
+	new_concept_id: number;
+	existing_concept_id: number;
+	similarity: number;
+	status: string;
+	created_at: number;
+};
+
+export type OntologyEdgeType = {
+	slug: string;
+	label: string;
+	description: string;
+};
+
+export type Ontology = {
+	edge_types: OntologyEdgeType[];
+};
+
+export type OntologyTypeProposal = {
+	id: number;
+	slug: string;
+	label: string;
+	description: string;
+	merge_of: string | null;
+	status: string;
+	near_match_slug: string | null;
+	near_match_similarity: number | null;
+};
+
+export type OntologyProposalsResponse = {
+	proposals: OntologyTypeProposal[];
+};
+
 export interface ApiClient {
 	getHealth(): Promise<Health>;
 	registerBegin(): Promise<RegistrationBegin>;
@@ -101,6 +138,13 @@ export interface ApiClient {
 	recover(): Promise<RecoverResponse>;
 	getGraph(): Promise<GlobalTopologySnapshot>;
 	getAdminLogs(limit?: number): Promise<LogsResponse>;
+	getMergeSuggestions(): Promise<ConceptMergeSuggestion[]>;
+	approveMergeSuggestion(id: number): Promise<void>;
+	rejectMergeSuggestion(id: number): Promise<void>;
+	getOntology(): Promise<Ontology>;
+	getOntologyProposals(): Promise<OntologyProposalsResponse>;
+	approveOntologyProposal(id: number): Promise<OntologyTypeProposal>;
+	rejectOntologyProposal(id: number): Promise<OntologyTypeProposal>;
 }
 
 function ok(res: Response): boolean {
@@ -135,6 +179,18 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		return (await res.json()) as T;
 	}
 
+	async function postNoBody(path: string, errorLabel: string): Promise<void> {
+		const res = await doFetch(`${baseUrl}${path}`, {
+			method: 'POST',
+			credentials: 'include',
+			headers: { accept: 'application/json' },
+			body: null
+		});
+		if (!ok(res)) {
+			throw new Error(`${errorLabel} failed: ${res.status}`);
+		}
+	}
+
 	return {
 		async getHealth(): Promise<Health> {
 			return getJson<Health>('/health', 'GET /health');
@@ -166,6 +222,35 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		async getAdminLogs(limit?: number): Promise<LogsResponse> {
 			const path = limit !== undefined ? `/admin/logs?limit=${limit}` : '/admin/logs';
 			return getJson<LogsResponse>(path, 'GET /admin/logs');
+		},
+		async getMergeSuggestions(): Promise<ConceptMergeSuggestion[]> {
+			return getJson<ConceptMergeSuggestion[]>('/merge-suggestions', 'GET /merge-suggestions');
+		},
+		async approveMergeSuggestion(id: number): Promise<void> {
+			await postNoBody(`/merge-suggestions/${id}/approve`, 'POST /merge-suggestions/approve');
+		},
+		async rejectMergeSuggestion(id: number): Promise<void> {
+			await postNoBody(`/merge-suggestions/${id}/reject`, 'POST /merge-suggestions/reject');
+		},
+		async getOntology(): Promise<Ontology> {
+			return getJson<Ontology>('/ontology', 'GET /ontology');
+		},
+		async getOntologyProposals(): Promise<OntologyProposalsResponse> {
+			return getJson<OntologyProposalsResponse>('/ontology/proposals', 'GET /ontology/proposals');
+		},
+		async approveOntologyProposal(id: number): Promise<OntologyTypeProposal> {
+			return postJson<OntologyTypeProposal>(
+				`/ontology/proposals/${id}/approve`,
+				null,
+				'POST /ontology/proposals/approve'
+			);
+		},
+		async rejectOntologyProposal(id: number): Promise<OntologyTypeProposal> {
+			return postJson<OntologyTypeProposal>(
+				`/ontology/proposals/${id}/reject`,
+				null,
+				'POST /ontology/proposals/reject'
+			);
 		}
 	};
 }
