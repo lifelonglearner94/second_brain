@@ -10,6 +10,7 @@ pub mod db;
 pub mod embedding;
 pub mod error;
 pub mod llm;
+pub mod logs;
 pub mod routes;
 pub mod state;
 

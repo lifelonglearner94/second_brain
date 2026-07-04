@@ -8,6 +8,7 @@ use axum::Router;
 use crate::auth::middleware::require_session;
 use crate::state::AppState;
 
+mod admin;
 mod auth;
 mod health;
 
@@ -27,10 +28,12 @@ pub fn router(state: AppState) -> Router {
 
     // Protected routes — every handler behind this layer requires a valid
     // session cookie. `/me` is the demonstrator; `/auth/logout` needs the
-    // validated session to invalidate it.
+    // validated session to invalidate it; `/admin/logs` surfaces backend logs
+    // to the hidden admin tab and must not leak to unauthenticated callers.
     let protected_routes: Router<AppState> = Router::new()
         .route("/me", get(auth::me))
         .route("/auth/logout", post(auth::logout))
+        .route("/admin/logs", get(admin::logs))
         .route_layer(from_fn_with_state(state.clone(), require_session));
 
     Router::new()
