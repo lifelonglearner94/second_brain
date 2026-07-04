@@ -44,6 +44,11 @@
 
 	let busy = $state(false);
 	let logoutError = $state<string | null>(null);
+	let headerTaps = $state(0);
+
+	function onHeaderTap() {
+		headerTaps += 1;
+	}
 
 	let graphContainer = $state<HTMLDivElement | null>(null);
 	let fg: FgInstance | null = null;
@@ -168,7 +173,7 @@
 
 <main>
 	<header>
-		<h1>Second Brain</h1>
+		<h1><button type="button" data-testid="app-title" class="title-button" onclick={onHeaderTap}>Second Brain</button></h1>
 		<p class="tagline">Signed in as <code data-testid="user-id">{session.userId}</code></p>
 		<button
 			type="button"
@@ -180,6 +185,11 @@
 		</button>
 		{#if logoutError}
 			<p data-testid="logout-error" class="error">{logoutError}</p>
+		{/if}
+		{#if headerTaps >= 5}
+			<p class="admin-entry">
+				<a href="/app/admin/logs" data-testid="admin-link">Admin — logs</a>
+			</p>
 		{/if}
 	</header>
 
@@ -234,6 +244,15 @@
 		margin: 0;
 		font-size: clamp(1.25rem, 3vw, 1.5rem);
 	}
+	.title-button {
+		font: inherit;
+		color: inherit;
+		background: transparent;
+		border: 0;
+		padding: 0;
+		margin: 0;
+		cursor: default;
+	}
 	.tagline {
 		margin: 0;
 		color: #9aa3b2;
@@ -241,6 +260,14 @@
 	code {
 		font-family: monospace;
 		color: #7ab7ff;
+	}
+	.admin-entry {
+		margin: 0 0 1.5rem;
+	}
+	.admin-entry a {
+		color: #6b7280;
+		font-size: 0.85rem;
+		text-decoration: underline;
 	}
 	button {
 		margin-inline-start: auto;

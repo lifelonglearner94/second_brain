@@ -76,6 +76,20 @@ export type GlobalTopologySnapshot = {
 	partitions: GraphPartition[];
 };
 
+export type LogEntry = {
+	timestamp: number;
+	level: string;
+	target: string;
+	message: string;
+	fields: unknown;
+};
+
+export type LogsResponse = {
+	logs: LogEntry[];
+	count: number;
+	capacity: number;
+};
+
 export interface ApiClient {
 	getHealth(): Promise<Health>;
 	registerBegin(): Promise<RegistrationBegin>;
@@ -86,6 +100,7 @@ export interface ApiClient {
 	getMe(): Promise<Me>;
 	recover(): Promise<RecoverResponse>;
 	getGraph(): Promise<GlobalTopologySnapshot>;
+	getAdminLogs(limit?: number): Promise<LogsResponse>;
 }
 
 function ok(res: Response): boolean {
@@ -147,6 +162,10 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		},
 		async getGraph(): Promise<GlobalTopologySnapshot> {
 			return getJson<GlobalTopologySnapshot>('/graph', 'GET /graph');
+		},
+		async getAdminLogs(limit?: number): Promise<LogsResponse> {
+			const path = limit !== undefined ? `/admin/logs?limit=${limit}` : '/admin/logs';
+			return getJson<LogsResponse>(path, 'GET /admin/logs');
 		}
 	};
 }
