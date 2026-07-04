@@ -90,6 +90,42 @@ export type LogsResponse = {
 	capacity: number;
 };
 
+export type RetrievalMode = 'seed_then_expand' | 'no_seed_fallback';
+
+export type BraindumpSource = 'subgraph' | 'backfill' | 'vector_direct';
+
+export type ChatCitation = {
+	id: number;
+	verbatim: string;
+	cleaned: string;
+	created_at: number;
+	score: number;
+	source: BraindumpSource;
+};
+
+export type ChatPath = {
+	source_concept_id: number;
+	source_concept_label: string;
+	target_concept_id: number;
+	target_concept_label: string;
+	edge_type: string;
+};
+
+export type ChatResponse = {
+	answer: string;
+	citations: ChatCitation[];
+	paths: ChatPath[];
+	silent: boolean;
+	mode: RetrievalMode;
+};
+
+export type Braindump = {
+	id: number;
+	verbatim: string;
+	cleaned: string;
+	created_at: number;
+};
+
 export interface ApiClient {
 	getHealth(): Promise<Health>;
 	registerBegin(): Promise<RegistrationBegin>;
@@ -101,6 +137,8 @@ export interface ApiClient {
 	recover(): Promise<RecoverResponse>;
 	getGraph(): Promise<GlobalTopologySnapshot>;
 	getAdminLogs(limit?: number): Promise<LogsResponse>;
+	chat(query: string): Promise<ChatResponse>;
+	getBraindump(id: number): Promise<Braindump>;
 }
 
 function ok(res: Response): boolean {
@@ -166,6 +204,12 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		async getAdminLogs(limit?: number): Promise<LogsResponse> {
 			const path = limit !== undefined ? `/admin/logs?limit=${limit}` : '/admin/logs';
 			return getJson<LogsResponse>(path, 'GET /admin/logs');
+		},
+		async chat(query: string): Promise<ChatResponse> {
+			return postJson<ChatResponse>('/chat', { query }, 'POST /chat');
+		},
+		async getBraindump(id: number): Promise<Braindump> {
+			return getJson<Braindump>(`/braindumps/${id}`, 'GET /braindumps/:id');
 		}
 	};
 }

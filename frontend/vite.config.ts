@@ -1,9 +1,17 @@
 import { sveltekit } from '@sveltejs/kit/vite';
+import { svelteTesting } from '@testing-library/svelte/vite';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-	plugins: [sveltekit()],
+	plugins: [sveltekit(), svelteTesting({ autoCleanup: false })],
 	test: {
-		include: ['tests/unit/**/*.test.ts']
+		include: ['tests/unit/**/*.test.ts'],
+		environment: 'jsdom',
+		setupFiles: ['tests/unit/setup-svelte.ts'],
+		server: {
+			deps: {
+				inline: ['@testing-library/svelte', '@testing-library/svelte-core']
+			}
+		}
 	}
 });
