@@ -67,4 +67,42 @@ describe('syncDelta — pull-on-focus Delta Sync orchestrator', () => {
 			expect(outcome.delta).toEqual(delta);
 		});
 	});
+
+	describe('graceful failure (ADR-0002: brief staleness between focus events)', () => {
+		it('leaves the snapshot and cursor untouched when the backend is unreachable, and reports applied=false', async () => {
+			const api: DeltaSyncApi = {
+				getGraphDelta: vi.fn(async () => {
+					throw new Error('backend unreachable');
+				})
+			};
+			const state: DeltaSyncState = { snapshot: SNAPSHOT, cursor: 1700000000 };
+
+			const outcome = await syncDelta(state, api);
+
+			expect(outcome.applied).toBe(false);
+			expect(outcome.state.cursor).toBe(1700000000);
+			expect(outcome.state.snapshot).toBe(SNAPSHOT);
+		});
+	});
+
+	describe('empty delta (nothing changed since the cursor)', () => {
+		it('still advances the cursor and reports applied=true on a successful fetch', async () => {
+			const delta: GraphDelta = {
+				cursor: 1700000500,
+				added_concepts: [],
+				added_edges: [],
+				deleted_concept_ids: [],
+				deleted_edge_ids: [],
+				retagged_edges: []
+			};
+			const api: DeltaSyncApi = { getGraphDelta: vi.fn(async () => delta) };
+			const state: DeltaSyncState = { snapshot: SNAPSHOT, cursor: 1700000000 };
+
+			const outcome = await syncDelta(state, api);
+
+			expect(outcome.applied).toBe(true);
+			expect(outcome.state.cursor).toBe(1700000500);
+			expect(outcome.state.snapshot.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c2']);
+		});
+	});
 });
