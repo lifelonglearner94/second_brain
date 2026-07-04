@@ -703,6 +703,68 @@ pub async fn braindump_embedding_stored(db: &Db, braindump_id: i64) -> Result<bo
     .await
 }
 
+/// An edge paired with its projected current type (ADR-0003) — the last entry
+/// of the append-only `edge_type_history`, not a stored field. `original_type`
+/// anchors identity (immutable); `current_type` is the read-model projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EdgeProjection {
+    pub id: i64,
+    pub source_concept_id: i64,
+    pub target_concept_id: i64,
+    pub original_type: String,
+    pub current_type: String,
+    pub created_at: i64,
+}
+
+/// Every concept, ordered by id — the full node set for whole-graph reads
+/// (issue #27's Global Topology Snapshot).
+pub async fn all_concepts(db: &Db) -> Result<Vec<Concept>> {
+    db.run(|conn| {
+        let mut stmt = conn.prepare("SELECT id, label, created_at FROM concepts ORDER BY id")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(Concept {
+                    id: r.get(0)?,
+                    label: r.get(1)?,
+                    created_at: r.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    })
+    .await
+}
+
+/// Every edge with its projected current type (ADR-0003), ordered by id. The
+/// current type is the last `edge_type_history` entry; for a freshly-created
+/// edge it equals the original assertion.
+pub async fn all_edges_with_current_type(db: &Db) -> Result<Vec<EdgeProjection>> {
+    db.run(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
+                    e.created_at,
+                    (SELECT type_slug FROM edge_type_history
+                     WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1) AS current_type
+             FROM edges e
+             ORDER BY e.id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(EdgeProjection {
+                    id: r.get(0)?,
+                    source_concept_id: r.get(1)?,
+                    target_concept_id: r.get(2)?,
+                    original_type: r.get(3)?,
+                    created_at: r.get(4)?,
+                    current_type: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    })
+    .await
+}
+
 // --- issue #7: braindump deletion + merge-suggestion queue ---
 
 /// Delete a braindump and cascade through the graph (ADR-0002 / ADR-0007 /

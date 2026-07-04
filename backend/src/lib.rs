@@ -21,6 +21,7 @@ pub mod logs;
 pub mod ontology;
 pub mod retrieval;
 pub mod routes;
+pub mod snapshot;
 pub mod state;
 pub mod thematic;
 
