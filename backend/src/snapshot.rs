@@ -77,20 +77,20 @@ async fn partition_assignments(db: &Db) -> Result<Vec<PartitionAssignment>> {
 mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
-    use crate::embedding::{EmbeddingClient, FakeEmbedding};
+    use crate::llm::{FakeLlm, Llm};
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::{concept_id_for_label, find_edge, ingest_extraction};
     use rusqlite::params;
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_vec_tables(FakeEmbedding::default().dim())
+        db.ensure_vec_tables(FakeLlm::default().dim())
             .unwrap();
         db
     }
 
-    fn fake_embedding() -> FakeEmbedding {
-        FakeEmbedding::default()
+    fn fake_llm() -> FakeLlm {
+        FakeLlm::default()
     }
 
     fn extraction(concepts: &[&str], edges: &[(&str, &str, &str)]) -> ExtractionResult {
@@ -118,7 +118,7 @@ mod tests {
 
     async fn ingest(db: &Db, text: &str, ext: ExtractionResult) {
         let bd = seed_braindump(db, text).await;
-        ingest_extraction(db, &fake_embedding(), bd, text, ext)
+        ingest_extraction(db, &fake_llm(), bd, text, ext)
             .await
             .unwrap();
     }

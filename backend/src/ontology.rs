@@ -11,16 +11,15 @@
 //! edge by *appending* to its `edge_type_history` (never overwriting — ADR-0003:
 //! index 0 is the immutable original assertion, the current type is the
 //! projection of the last entry). The refactor runs at Temperature=0 against a
-//! pinned model snapshot via [`crate::llm::LlmClient::generate_pinned`].
+//! pinned model snapshot via [`crate::llm::Llm::generate_pinned`].
 
 use std::sync::Arc;
 
 use rusqlite::{params, OptionalExtension};
 
 use crate::db::{now_seconds, Db};
-use crate::embedding::EmbeddingClient;
 use crate::error::{Error, Result};
-use crate::llm::LlmClient;
+use crate::llm::Llm;
 
 /// Cosine similarity at or above which a proposed type is deemed a 1:1
 /// duplicate of an existing type and auto-merged (ADR-0003: >99.5%). Stricter
@@ -74,7 +73,7 @@ pub struct RefactorOutcome {
 /// exist yet (empty ontology at first run), the proposal is `pending`.
 pub async fn propose_type(
     db: &Db,
-    embedding: &(dyn EmbeddingClient + Sync),
+    llm: &dyn Llm,
     slug: &str,
     label: &str,
     description: &str,
@@ -105,7 +104,7 @@ pub async fn propose_type(
     }
 
     let text = type_text(&slug, &label, &description);
-    let vec = embedding.embed_document(&text).await?;
+    let vec = llm.embed_document(&text).await?;
 
     let near = knn_type(db, &vec).await?;
     let (status, near_match_slug, near_match_similarity) = match near {
@@ -221,7 +220,7 @@ pub async fn get_proposal(db: &Db, id: i64) -> Result<Option<TypeProposal>> {
 /// not pending (already resolved or auto-merged).
 pub async fn approve_proposal(
     db: &Db,
-    embedding: &(dyn EmbeddingClient + Sync),
+    llm: &dyn Llm,
     id: i64,
 ) -> Result<TypeProposal> {
     // Load first so we can validate status and compute the embedding text
@@ -236,7 +235,7 @@ pub async fn approve_proposal(
             proposal.status
         )));
     }
-    let vec = embedding
+    let vec = llm
         .embed_document(&type_text(
             &proposal.slug,
             &proposal.label,
@@ -425,7 +424,7 @@ pub async fn ontology_types(db: &Db) -> Result<Vec<(String, String, String)>> {
 /// the first proposal arrives.
 pub async fn seed_type_embeddings(
     db: &Db,
-    embedding: &(dyn EmbeddingClient + Sync),
+    llm: &dyn Llm,
 ) -> Result<usize> {
     // Load all (id, slug, label, description) for types missing an embedding.
     let missing: Vec<(i64, String, String, String)> = db
@@ -452,7 +451,7 @@ pub async fn seed_type_embeddings(
 
     let mut count = 0;
     for (ontology_id, slug, label, description) in missing {
-        let vec = embedding
+        let vec = llm
             .embed_document(&type_text(&slug, &label, &description))
             .await?;
         let ontology_id_capture = ontology_id;
@@ -477,7 +476,7 @@ pub async fn seed_type_embeddings(
 /// appending the LLM's chosen slug to each edge's type history (ADR-0003).
 ///
 /// Runs at Temperature=0 against a pinned model snapshot via
-/// [`LlmClient::generate_pinned`] so retagging is deterministic and stable
+/// [`Llm::generate_pinned`] so retagging is deterministic and stable
 /// across API model bumps. No-op when the proposal has no `merge_of` (pure new
 /// type) or when no edges currently wear the merged type.
 ///
@@ -485,7 +484,7 @@ pub async fn seed_type_embeddings(
 /// `tokio::spawn` so ingest is not blocked while it runs.
 pub async fn run_refactor(
     db: &Db,
-    llm: &(dyn LlmClient + Sync),
+    llm: &dyn Llm,
     proposal: &TypeProposal,
 ) -> Result<RefactorOutcome> {
     let Some(merge_of) = proposal.merge_of.as_ref() else {
@@ -632,7 +631,7 @@ impl RefactorRunner {
 
     /// Spawn a refactor in the background. The route returns immediately; the
     /// job commits its type-history appends when it completes.
-    pub fn spawn(&self, db: Db, llm: Arc<dyn LlmClient>, proposal: TypeProposal) {
+    pub fn spawn(&self, db: Db, llm: Arc<dyn Llm>, proposal: TypeProposal) {
         let handle = tokio::spawn(async move {
             let outcome = run_refactor(&db, llm.as_ref(), &proposal).await;
             if let Err(e) = &outcome {
@@ -677,24 +676,24 @@ fn vec_to_blob(v: &[f32]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::embedding::FakeEmbedding;
+    use crate::llm::{FakeLlm, Llm};
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_vec_tables(FakeEmbedding::default().dim())
+        db.ensure_vec_tables(FakeLlm::default().dim())
             .unwrap();
         db
     }
 
-    fn fake_embedding() -> FakeEmbedding {
-        FakeEmbedding::default()
+    fn fake_llm() -> FakeLlm {
+        FakeLlm::default()
     }
 
     #[tokio::test]
     async fn propose_with_no_existing_type_embeddings_is_pending() {
         let db = test_db();
-        let emb = fake_embedding();
-        let out = propose_type(&db, &emb, "nurtures", "Nurtures", "A nurtures B.", None)
+        let llm = fake_llm();
+        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
             .await
             .unwrap();
         assert_eq!(out.proposal.status, "pending");
@@ -705,8 +704,8 @@ mod tests {
     #[tokio::test]
     async fn propose_with_empty_slug_is_bad_request() {
         let db = test_db();
-        let emb = fake_embedding();
-        let err = propose_type(&db, &emb, "  ", "X", "desc", None)
+        let llm = fake_llm();
+        let err = propose_type(&db, &llm, "  ", "X", "desc", None)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
@@ -715,8 +714,8 @@ mod tests {
     #[tokio::test]
     async fn propose_with_existing_slug_is_bad_request() {
         let db = test_db();
-        let emb = fake_embedding();
-        let err = propose_type(&db, &emb, "causes", "Causes", "dup", None)
+        let llm = fake_llm();
+        let err = propose_type(&db, &llm, "causes", "Causes", "dup", None)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
@@ -725,10 +724,10 @@ mod tests {
     #[tokio::test]
     async fn propose_with_unknown_merge_of_is_bad_request() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let err = propose_type(
             &db,
-            &emb,
+            &llm,
             "nurtures",
             "Nurtures",
             "desc",
@@ -742,16 +741,16 @@ mod tests {
     #[tokio::test]
     async fn approve_adds_type_to_ontology_and_stores_embedding() {
         let db = test_db();
-        let emb = fake_embedding();
-        let out = propose_type(&db, &emb, "nurtures", "Nurtures", "A nurtures B.", None)
+        let llm = fake_llm();
+        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
             .await
             .unwrap();
-        let proposal = approve_proposal(&db, &emb, out.proposal.id).await.unwrap();
+        let proposal = approve_proposal(&db, &llm, out.proposal.id).await.unwrap();
         assert_eq!(proposal.status, "approved");
         assert!(ontology_slug_exists(&db, "nurtures").await.unwrap());
         let near = knn_type(
             &db,
-            &emb.embed_document("nurtures Nurtures A nurtures B.")
+            &llm.embed_document("nurtures Nurtures A nurtures B.")
                 .await
                 .unwrap(),
         )
@@ -764,12 +763,12 @@ mod tests {
     #[tokio::test]
     async fn approve_already_resolved_is_conflict() {
         let db = test_db();
-        let emb = fake_embedding();
-        let out = propose_type(&db, &emb, "nurtures", "Nurtures", "A nurtures B.", None)
+        let llm = fake_llm();
+        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
             .await
             .unwrap();
-        approve_proposal(&db, &emb, out.proposal.id).await.unwrap();
-        let err = approve_proposal(&db, &emb, out.proposal.id)
+        approve_proposal(&db, &llm, out.proposal.id).await.unwrap();
+        let err = approve_proposal(&db, &llm, out.proposal.id)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Conflict(_)), "{err:?}");
@@ -778,8 +777,8 @@ mod tests {
     #[tokio::test]
     async fn reject_marks_pending_proposal_rejected() {
         let db = test_db();
-        let emb = fake_embedding();
-        let out = propose_type(&db, &emb, "nurtures", "Nurtures", "A nurtures B.", None)
+        let llm = fake_llm();
+        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
             .await
             .unwrap();
         let proposal = reject_proposal(&db, out.proposal.id).await.unwrap();
@@ -790,8 +789,8 @@ mod tests {
     #[tokio::test]
     async fn reject_already_resolved_is_conflict() {
         let db = test_db();
-        let emb = fake_embedding();
-        let out = propose_type(&db, &emb, "nurtures", "Nurtures", "A nurtures B.", None)
+        let llm = fake_llm();
+        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
             .await
             .unwrap();
         reject_proposal(&db, out.proposal.id).await.unwrap();
@@ -918,12 +917,11 @@ mod tests {
     #[tokio::test]
     async fn run_refactor_with_no_merge_of_is_noop() {
         let db = test_db();
-        let emb = fake_embedding();
-        let llm = crate::llm::FakeLlm;
-        let out = propose_type(&db, &emb, "nurtures", "Nurtures", "A nurtures B.", None)
+        let llm = fake_llm();
+        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
             .await
             .unwrap();
-        let proposal = approve_proposal(&db, &emb, out.proposal.id).await.unwrap();
+        let proposal = approve_proposal(&db, &llm, out.proposal.id).await.unwrap();
         let outcome = run_refactor(&db, &llm, &proposal).await.unwrap();
         assert_eq!(outcome.edges_retagged, 0);
     }
@@ -931,11 +929,10 @@ mod tests {
     #[tokio::test]
     async fn run_refactor_with_merge_of_and_no_edges_is_noop() {
         let db = test_db();
-        let emb = fake_embedding();
-        let llm = crate::llm::FakeLlm;
+        let llm = fake_llm();
         let out = propose_type(
             &db,
-            &emb,
+            &llm,
             "nurtures",
             "Nurtures",
             "A nurtures B.",
@@ -943,7 +940,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let proposal = approve_proposal(&db, &emb, out.proposal.id).await.unwrap();
+        let proposal = approve_proposal(&db, &llm, out.proposal.id).await.unwrap();
         let outcome = run_refactor(&db, &llm, &proposal).await.unwrap();
         assert_eq!(outcome.edges_retagged, 0);
     }

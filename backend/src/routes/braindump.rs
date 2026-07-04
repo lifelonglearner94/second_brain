@@ -11,9 +11,9 @@
 //! created_at are untouched.
 //!
 //! All three sit behind the auth middleware (registered in [`crate::routes`]
-//! under the protected layer). The cleaner is [`crate::llm::LlmClient::clean`];
-//! the extractor is [`crate::extractor::Extractor`]; the accretion pipeline is
-//! [`crate::graph::ingest_extraction`].
+//! under the protected layer). The cleaner is [`crate::llm::Llm::clean`];
+//! extraction is a method on the same [`crate::llm::Llm`] seam; the accretion
+//! pipeline is [`crate::graph::ingest_extraction`].
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -48,12 +48,12 @@ pub async fn submit(
     let braindump = insert_braindump(&state.db, &verbatim, &cleaned).await?;
     let ontology = graph::ontology_slugs(&state.db).await?;
     let extraction = state
-        .extractor
+        .llm
         .extract(&braindump.verbatim, &ontology)
         .await?;
     let outcome = graph::ingest_extraction(
         &state.db,
-        state.embedding.as_ref(),
+        state.llm.as_ref(),
         braindump.id,
         &braindump.verbatim,
         extraction,
@@ -100,12 +100,12 @@ pub async fn edit(
     };
     let ontology = graph::ontology_slugs(&state.db).await?;
     let extraction = state
-        .extractor
+        .llm
         .extract(&braindump.verbatim, &ontology)
         .await?;
     let outcome = graph::ingest_extraction(
         &state.db,
-        state.embedding.as_ref(),
+        state.llm.as_ref(),
         braindump.id,
         &braindump.verbatim,
         extraction,

@@ -756,20 +756,20 @@ fn compute_cluster_braindump_ids_conn(
 mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
-    use crate::embedding::{EmbeddingClient, FakeEmbedding};
+    use crate::llm::{FakeLlm, Llm};
     use crate::error::Error;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::ingest_extraction;
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_vec_tables(FakeEmbedding::default().dim())
+        db.ensure_vec_tables(FakeLlm::default().dim())
             .unwrap();
         db
     }
 
-    fn fake_embedding() -> FakeEmbedding {
-        FakeEmbedding::default()
+    fn fake_llm() -> FakeLlm {
+        FakeLlm::default()
     }
 
     fn extraction(concepts: &[&str], edges: &[(&str, &str, &str)]) -> ExtractionResult {
@@ -807,11 +807,11 @@ mod tests {
     /// `Maria —[endangers]→ Q3 launch —[depends_on]→ Beta release`.
     /// Returns the three concept ids in that order.
     async fn seed_path(db: &Db) -> (i64, i64, i64) {
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(db, "maria endangers q3 which beta depends on").await;
         ingest_extraction(
             db,
-            &emb,
+            &llm,
             bd,
             "maria endangers q3 which beta depends on",
             extraction(
@@ -1085,13 +1085,13 @@ mod tests {
         // a braindump), endorsing adds the inference as a co-asserter rather
         // than duplicating the edge.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
 
         // Seed the multi-hop path Maria —[endangers]→ Q3 —[depends_on]→ Beta.
         let bd_path = seed_braindump(&db, "maria endangers q3 which beta depends on").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd_path,
             "maria endangers q3 which beta depends on",
             extraction(
@@ -1113,7 +1113,7 @@ mod tests {
         let bd_direct = seed_braindump(&db, "maria endangers the beta release directly").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd_direct,
             "maria endangers the beta release directly",
             extraction(
@@ -1259,11 +1259,11 @@ mod tests {
         // does not orphan the inferred direct edge (even though it has no
         // braindump asserter of its own).
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria endangers q3 which beta depends on").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "maria endangers q3 which beta depends on",
             extraction(
@@ -1312,7 +1312,7 @@ mod tests {
         let bd_keep = seed_braindump(&db, "maria and the beta release").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd_keep,
             "maria and the beta release",
             extraction(&["Maria", "Beta release"], &[]),
@@ -1576,12 +1576,12 @@ mod tests {
         // a braindump), endorsing a thematic inference adds the inference as
         // a co-asserter with its snapshot, rather than duplicating the edge.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         // Seed the cluster path Maria —[endangers]→ Q3 —[depends_on]→ Beta.
         let bd_path = seed_braindump(&db, "maria endangers q3 which beta depends on").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd_path,
             "maria endangers q3 which beta depends on",
             extraction(
@@ -1601,7 +1601,7 @@ mod tests {
         let bd_direct = seed_braindump(&db, "maria endangers the beta release directly").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd_direct,
             "maria endangers the beta release directly",
             extraction(
@@ -1654,11 +1654,11 @@ mod tests {
 
         // Add a new braindump that changes the graph topology (a new concept
         // + edge). The partition that motivated the proposal is now stale.
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd_new = seed_braindump(&db, "gamma produces delta").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd_new,
             "gamma produces delta",
             extraction(&["Gamma", "Delta"], &[("Gamma", "produces", "Delta")]),
@@ -1808,12 +1808,12 @@ mod tests {
         // has no thematic density from user thoughts. A thematic inference
         // must rest on user evidence, not LLM-on-LLM deduction.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         // Two concepts extracted from separate braindumps, no edges between them.
         let bd1 = seed_braindump(&db, "thinking about alpha").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd1,
             "thinking about alpha",
             extraction(&["Alpha"], &[]),
@@ -1823,7 +1823,7 @@ mod tests {
         let bd2 = seed_braindump(&db, "thinking about beta").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd2,
             "thinking about beta",
             extraction(&["Beta"], &[]),

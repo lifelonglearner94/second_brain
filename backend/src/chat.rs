@@ -22,9 +22,8 @@
 use serde::Serialize;
 
 use crate::db::Db;
-use crate::embedding::EmbeddingClient;
 use crate::error::Result;
-use crate::llm::LlmClient;
+use crate::llm::Llm;
 use crate::retrieval::{self, RetrievalResult, RetrievedBraindump, RetrievedEdge};
 use crate::thematic::Partition;
 
@@ -83,14 +82,14 @@ pub struct ChatResponse {
 /// Run the chat read path for a query: retrieve (ADR-0004), layer in the
 /// current thematic partition as macrostructure context (ADR-0008), then
 /// synthesize (ADR-0005) or fall silent. Reuses the retrieval read path for
-/// grounding, the [`LlmClient`] seam for synthesis, and the Thematic Read Model
+/// grounding, the [`Llm`] seam for synthesis, and the Thematic Read Model
 /// for the partition.
 ///
 /// When retrieval yields no braindumps, returns the silence response without
 /// invoking the LLM or computing the partition — the honesty contract is
 /// structural, not prompt-only. Otherwise, builds the grounded-synthesis prompt
 /// from the retrieved braindumps + edge paths + the macrostructure partition,
-/// calls [`LlmClient::synthesize`], and returns the answer with the retrieved
+/// calls [`Llm::synthesize`], and returns the answer with the retrieved
 /// braindumps and edges as citations.
 ///
 /// Two structural backstops on the LLM output: if the model echoes the silence
@@ -101,11 +100,10 @@ pub struct ChatResponse {
 /// never shows sources for an answer resting on an ephemeral projection.
 pub async fn chat(
     db: &Db,
-    embedding: &(dyn EmbeddingClient + Sync),
-    llm: &dyn LlmClient,
+    llm: &dyn Llm,
     query: &str,
 ) -> Result<ChatResponse> {
-    let retrieved = retrieval::retrieve(db, embedding, query).await?;
+    let retrieved = retrieval::retrieve(db, llm, query).await?;
     if retrieved.braindumps.is_empty() {
         return Ok(silence(retrieved.mode));
     }

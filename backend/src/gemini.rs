@@ -1,7 +1,8 @@
-//! Real Gemini-backed implementations of the LLM, Extractor, and Embedding
-//! seams (issue #6). One client serves all three: cleaning (ADR-0007),
-//! structured-output extraction (ADR-0001 / ADR-0002 / ADR-0010), and
-//! embeddings (ADR-0001 / ADR-0003 / ADR-0004).
+//! Real Gemini-backed implementation of the LLM/embedding seam (issue #6).
+//! One client serves cleaning (ADR-0007), structured-output extraction
+//! (ADR-0001 / ADR-0002 / ADR-0010), grounded synthesis (ADR-0005), and
+//! embeddings (ADR-0001 / ADR-0003 / ADR-0004) — the single [`crate::llm::Llm`]
+//! trait (issue #39 collapsed the former three traits into it).
 //!
 //! Provider is Gemini — this supersedes the Cohere choice in `first_draft.md`
 //! §C (recorded at close-out of the extraction slice). The embedding model's
@@ -18,10 +19,9 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::embedding::EmbeddingClient;
 use crate::error::{Error, Result};
-use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult, Extractor};
-use crate::llm::LlmClient;
+use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
+use crate::llm::Llm;
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_TEXT_MODEL: &str = "gemini-2.0-flash";
@@ -94,9 +94,10 @@ impl ReasoningEffort {
     }
 }
 
-/// Real Gemini client for all three seams. Constructed from env; `from_env`
+/// Real Gemini client for the single LLM/embedding seam (issue #39 collapsed
+/// the former three traits into one). Constructed from env; `from_env`
 /// returns `None` when `GEMINI_API_KEY` is unset, so dev/CI without a key
-/// falls back to the fake clients (the ingest pipeline stays hermetic).
+/// falls back to the fake client (the ingest pipeline stays hermetic).
 #[derive(Clone)]
 pub struct GeminiClient {
     api_key: String,
@@ -234,7 +235,7 @@ struct EmbedValues {
 }
 
 #[async_trait]
-impl LlmClient for GeminiClient {
+impl Llm for GeminiClient {
     async fn clean(&self, verbatim: &str) -> Result<String> {
         let out = self
             .generate(CLEAN_SYSTEM, verbatim, json!({"temperature": 0}))
@@ -257,25 +258,7 @@ impl LlmClient for GeminiClient {
         // what the grounded-synthesis contract forbids.
         self.generate(system, user, json!({"temperature": 0})).await
     }
-}
 
-#[async_trait]
-impl EmbeddingClient for GeminiClient {
-    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed(text, "RETRIEVAL_DOCUMENT").await
-    }
-
-    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed(text, "RETRIEVAL_QUERY").await
-    }
-
-    fn dim(&self) -> usize {
-        self.embed_dim
-    }
-}
-
-#[async_trait]
-impl Extractor for GeminiClient {
     async fn extract(&self, verbatim: &str, ontology_slugs: &[String]) -> Result<ExtractionResult> {
         let system = format!(
             "You extract concepts and typed, directional edges from a braindump.\n\
@@ -301,6 +284,18 @@ impl Extractor for GeminiClient {
             Error::Internal(format!("gemini extract: response was not JSON: {e}: {out}"))
         })?;
         parse_extraction_response(&value)
+    }
+
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed(text, "RETRIEVAL_DOCUMENT").await
+    }
+
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed(text, "RETRIEVAL_QUERY").await
+    }
+
+    fn dim(&self) -> usize {
+        self.embed_dim
     }
 }
 

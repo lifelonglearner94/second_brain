@@ -97,7 +97,7 @@ pub async fn propose(
 ) -> Result<Json<ProposeResponse>> {
     let outcome = propose_type(
         &state.db,
-        state.embedding.as_ref(),
+        state.llm.as_ref(),
         &body.slug,
         &body.label,
         &body.description,
@@ -123,7 +123,7 @@ pub async fn approve(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<ProposeResponse>> {
-    let proposal = approve_proposal(&state.db, state.embedding.as_ref(), id).await?;
+    let proposal = approve_proposal(&state.db, state.llm.as_ref(), id).await?;
     // If the approved type merges another, spawn the refactor out-of-band so
     // ingest is not blocked while it runs (ADR-0003). Fire-and-forget; the
     // JoinHandle is tracked on the runner so tests can await it.

@@ -21,46 +21,29 @@ use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{
-    ExtractedConcept, ExtractedEdge, ExtractionResult, Extractor,
+    ExtractedConcept, ExtractedEdge, ExtractionResult,
 };
-use second_brain_backend::llm::LlmClient;
+use second_brain_backend::llm::Llm;
 use second_brain_backend::routes;
 use second_brain_backend::state::AppState;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-/// An extractor that returns a canned result per call, in sequence, so the two
-/// braindumps feed two disjoint clusters (bd1 → Maria/Q3, bd2 → Alpha/Beta).
-struct SequencedExtractor {
-    calls: Mutex<usize>,
-    results: Vec<ExtractionResult>,
-}
-
-#[async_trait]
-impl Extractor for SequencedExtractor {
-    async fn extract(
-        &self,
-        _verbatim: &str,
-        _ontology_slugs: &[String],
-    ) -> Result<ExtractionResult> {
-        let mut calls = self.calls.lock().unwrap();
-        let idx = *calls;
-        *calls += 1;
-        Ok(self.results.get(idx).cloned().unwrap_or_default())
-    }
-}
-
-/// An LLM that records each `synthesize` system prompt and returns a canned
-/// answer. Tests assert on the recorded prompt to verify the macrostructure
-/// context reached the model.
-#[derive(Clone)]
-struct RecordingLlm {
+/// The scripted LLM for the chat-macrostructure tests (issue #39 collapsed the
+/// former separate `SequencedExtractor` + `RecordingLlm` into one struct):
+/// `extract` returns a canned result per call in sequence (so two braindumps
+/// feed two disjoint clusters — bd1 → Maria/Q3, bd2 → Alpha/Beta), and
+/// `synthesize` records each system prompt and returns a canned answer (so
+/// tests can assert the macrostructure context reached the model).
+struct ScriptedLlm {
+    extract_calls: Mutex<usize>,
+    extraction_results: Vec<ExtractionResult>,
     answer: String,
     prompts: Arc<Mutex<Vec<String>>>,
 }
 
 #[async_trait]
-impl LlmClient for RecordingLlm {
+impl Llm for ScriptedLlm {
     async fn clean(&self, verbatim: &str) -> Result<String> {
         Ok(verbatim.trim().to_string())
     }
@@ -70,6 +53,25 @@ impl LlmClient for RecordingLlm {
     async fn synthesize(&self, system: &str, _user: &str) -> Result<String> {
         self.prompts.lock().unwrap().push(system.to_string());
         Ok(self.answer.clone())
+    }
+    async fn extract(
+        &self,
+        _verbatim: &str,
+        _ontology_slugs: &[String],
+    ) -> Result<ExtractionResult> {
+        let mut calls = self.extract_calls.lock().unwrap();
+        let idx = *calls;
+        *calls += 1;
+        Ok(self.extraction_results.get(idx).cloned().unwrap_or_default())
+    }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
     }
 }
 
@@ -148,8 +150,12 @@ async fn retrieve(
     (status, value)
 }
 
-fn two_cluster_app(db: Db, llm: Arc<dyn LlmClient>) -> axum::Router {
-    let extractor_results = vec![
+fn two_cluster_app(
+    db: Db,
+    answer: String,
+    prompts: Arc<Mutex<Vec<String>>>,
+) -> axum::Router {
+    let extraction_results = vec![
         ExtractionResult {
             concepts: concepts(&["Maria", "Q3 launch"]),
             edges: vec![edge("Maria", "endangers", "Q3 launch")],
@@ -159,12 +165,13 @@ fn two_cluster_app(db: Db, llm: Arc<dyn LlmClient>) -> axum::Router {
             edges: vec![edge("Alpha", "helps", "Beta")],
         },
     ];
-    let extractor = Arc::new(SequencedExtractor {
-        calls: Mutex::new(0),
-        results: extractor_results,
+    let llm: Arc<dyn Llm> = Arc::new(ScriptedLlm {
+        extract_calls: Mutex::new(0),
+        extraction_results,
+        answer,
+        prompts,
     });
     let mut state = AppState::for_tests(db);
-    state.extractor = extractor as Arc<dyn Extractor>;
     state.llm = llm;
     routes::router(state)
 }
@@ -177,14 +184,14 @@ async fn chat_prompt_layers_the_partition_as_macrostructure_context() {
     // from the raw edges in-budget.
     let db = Db::open_in_memory().unwrap();
     let prompts = Arc::new(Mutex::new(Vec::<String>::new()));
-    let llm = Arc::new(RecordingLlm {
-        answer: String::from(
+    let app = two_cluster_app(
+        db.clone(),
+        String::from(
             "Q3 is at risk because Maria is leaving [bd:1] \
              [edge:Maria —endangers→ Q3 launch]",
         ),
-        prompts: prompts.clone(),
-    });
-    let app = two_cluster_app(db.clone(), llm);
+        prompts.clone(),
+    );
     let cookie = session_cookie(&db).await;
     let bd1 = submit(&app, &cookie, "maria endangers q3 launch").await;
     let bd2 = submit(&app, &cookie, "alpha helps beta").await;
@@ -227,14 +234,14 @@ async fn chat_rejects_an_answer_that_cites_a_cluster() {
     // "citation-from-cluster case rejected".
     let db = Db::open_in_memory().unwrap();
     let prompts = Arc::new(Mutex::new(Vec::<String>::new()));
-    let llm = Arc::new(RecordingLlm {
-        answer: String::from(
+    let app = two_cluster_app(
+        db.clone(),
+        String::from(
             "Q3 is at risk because Group 1 is dense \
              [cluster:Group 1] [bd:1]",
         ),
-        prompts: prompts.clone(),
-    });
-    let app = two_cluster_app(db.clone(), llm);
+        prompts.clone(),
+    );
     let cookie = session_cookie(&db).await;
     submit(&app, &cookie, "maria endangers q3 launch").await;
     submit(&app, &cookie, "alpha helps beta").await;
@@ -269,14 +276,14 @@ async fn chat_with_macrostructure_still_cites_braindumps_and_edges() {
     // citations, even though the macrostructure context is in the prompt.
     let db = Db::open_in_memory().unwrap();
     let prompts = Arc::new(Mutex::new(Vec::<String>::new()));
-    let llm = Arc::new(RecordingLlm {
-        answer: String::from(
+    let app = two_cluster_app(
+        db.clone(),
+        String::from(
             "Q3 is at risk because Maria is leaving, which endangers the launch \
              [bd:1] [edge:Maria —endangers→ Q3 launch]",
         ),
-        prompts: prompts.clone(),
-    });
-    let app = two_cluster_app(db.clone(), llm);
+        prompts.clone(),
+    );
     let cookie = session_cookie(&db).await;
     let bd = submit(&app, &cookie, "maria endangers q3 launch").await;
     submit(&app, &cookie, "alpha helps beta").await;
@@ -319,11 +326,11 @@ async fn retrieval_does_not_use_cluster_membership() {
     // braindump may appear via vector backfill (a legitimate ADR-0004
     // mechanism) but never via a cluster-based source.
     let db = Db::open_in_memory().unwrap();
-    let llm = Arc::new(RecordingLlm {
-        answer: String::from("unused"),
-        prompts: Arc::new(Mutex::new(Vec::new())),
-    });
-    let app = two_cluster_app(db.clone(), llm);
+    let app = two_cluster_app(
+        db.clone(),
+        String::from("unused"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
     let cookie = session_cookie(&db).await;
     let bd_maria = submit(&app, &cookie, "maria endangers q3 launch").await;
     let bd_alpha = submit(&app, &cookie, "alpha helps beta").await;

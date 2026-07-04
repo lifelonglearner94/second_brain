@@ -18,23 +18,34 @@ use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{
-    ExtractedConcept, ExtractedEdge, ExtractionResult, Extractor,
+    ExtractedConcept, ExtractedEdge, ExtractionResult,
 };
 use second_brain_backend::graph;
+use second_brain_backend::llm::Llm;
 use second_brain_backend::routes;
 use second_brain_backend::state::AppState;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-/// An extractor that returns a canned result regardless of input, so the
-/// accretion pipeline runs on deterministic concepts/edges.
+/// An LLM whose `extract` returns a canned result regardless of input, so the
+/// accretion pipeline runs on deterministic concepts/edges. The non-extraction
+/// methods are stubs (these tests drive ingest, not chat/refactor).
 #[derive(Clone)]
-struct ScriptedExtractor {
+struct ScriptedLlm {
     result: ExtractionResult,
 }
 
 #[async_trait]
-impl Extractor for ScriptedExtractor {
+impl Llm for ScriptedLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("ScriptedLlm::synthesize (unused by extraction tests)".to_string())
+    }
     async fn extract(
         &self,
         _verbatim: &str,
@@ -42,17 +53,35 @@ impl Extractor for ScriptedExtractor {
     ) -> Result<ExtractionResult> {
         Ok(self.result.clone())
     }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
+    }
 }
 
-/// A scripted extractor that returns a *different* result the second time it is
-/// called, so a single submit→edit cycle can be driven deterministically.
-struct SequencedExtractor {
+/// A scripted LLM whose `extract` returns a *different* result on each call,
+/// so a single submit→edit cycle can be driven deterministically.
+struct SequencedLlm {
     calls: Mutex<usize>,
     results: Vec<ExtractionResult>,
 }
 
 #[async_trait]
-impl Extractor for SequencedExtractor {
+impl Llm for SequencedLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("SequencedLlm::synthesize (unused by extraction tests)".to_string())
+    }
     async fn extract(
         &self,
         _verbatim: &str,
@@ -62,6 +91,15 @@ impl Extractor for SequencedExtractor {
         let idx = *calls;
         *calls += 1;
         Ok(self.results.get(idx).cloned().unwrap_or_default())
+    }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
     }
 }
 
@@ -106,22 +144,22 @@ async fn submit(app: &axum::Router, cookie: &http::HeaderValue, verbatim: &str) 
     value["id"].as_i64().expect("id present")
 }
 
-fn app_with_extractor(db: Db, extractor: Arc<dyn Extractor>) -> axum::Router {
+fn app_with_llm(db: Db, llm: Arc<dyn Llm>) -> axum::Router {
     let mut state = AppState::for_tests(db);
-    state.extractor = extractor;
+    state.llm = llm;
     routes::router(state)
 }
 
 #[tokio::test]
 async fn submit_drives_extraction_and_accretion_end_to_end() {
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(ScriptedExtractor {
+    let llm = Arc::new(ScriptedLlm {
         result: ExtractionResult {
             concepts: concepts(&["Maria", "Q3 launch"]),
             edges: vec![edge("Maria", "endangers", "Q3 launch")],
         },
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     let bd = submit(&app, &cookie, "maria endangers the q3 launch").await;
@@ -157,26 +195,26 @@ async fn submit_drives_extraction_and_accretion_end_to_end() {
     assert_eq!(history[0].seq_index, 0);
     assert_eq!(history[0].type_slug, "endangers");
 
-    // Both embeddings persisted (Gemini in prod; FakeEmbedding here).
+    // Both embeddings persisted (Gemini in prod; FakeLlm here).
     assert!(graph::braindump_embedding_stored(&db, bd).await.unwrap());
 }
 
 #[tokio::test]
 async fn two_braindumps_same_concept_accrete_into_one_node_via_route() {
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(ScriptedExtractor {
+    let llm = Arc::new(ScriptedLlm {
         result: ExtractionResult {
             concepts: concepts(&["Q3 review"]),
             edges: vec![],
         },
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     let bd1 = submit(&app, &cookie, "the q3 review went off the rails").await;
     let bd2 = submit(&app, &cookie, "q3 review is still on my mind").await;
 
-    // One concept node (identical label → identical FakeEmbedding vector →
+    // One concept node (identical label → identical FakeLlm vector →
     // cosine 1.0 > 0.95 → accrete), both braindumps in its provenance.
     let cid = graph::concept_id_for_label(&db, "Q3 review")
         .await
@@ -190,13 +228,13 @@ async fn two_braindumps_same_concept_accrete_into_one_node_via_route() {
 #[tokio::test]
 async fn second_braindump_accretes_edge_provenance_via_route() {
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(ScriptedExtractor {
+    let llm = Arc::new(ScriptedLlm {
         result: ExtractionResult {
             concepts: concepts(&["Maria", "Q3 launch"]),
             edges: vec![edge("Maria", "endangers", "Q3 launch")],
         },
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     let bd1 = submit(&app, &cookie, "maria endangers q3 launch").await;
@@ -228,13 +266,13 @@ async fn second_braindump_accretes_edge_provenance_via_route() {
 #[tokio::test]
 async fn unsanctioned_edge_type_rejected_via_route() {
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(ScriptedExtractor {
+    let llm = Arc::new(ScriptedLlm {
         result: ExtractionResult {
             concepts: concepts(&["Maria", "Q3 launch"]),
             edges: vec![edge("Maria", "bamboozles", "Q3 launch")],
         },
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     submit(&app, &cookie, "maria bamboozles q3 launch").await;
@@ -261,7 +299,7 @@ async fn unsanctioned_edge_type_rejected_via_route() {
 async fn edit_retracts_stale_extraction_and_re_accretes_via_route() {
     // ADR-0007: an edit re-extracts; the old derived graph is retracted first.
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(SequencedExtractor {
+    let llm = Arc::new(SequencedLlm {
         calls: Mutex::new(0),
         results: vec![
             ExtractionResult {
@@ -275,7 +313,7 @@ async fn edit_retracts_stale_extraction_and_re_accretes_via_route() {
             },
         ],
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     let bd = submit(&app, &cookie, "maria endangers q3 launch").await;

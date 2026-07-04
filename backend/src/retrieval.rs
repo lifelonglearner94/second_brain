@@ -16,9 +16,9 @@ use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 
 use crate::db::Db;
-use crate::embedding::EmbeddingClient;
 use crate::error::Result;
 use crate::graph::vec_to_blob;
+use crate::llm::Llm;
 
 /// Cosine similarity at or above which a concept-embedding KNN hit counts as a
 /// retrieval seed. Below this the query is treated as unanchored and retrieval
@@ -99,11 +99,11 @@ pub struct RetrievalResult {
 /// falls back to braindump-vector-direct (ADR-0004 no-seed fallback).
 pub async fn retrieve(
     db: &Db,
-    embedding: &(dyn EmbeddingClient + Sync),
+    llm: &dyn Llm,
     query: &str,
 ) -> Result<RetrievalResult> {
-    let query_vec = embedding.embed_query(query).await?;
-    let dim = embedding.dim();
+    let query_vec = llm.embed_query(query).await?;
+    let dim = llm.dim();
     db.run(move |conn| {
         crate::db::ensure_vec_tables(conn, dim)?;
         retrieve_conn(conn, &query_vec)
@@ -410,19 +410,19 @@ fn knn_braindumps(
 mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
-    use crate::embedding::FakeEmbedding;
+    use crate::llm::{FakeLlm, Llm};
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::ingest_extraction;
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_vec_tables(FakeEmbedding::default().dim())
+        db.ensure_vec_tables(FakeLlm::default().dim())
             .unwrap();
         db
     }
 
-    fn fake_embedding() -> FakeEmbedding {
-        FakeEmbedding::default()
+    fn fake_llm() -> FakeLlm {
+        FakeLlm::default()
     }
 
     fn extraction(concepts: &[&str], edges: &[(&str, &str, &str)]) -> ExtractionResult {
@@ -452,11 +452,11 @@ mod tests {
     #[tokio::test]
     async fn seed_finds_braindumps_of_the_matched_concept() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "the q3 review went off the rails").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "the q3 review went off the rails",
             extraction(&["Q3 review"], &[]),
@@ -464,7 +464,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = retrieve(&db, &emb, "Q3 review").await.unwrap();
+        let result = retrieve(&db, &llm, "Q3 review").await.unwrap();
 
         assert_eq!(result.mode, RetrievalMode::SeedThenExpand);
         let found = result
@@ -482,11 +482,11 @@ mod tests {
         // found by seeding on "Q3 launch" and traversing the incoming edge to
         // Maria.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria leaving tanks the timeline").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "maria leaving tanks the timeline",
             extraction(
@@ -497,7 +497,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = retrieve(&db, &emb, "Q3").await.unwrap();
+        let result = retrieve(&db, &llm, "Q3").await.unwrap();
 
         assert_eq!(result.mode, RetrievalMode::SeedThenExpand);
         let found = result
@@ -528,12 +528,12 @@ mod tests {
         // to the seed, but whose text matches the query — found by
         // braindump-embedding KNN backfill (ADR-0004).
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
 
         let bd_graph = seed_braindump(&db, "maria endangers the q3 launch").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd_graph,
             "maria endangers the q3 launch",
             extraction(
@@ -547,7 +547,7 @@ mod tests {
         let bd_stray = seed_braindump(&db, "q3 risk assessment notes").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd_stray,
             "q3 risk assessment notes",
             extraction(&["Risk assessment"], &[]),
@@ -555,7 +555,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = retrieve(&db, &emb, "Q3").await.unwrap();
+        let result = retrieve(&db, &llm, "Q3").await.unwrap();
 
         let stray = result
             .braindumps
@@ -572,13 +572,13 @@ mod tests {
         // anchor cannot seed and cannot expand; it falls back to
         // braindump-vector-direct — the one place vectors become primary.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
 
         let bd_reflective =
             seed_braindump(&db, "feeling overwhelmed but my mind is full lately").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd_reflective,
             "feeling overwhelmed but my mind is full lately",
             extraction(&["Burnout"], &[]),
@@ -589,7 +589,7 @@ mod tests {
         let bd_unrelated = seed_braindump(&db, "the q3 launch timeline").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd_unrelated,
             "the q3 launch timeline",
             extraction(&["Q3 launch"], &[]),
@@ -597,7 +597,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = retrieve(&db, &emb, "what is on my mind lately")
+        let result = retrieve(&db, &llm, "what is on my mind lately")
             .await
             .unwrap();
 

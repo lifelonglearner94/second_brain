@@ -21,55 +21,52 @@ use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{
-    ExtractedConcept, ExtractedEdge, ExtractionResult, Extractor,
+    ExtractedConcept, ExtractedEdge, ExtractionResult,
 };
-use second_brain_backend::llm::LlmClient;
+use second_brain_backend::llm::Llm;
 use second_brain_backend::routes;
 use second_brain_backend::state::AppState;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-/// An extractor that returns a canned result regardless of input, so the
-/// accretion pipeline runs on deterministic concepts/edges.
-#[derive(Clone)]
-struct ScriptedExtractor {
-    result: ExtractionResult,
-}
-
-#[async_trait]
-impl Extractor for ScriptedExtractor {
-    async fn extract(
-        &self,
-        _verbatim: &str,
-        _ontology_slugs: &[String],
-    ) -> Result<ExtractionResult> {
-        Ok(self.result.clone())
-    }
-}
-
-/// A scripted LLM that records each `synthesize` call and returns a canned
-/// answer. Tests assert on the call count to verify the silence path skips the
-/// LLM entirely (the honesty contract: silence is enforced structurally, not
-/// entrusted to the model).
+/// A scripted LLM for the chat tests: `extract` returns a canned extraction
+/// result so the accretion pipeline builds a deterministic graph, `synthesize`
+/// returns a canned answer and records each call so tests can assert the
+/// silence path skips the LLM. The remaining methods are stubs.
 #[derive(Clone)]
 struct ScriptedLlm {
+    extraction: ExtractionResult,
     answer: String,
     calls: Arc<Mutex<usize>>,
 }
 
 #[async_trait]
-impl LlmClient for ScriptedLlm {
+impl Llm for ScriptedLlm {
     async fn clean(&self, verbatim: &str) -> Result<String> {
         Ok(verbatim.trim().to_string())
     }
-
     async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
         Ok(user.to_string())
     }
-
     async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
         *self.calls.lock().unwrap() += 1;
         Ok(self.answer.clone())
+    }
+    async fn extract(
+        &self,
+        _verbatim: &str,
+        _ontology_slugs: &[String],
+    ) -> Result<ExtractionResult> {
+        Ok(self.extraction.clone())
+    }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
     }
 }
 
@@ -129,9 +126,8 @@ async fn chat(app: &axum::Router, cookie: &http::HeaderValue, query: &str) -> (S
     (status, value)
 }
 
-fn app_with(db: Db, extractor: Arc<dyn Extractor>, llm: Arc<dyn LlmClient>) -> axum::Router {
+fn app_with(db: Db, llm: Arc<dyn Llm>) -> axum::Router {
     let mut state = AppState::for_tests(db);
-    state.extractor = extractor;
     state.llm = llm;
     routes::router(state)
 }
@@ -144,16 +140,11 @@ async fn chat_is_silent_when_the_graph_does_not_support_an_answer() {
     let db = Db::open_in_memory().unwrap();
     let llm_calls = Arc::new(Mutex::new(0usize));
     let llm = Arc::new(ScriptedLlm {
+        extraction: ExtractionResult::default(),
         answer: String::from("Q3 is at risk because Maria is leaving [bd:1]"),
         calls: llm_calls.clone(),
     });
-    let app = app_with(
-        db.clone(),
-        Arc::new(ScriptedExtractor {
-            result: ExtractionResult::default(),
-        }),
-        llm,
-    );
+    let app = app_with(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     let (status, body) = chat(&app, &cookie, "why is Q3 at risk?").await;
@@ -190,22 +181,17 @@ async fn chat_synthesizes_a_grounded_answer_citing_braindumps_and_edges() {
     let db = Db::open_in_memory().unwrap();
     let llm_calls = Arc::new(Mutex::new(0usize));
     let llm = Arc::new(ScriptedLlm {
+        extraction: ExtractionResult {
+            concepts: concepts(&["Maria", "Q3 launch"]),
+            edges: vec![edge("Maria", "endangers", "Q3 launch")],
+        },
         answer: String::from(
             "Q3 is at risk because Maria is leaving, which endangers the launch \
              [bd:1] [edge:Maria —endangers→ Q3 launch]",
         ),
         calls: llm_calls.clone(),
     });
-    let app = app_with(
-        db.clone(),
-        Arc::new(ScriptedExtractor {
-            result: ExtractionResult {
-                concepts: concepts(&["Maria", "Q3 launch"]),
-                edges: vec![edge("Maria", "endangers", "Q3 launch")],
-            },
-        }),
-        llm,
-    );
+    let app = app_with(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     let bd = submit(&app, &cookie, "maria leaving tanks the timeline").await;
@@ -251,19 +237,14 @@ async fn chat_is_silent_when_the_llm_judges_the_context_does_not_support_an_answ
     let db = Db::open_in_memory().unwrap();
     let llm_calls = Arc::new(Mutex::new(0usize));
     let llm = Arc::new(ScriptedLlm {
+        extraction: ExtractionResult {
+            concepts: concepts(&["Maria", "Q3 launch"]),
+            edges: vec![edge("Maria", "endangers", "Q3 launch")],
+        },
         answer: String::from("you haven't told me about that"),
         calls: llm_calls.clone(),
     });
-    let app = app_with(
-        db.clone(),
-        Arc::new(ScriptedExtractor {
-            result: ExtractionResult {
-                concepts: concepts(&["Maria", "Q3 launch"]),
-                edges: vec![edge("Maria", "endangers", "Q3 launch")],
-            },
-        }),
-        llm,
-    );
+    let app = app_with(db.clone(), llm);
     let cookie = session_cookie(&db).await;
     let _bd = submit(&app, &cookie, "maria leaving tanks the timeline").await;
 
