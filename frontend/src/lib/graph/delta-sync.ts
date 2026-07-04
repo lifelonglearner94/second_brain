@@ -23,6 +23,17 @@ export type DeltaSyncSkipped = {
 
 export type DeltaSyncOutcome = DeltaSyncSuccess | DeltaSyncSkipped;
 
+export type FocusTarget = {
+	addEventListener(type: string, listener: (event: Event) => void): void;
+	removeEventListener(type: string, listener: (event: Event) => void): void;
+};
+
+export function onWindowFocus(target: FocusTarget, onFocus: () => void): () => void {
+	const handler = (): void => onFocus();
+	target.addEventListener('focus', handler);
+	return () => target.removeEventListener('focus', handler);
+}
+
 export async function syncDelta(state: DeltaSyncState, api: DeltaSyncApi): Promise<DeltaSyncOutcome> {
 	try {
 		const delta = await api.getGraphDelta(state.cursor);
