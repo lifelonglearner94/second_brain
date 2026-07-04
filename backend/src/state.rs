@@ -8,6 +8,7 @@ use crate::db::Db;
 use crate::embedding::EmbeddingClient;
 use crate::extractor::Extractor;
 use crate::llm::LlmClient;
+use crate::logs::LogBuffer;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -17,6 +18,7 @@ pub struct AppState {
     pub embedding: Arc<dyn EmbeddingClient>,
     pub extractor: Arc<dyn Extractor>,
     pub auth: AuthService,
+    pub log_buffer: LogBuffer,
 }
 
 impl AppState {
@@ -37,6 +39,7 @@ impl AppState {
             embedding: Arc::new(crate::embedding::FakeEmbedding::default()),
             extractor: Arc::new(crate::extractor::FakeExtractor),
             auth: AuthService::new(webauthn),
+            log_buffer: LogBuffer::with_default_capacity(),
         }
     }
 }

@@ -12,6 +12,7 @@ pub mod embedding;
 pub mod error;
 pub mod extractor;
 pub mod llm;
+pub mod logs;
 pub mod routes;
 pub mod state;
 

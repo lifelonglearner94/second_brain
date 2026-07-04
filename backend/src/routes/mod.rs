@@ -8,6 +8,7 @@ use axum::Router;
 use crate::auth::middleware::require_session;
 use crate::state::AppState;
 
+mod admin;
 mod auth;
 mod braindump;
 mod health;
@@ -30,7 +31,8 @@ pub fn router(state: AppState) -> Router {
     // Protected routes — every handler behind this layer requires a valid
     // session cookie. `/me` is the demonstrator; `/auth/logout` needs the
     // validated session to invalidate it; `/braindumps` is the ingest write
-    // path (ADR-0007) — submit, read, and error-correction edit.
+    // path (ADR-0007) — submit, read, and error-correction edit; `/admin/logs`
+    // surfaces backend logs to the hidden admin tab.
     let protected_routes: Router<AppState> = Router::new()
         .route("/me", get(auth::me))
         .route("/auth/logout", post(auth::logout))
@@ -39,6 +41,7 @@ pub fn router(state: AppState) -> Router {
             "/braindumps/{id}",
             get(braindump::read).patch(braindump::edit),
         )
+        .route("/admin/logs", get(admin::logs))
         .route_layer(from_fn_with_state(state.clone(), require_session));
 
     Router::new()
