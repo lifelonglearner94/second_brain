@@ -454,12 +454,18 @@ fn retract_extraction(conn: &rusqlite::Connection, braindump_id: i64) -> Result<
         params![braindump_id],
     )?;
     // Tombstone orphan edges (no asserter left) before the row DELETE so delta
-    // sync can report the deletion (issue #28).
+    // sync can report the deletion (issue #28). An edge's asserter list is the
+    // union of braindump provenance (`edge_provenance`, ADR-0002) and
+    // chat-inference provenance (`edge_inference_provenance`, ADR-0006) — so an
+    // edge backed only by a chat inference is NOT orphaned by a braindump
+    // deletion (the inference is its own origin).
     tombstone_orphan_edges(conn)?;
     // Orphan edges first (they reference concepts), then orphan concepts.
     conn.execute(
         "DELETE FROM edges WHERE NOT EXISTS
-            (SELECT 1 FROM edge_provenance WHERE edge_id = edges.id)",
+            (SELECT 1 FROM edge_provenance WHERE edge_id = edges.id)
+          AND NOT EXISTS
+            (SELECT 1 FROM edge_inference_provenance WHERE edge_id = edges.id)",
         [],
     )?;
     // The vec0 concept_embeddings table has no FK cascade — clean embeddings for
@@ -483,14 +489,17 @@ fn retract_extraction(conn: &rusqlite::Connection, braindump_id: i64) -> Result<
 /// Append 'edge' tombstone rows for every edge about to vanish (no asserter
 /// remains) in the current transaction. A single `INSERT ... SELECT` — no Rust
 /// loop. Idempotent in the sense that it only fires when called inside the
-/// cascade; an edge with remaining provenance is not tombstoned.
+/// cascade; an edge with remaining provenance (braindump or chat-inference,
+/// ADR-0006) is not tombstoned.
 fn tombstone_orphan_edges(conn: &rusqlite::Connection) -> Result<()> {
     let now = now_seconds();
     conn.execute(
         "INSERT INTO graph_tombstones (kind, entity_id, created_at)
          SELECT 'edge', id, ?1 FROM edges
          WHERE NOT EXISTS
-            (SELECT 1 FROM edge_provenance WHERE edge_id = edges.id)",
+            (SELECT 1 FROM edge_provenance WHERE edge_id = edges.id)
+           AND NOT EXISTS
+            (SELECT 1 FROM edge_inference_provenance WHERE edge_id = edges.id)",
         params![now],
     )?;
     Ok(())
