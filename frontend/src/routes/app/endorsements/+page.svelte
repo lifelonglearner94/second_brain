@@ -2,7 +2,8 @@
 	import { onMount } from 'svelte';
 	import { apiClient } from '$lib/api';
 	import { endorsementQueue } from '$lib/state/endorsement-queue.svelte';
-	import { spatialGraph } from '$lib/state/spatial-graph.svelte';
+	import { graphStore } from '$lib/state/graph.svelte';
+	import { createIdb } from '$lib/state/idb';
 	import EndorsementQueue from '$lib/endorsement/EndorsementQueue.svelte';
 
 	let labelMap = $state<Map<string, string>>(new Map());
@@ -21,10 +22,9 @@
 		(async () => {
 			await endorsementQueue.refresh();
 			try {
-				const snapshot = await apiClient.getGraph();
-				spatialGraph.loadSnapshot(snapshot);
+				await graphStore.loadFromNetworkOrCache(apiClient, createIdb());
 				labelMap = new Map(
-					snapshot.concepts.map((c) => [String(c.id), c.label] as const)
+					graphStore.snapshot?.concepts.map((c) => [String(c.id), c.label] as const) ?? []
 				);
 			} catch {
 				// The queue still renders with numeric concept ids if the
@@ -61,7 +61,7 @@
 
 	<p class="graph-summary" data-testid="spatial-graph-summary">
 		Spatial View-Graph: <code data-testid="spatial-graph-edge-count">
-			{spatialGraph.data.links.length}
+			{graphStore.data.links.length}
 		</code>
 		edges
 	</p>

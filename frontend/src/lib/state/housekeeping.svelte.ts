@@ -7,12 +7,11 @@ import type {
 	OntologyProposalsResponse,
 	OntologyEdgeType
 } from '$lib/api/client';
-import { applyConceptMerge, applyTypeMerge } from '$lib/graph/merge';
+import { graphStore, type GraphStore } from '$lib/state/graph.svelte';
 
 export type HousekeepingStatus = 'idle' | 'loading' | 'loaded' | 'error';
 
 export type HousekeepingApi = {
-	getGraph(): Promise<GlobalTopologySnapshot>;
 	getMergeSuggestions(): Promise<ConceptMergeSuggestion[]>;
 	approveMergeSuggestion(id: number): Promise<void>;
 	getOntology(): Promise<Ontology>;
@@ -33,24 +32,28 @@ export type HousekeepingItem = {
 export class HousekeepingStore {
 	status = $state<HousekeepingStatus>('idle');
 	error = $state<string | null>(null);
-	snapshot = $state<GlobalTopologySnapshot | null>(null);
 	ontology = $state<Ontology | null>(null);
 	conceptSuggestions = $state<ConceptMergeSuggestion[]>([]);
 	typeProposals = $state<OntologyTypeProposal[]>([]);
 
-	constructor(private api: HousekeepingApi) {}
+	constructor(
+		private api: HousekeepingApi,
+		private graph: GraphStore
+	) {}
+
+	get snapshot(): GlobalTopologySnapshot | null {
+		return this.graph.snapshot;
+	}
 
 	async load(): Promise<void> {
 		this.status = 'loading';
 		this.error = null;
 		try {
-			const [graph, suggestions, proposalsRes, ontology] = await Promise.all([
-				this.api.getGraph(),
+			const [suggestions, proposalsRes, ontology] = await Promise.all([
 				this.api.getMergeSuggestions(),
 				this.api.getOntologyProposals(),
 				this.api.getOntology()
 			]);
-			this.snapshot = graph;
 			this.conceptSuggestions = suggestions;
 			this.typeProposals = proposalsRes.proposals;
 			this.ontology = ontology;
@@ -65,7 +68,7 @@ export class HousekeepingStore {
 
 	items = $derived.by<HousekeepingItem[]>(() => {
 		const labelById = new Map<string, string>();
-		for (const c of this.snapshot?.concepts ?? []) labelById.set(c.id, c.label);
+		for (const c of this.graph.snapshot?.concepts ?? []) labelById.set(c.id, c.label);
 		const labelBySlug = new Map<string, string>();
 		for (const t of this.ontology?.edge_types ?? []) labelBySlug.set(t.slug, t.label);
 
@@ -91,15 +94,15 @@ export class HousekeepingStore {
 	async confirmMerge(id: number, kind: HousekeepingItemKind): Promise<void> {
 		if (kind === 'concept') {
 			const suggestion = this.conceptSuggestions.find((s) => s.id === id);
-			if (!suggestion || !this.snapshot) return;
+			if (!suggestion || !this.graph.snapshot) return;
 			await this.api.approveMergeSuggestion(id);
-			this.snapshot = applyConceptMerge(this.snapshot, suggestion);
+			this.graph.applyConceptMerge(suggestion);
 			this.conceptSuggestions = this.conceptSuggestions.filter((s) => s.id !== id);
 		} else {
 			const proposal = this.typeProposals.find((p) => p.id === id);
-			if (!proposal || !this.snapshot) return;
+			if (!proposal || !this.graph.snapshot) return;
 			const approved = await this.api.approveOntologyProposal(id);
-			this.snapshot = applyTypeMerge(this.snapshot, approved);
+			this.graph.applyTypeMerge(approved);
 			this.ontology = this.addTypeToOntology(this.ontology, approved);
 			this.typeProposals = this.typeProposals.filter((p) => p.id !== id);
 		}
@@ -117,4 +120,4 @@ export class HousekeepingStore {
 	}
 }
 
-export const housekeeping = new HousekeepingStore(apiClient);
+export const housekeeping = new HousekeepingStore(apiClient, graphStore);
