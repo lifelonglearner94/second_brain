@@ -49,7 +49,7 @@ Das System basiert auf einer serviceorientierten Architektur, verpackt in Docker
 #### C. Die KI- & Daten-Pipeline (Das Gehirn)
 
 * **Information Extraction (LLM):** Gehostete API (Gemini) mit strengem System-Prompt → strukturiertes JSON mit Entitäten und typisierten Relationen. Für deterministische Ontology-Refactors (ADR-0003): Temperature=0 gegen einen **gepinnten Model-Snapshot**, nie `-latest` — so retagt der Hintergrund-Job stabil über API-Model-Bumps hinweg.
-* **Embeddings:** **Cohere `embed-v4.0`** (gehostet) — multilingual mit Deutsch als First-Class, `input_type` (search_query/search_document), native `int8`/`binary`-Quantisierung, `output_dimension` 256–1536 (für Personal-Scale: `int8`, 1024-dim). Runner-up: **Voyage `voyage-4-large`** (SOTA auf RTEB, aber weniger Deutsch-verankert). ~~Ollama + `intfloat/multilingual-e5-large`~~ — ausgeschieden, siehe Änderungsliste.
+* **Embeddings:** **auch gemini,
 * ~~**Vektordatenbank (Qdrant)** + **Embedding-Modell (Ollama)**~~ → entfallen als eigene Container; siehe B. Vector-Store und C. Embeddings. Die Pipeline ist LLM-API → Embedding-API → in-process SQLite/sqlite-vec; kein zweiter Daten-Server.
 * **LightRAG-Ansatz:** Die Idee (Graph load-bearing, Vektoren Seed+Backfill, ADR-0004) wird als **eigene Rust-Implementierung** umgesetzt. 2026 gibt es keine Rust-LightRAG; die reifen Optionen (LightRAG HKUDS, MS GraphRAG, nano-GraphRAG, fast-graphrag) sind alle Python — eine Adoption hieße einen Python-Sidecar oder einen Port, und das Projekt-Modell (typisierte Kanten, origin-typed Provenance, governed Ontology, event-sourced Type-History) ist bewusst strikter als LightRAG. Wir borgen uns LightRAGs Retrieval-Algorithmus, nicht seine Bibliothek.
 
