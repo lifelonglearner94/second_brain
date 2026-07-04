@@ -18,7 +18,7 @@ use serde::Serialize;
 use crate::db::Db;
 use crate::embedding::EmbeddingClient;
 use crate::error::Result;
-use crate::graph::vec_to_blob;
+use crate::graph::{current_type_subquery, vec_to_blob};
 
 /// Cosine similarity at or above which a concept-embedding KNN hit counts as a
 /// retrieval seed. Below this the query is treated as unanchored and retrieval
@@ -196,12 +196,11 @@ fn expand(
         node_index.insert(cid, idx);
     }
 
-    let mut stmt = conn.prepare(
-        "SELECT e.source_concept_id, e.target_concept_id,
-                (SELECT type_slug FROM edge_type_history
-                 WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1) AS current_type
+    let mut stmt = conn.prepare(&format!(
+        "SELECT e.source_concept_id, e.target_concept_id, ({}) AS current_type
          FROM edges e",
-    )?;
+        current_type_subquery()
+    ))?;
     let edge_rows = stmt.query_map([], |r| {
         Ok(EdgeInfo {
             source_concept_id: r.get(0)?,

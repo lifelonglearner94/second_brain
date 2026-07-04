@@ -41,6 +41,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{now_seconds, Db};
 use crate::error::{Error, Result};
+use crate::graph::{
+    concept_exists_conn, edge_exists_with_current_type_conn, find_edge_id_conn,
+    init_type_history_conn, insert_edge_conn,
+};
+use crate::ontology::ontology_slug_exists_conn;
 
 /// Origin tag for a structural inference proposal (ADR-0006). The
 /// graph-backed, deterministic mode — "the graph supports this; I'm labeling
@@ -609,89 +614,7 @@ pub async fn edge_inference_asserted_by(db: &Db, edge_id: i64) -> Result<Vec<Inf
     .await
 }
 
-// --- connection-scoped helpers (shared with graph.rs-style internals) ---
-
-fn ontology_slug_exists_conn(conn: &rusqlite::Connection, slug: &str) -> Result<bool> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM ontology WHERE slug = ?1",
-        params![slug],
-        |r| r.get(0),
-    )?;
-    Ok(n > 0)
-}
-
-/// Whether an edge `source —[type]→ target` exists in the graph wearing
-/// `type` as its current projected type (the last entry of its append-only
-/// type history, ADR-0003). This is the traversability check for a structural
-/// inference's evidence path.
-fn edge_exists_with_current_type_conn(
-    conn: &rusqlite::Connection,
-    source_id: i64,
-    type_slug: &str,
-    target_id: i64,
-) -> Result<bool> {
-    let exists = conn
-        .query_row(
-            "SELECT 1 FROM edges e
-             WHERE e.source_concept_id = ?1
-               AND e.target_concept_id = ?2
-               AND (
-                   SELECT type_slug FROM edge_type_history
-                   WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1
-               ) = ?3",
-            params![source_id, target_id, type_slug],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    Ok(exists)
-}
-
-fn find_edge_id_conn(
-    conn: &rusqlite::Connection,
-    source_id: i64,
-    original_type: &str,
-    target_id: i64,
-) -> Result<Option<i64>> {
-    let id = conn
-        .query_row(
-            "SELECT id FROM edges
-             WHERE source_concept_id = ?1 AND original_type = ?2 AND target_concept_id = ?3",
-            params![source_id, original_type, target_id],
-            |r| r.get::<_, i64>(0),
-        )
-        .optional()?;
-    Ok(id)
-}
-
-fn insert_edge_conn(
-    conn: &rusqlite::Connection,
-    source_id: i64,
-    target_id: i64,
-    original_type: &str,
-) -> Result<i64> {
-    let created_at = now_seconds();
-    conn.execute(
-        "INSERT INTO edges (source_concept_id, target_concept_id, original_type, created_at)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![source_id, target_id, original_type, created_at],
-    )?;
-    Ok(conn.last_insert_rowid())
-}
-
-fn init_type_history_conn(
-    conn: &rusqlite::Connection,
-    edge_id: i64,
-    type_slug: &str,
-) -> Result<()> {
-    let created_at = now_seconds();
-    conn.execute(
-        "INSERT INTO edge_type_history (edge_id, seq_index, type_slug, created_at)
-         VALUES (?1, 0, ?2, ?3)",
-        params![edge_id, type_slug, created_at],
-    )?;
-    Ok(())
-}
+// --- connection-scoped helpers ---
 
 fn insert_inference_provenance_conn(
     conn: &rusqlite::Connection,
@@ -708,15 +631,6 @@ fn insert_inference_provenance_conn(
         params![edge_id, chat_inference_id, mode, snapshot_id, created_at],
     )?;
     Ok(())
-}
-
-fn concept_exists_conn(conn: &rusqlite::Connection, id: i64) -> Result<bool> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM concepts WHERE id = ?1",
-        params![id],
-        |r| r.get(0),
-    )?;
-    Ok(n > 0)
 }
 
 /// Compute the braindump ids whose edges formed the thematic density of a
