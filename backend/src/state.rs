@@ -9,6 +9,7 @@ use crate::embedding::{EmbeddingClient, FakeEmbedding};
 use crate::extractor::Extractor;
 use crate::llm::LlmClient;
 use crate::logs::LogBuffer;
+use crate::ontology::RefactorRunner;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,6 +20,7 @@ pub struct AppState {
     pub extractor: Arc<dyn Extractor>,
     pub auth: AuthService,
     pub log_buffer: LogBuffer,
+    pub refactor_runner: RefactorRunner,
 }
 
 impl AppState {
@@ -45,6 +47,7 @@ impl AppState {
             extractor: Arc::new(crate::extractor::FakeExtractor),
             auth: AuthService::new(webauthn),
             log_buffer: LogBuffer::with_default_capacity(),
+            refactor_runner: RefactorRunner::new(),
         }
     }
 }

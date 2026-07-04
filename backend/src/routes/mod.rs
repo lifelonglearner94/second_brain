@@ -32,7 +32,9 @@ pub fn router(state: AppState) -> Router {
     // session cookie. `/me` is the demonstrator; `/auth/logout` needs the
     // validated session to invalidate it; `/braindumps` is the ingest write
     // path (ADR-0007) — submit, read, and error-correction edit; `/admin/logs`
-    // surfaces backend logs to the hidden admin tab.
+    // surfaces backend logs to the hidden admin tab; `/ontology/propose*` is
+    // the governance queue (ADR-0003) — propose/approve/reject edge types and
+    // trigger the async refactor.
     let protected_routes: Router<AppState> = Router::new()
         .route("/me", get(auth::me))
         .route("/auth/logout", post(auth::logout))
@@ -42,6 +44,10 @@ pub fn router(state: AppState) -> Router {
             get(braindump::read).patch(braindump::edit),
         )
         .route("/admin/logs", get(admin::logs))
+        .route("/ontology/propose", post(ontology::propose))
+        .route("/ontology/proposals", get(ontology::proposals))
+        .route("/ontology/proposals/{id}/approve", post(ontology::approve))
+        .route("/ontology/proposals/{id}/reject", post(ontology::reject))
         .route_layer(from_fn_with_state(state.clone(), require_session));
 
     Router::new()

@@ -15,6 +15,7 @@ pub mod gemini;
 pub mod graph;
 pub mod llm;
 pub mod logs;
+pub mod ontology;
 pub mod routes;
 pub mod state;
 
