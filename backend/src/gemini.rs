@@ -441,10 +441,19 @@ mod tests {
 
     #[test]
     fn reasoning_effort_parses_case_insensitively() {
-        assert_eq!(ReasoningEffort::parse(" none ").unwrap(), ReasoningEffort::None);
+        assert_eq!(
+            ReasoningEffort::parse(" none ").unwrap(),
+            ReasoningEffort::None
+        );
         assert_eq!(ReasoningEffort::parse("LOW").unwrap(), ReasoningEffort::Low);
-        assert_eq!(ReasoningEffort::parse("Medium").unwrap(), ReasoningEffort::Medium);
-        assert_eq!(ReasoningEffort::parse("high").unwrap(), ReasoningEffort::High);
+        assert_eq!(
+            ReasoningEffort::parse("Medium").unwrap(),
+            ReasoningEffort::Medium
+        );
+        assert_eq!(
+            ReasoningEffort::parse("high").unwrap(),
+            ReasoningEffort::High
+        );
     }
 
     #[test]
