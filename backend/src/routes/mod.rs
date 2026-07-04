@@ -12,6 +12,7 @@ mod admin;
 mod auth;
 mod braindump;
 mod chat;
+mod delta;
 mod health;
 mod merge;
 mod ontology;
@@ -39,10 +40,11 @@ pub fn router(state: AppState) -> Router {
     // concept-pair queue (ADR-0001 — list, approve, reject); `/retrieve` is
     // the seed-then-expand read path (ADR-0004); `/chat` is the grounded-
     // synthesis read surface (ADR-0005 — mandatory citations, graph-constrained
-    // inference, silence when unsupported); `/admin/logs` surfaces backend
-    // logs to the hidden admin tab; `/ontology/propose*` is the governance
-    // queue (ADR-0003) — propose/approve/reject edge types and trigger the
-    // async refactor.
+    // inference, silence when unsupported); `/graph/delta` is the incremental
+    // read surface for pull-on-focus reconciliation (issue #28); `/admin/logs`
+    // surfaces backend logs to the hidden admin tab; `/ontology/propose*` is
+    // the governance queue (ADR-0003) — propose/approve/reject edge types and
+    // trigger the async refactor.
     let protected_routes: Router<AppState> = Router::new()
         .route("/me", get(auth::me))
         .route("/auth/logout", post(auth::logout))
@@ -58,6 +60,7 @@ pub fn router(state: AppState) -> Router {
         .route("/merge-suggestions/{id}/reject", post(merge::reject))
         .route("/retrieve", post(retrieval::retrieve))
         .route("/chat", post(chat::chat))
+        .route("/graph/delta", get(delta::graph_delta))
         .route("/admin/logs", get(admin::logs))
         .route("/ontology/propose", post(ontology::propose))
         .route("/ontology/proposals", get(ontology::proposals))
