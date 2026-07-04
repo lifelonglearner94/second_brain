@@ -5,7 +5,7 @@ import PendingCaptures from '../../src/lib/capture/PendingCaptures.svelte';
 import { PendingCapturesStore } from '../../src/lib/state/pending-captures.svelte';
 import type { IdbStore, PendingCapture } from '../../src/lib/state/idb';
 import type { IngestApi, IngestResponse } from '../../src/lib/capture/ingest';
-import { mergeIntoGraph } from '../../src/lib/graph/merge';
+import { applyDelta } from '../../src/lib/graph/delta';
 import type { GlobalTopologySnapshot } from '../../src/lib/api/client';
 
 const CAPTURE_A: PendingCapture = {
@@ -122,7 +122,14 @@ describe('PendingCaptures — review-and-confirm surface (ADR-0005/0007)', () =>
 		const ingest = fakeIngest(INGESTED);
 		let merged: GlobalTopologySnapshot = SNAPSHOT;
 		const oningest = vi.fn((res: IngestResponse) => {
-			merged = mergeIntoGraph(merged, res);
+			merged = applyDelta(merged, {
+				cursor: res.cursor,
+				added_concepts: res.concepts,
+				added_edges: res.edges,
+				deleted_concept_ids: [],
+				deleted_edge_ids: [],
+				retagged_edges: []
+			});
 		});
 		render(PendingCaptures, { props: { store, ingest, oningest } });
 
