@@ -7,6 +7,7 @@
 	import { createIdb } from '$lib/state/idb';
 	import { loadViewport, saveViewport } from '$lib/state/viewport';
 	import { loadSpatialViewGraph } from '$lib/graph/load';
+	import { frozenGraphStatus } from '$lib/graph/frozen-graph';
 	import {
 		buildSpatialViewGraph,
 		projectToGraphData,
@@ -52,7 +53,6 @@
 	};
 
 	let status = $state<Status>('loading');
-	let errorMessage = $state<string | null>(null);
 	let fetchedAtLabel = $state<string | null>(null);
 	let selectedNodeId = $state<string | null>(null);
 	let selectedLabel = $state<string | null>(null);
@@ -127,21 +127,24 @@
 			try {
 				const loaded = await loadSpatialViewGraph(apiClient, idb);
 				if (destroyed) return;
-				fetchedAtLabel = loaded.source === 'cache' ? loaded.snapshot.fetchedAt : null;
+				const frozen = frozenGraphStatus(loaded.source, loaded.snapshot.fetchedAt, online);
+				fetchedAtLabel = frozen.label;
 				snapshot = loaded.snapshot;
 				deltaCursor = Math.floor(new Date(loaded.snapshot.fetchedAt).getTime() / 1000);
 				const svg = buildSpatialViewGraph(loaded.snapshot);
 				const graphData = projectToGraphData(svg);
 				rendererChoice = detectRendererCapability(probeRendererCapability());
 				if (rendererChoice === '2d') {
-					await renderGraph2D(svg, loaded.source === 'cache' ? 'offline' : 'ready');
+					await renderGraph2D(svg, frozen.status);
 				} else {
-					await renderGraph3D(graphData, loaded.source === 'cache' ? 'offline' : 'ready');
+					await renderGraph3D(graphData, frozen.status);
 				}
 			} catch (e) {
 				if (destroyed) return;
-				errorMessage = e instanceof Error ? e.message : String(e);
-				status = 'error';
+				const msg = e instanceof Error ? e.message : String(e);
+				const frozen = frozenGraphStatus('error', null, online, msg);
+				fetchedAtLabel = frozen.label;
+				status = frozen.status;
 			}
 		})();
 
@@ -318,11 +321,11 @@
 			<p class="status" data-testid="graph-loading">Loading the Spatial View-Graph…</p>
 		{:else if status === 'offline'}
 			<p class="status stale" data-testid="graph-offline">
-				Offline — showing graph as of {fetchedAtLabel} (Frozen Graph).
+				{fetchedAtLabel}
 			</p>
 		{:else if status === 'error'}
 			<p class="status error" data-testid="graph-error">
-				Could not load the graph: {errorMessage}
+				{fetchedAtLabel}
 			</p>
 		{:else}
 			<p class="status" data-testid="graph-ready">Spatial View-Graph ready.</p>

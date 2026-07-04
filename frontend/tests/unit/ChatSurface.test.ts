@@ -160,3 +160,50 @@ describe('ChatSurface — conversational read surface (ADR-0005, backend #10)', 
 		expect(getByTestId('chat-error').textContent).toContain('Could not answer');
 	});
 });
+
+describe('ChatSurface — chat is unavailable offline (ADR-0005, issue #21)', () => {
+	let chat: ReturnType<typeof vi.fn<ChatApi['chat']>>;
+	let getBraindump: ReturnType<typeof vi.fn<ChatApi['getBraindump']>>;
+
+	beforeEach(() => {
+		chat = vi.fn<ChatApi['chat']>();
+		getBraindump = vi.fn<ChatApi['getBraindump']>();
+	});
+
+	it('renders a chat-offline state and disables the input + submit when online is false', () => {
+		chat.mockResolvedValue(GROUNDED);
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { getByTestId } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump), online: false }
+		});
+		const offline = getByTestId('chat-offline');
+		expect(offline).toBeTruthy();
+		expect(offline.textContent).toContain('Chat unavailable offline');
+		expect((getByTestId('chat-submit') as HTMLButtonElement).disabled).toBe(true);
+		expect((getByTestId('chat-query-input') as HTMLInputElement).disabled).toBe(true);
+	});
+
+	it('never calls api.chat when offline, even if the form is submitted directly (defense-in-depth)', async () => {
+		chat.mockResolvedValue(GROUNDED);
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { getByTestId } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump), online: false }
+		});
+		const input = getByTestId('chat-query-input') as HTMLInputElement;
+		await fireEvent.input(input, { target: { value: 'is Q3 at risk?' } });
+		const form = getByTestId('chat-submit').closest('form') as HTMLFormElement;
+		await fireEvent.submit(form);
+		expect(chat).not.toHaveBeenCalled();
+	});
+
+	it('hides no chat-offline element and keeps the submit enabled when online is true (default)', () => {
+		chat.mockResolvedValue(GROUNDED);
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { queryByTestId, getByTestId } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump), online: true }
+		});
+		expect(queryByTestId('chat-offline')).toBeNull();
+		expect((getByTestId('chat-submit') as HTMLButtonElement).disabled).toBe(false);
+		expect((getByTestId('chat-query-input') as HTMLInputElement).disabled).toBe(false);
+	});
+});
