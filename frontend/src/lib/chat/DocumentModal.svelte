@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy, tick } from 'svelte';
 	import type { Braindump } from '$lib/api/client';
 
 	type BraindumpApi = {
 		getBraindump(id: number): Promise<Braindump>;
+		editBraindump(id: number, verbatim: string): Promise<Braindump>;
 	};
 
 	let { braindumpId, api, onClose }: { braindumpId: number; api: BraindumpApi; onClose: () => void } =
@@ -15,6 +16,17 @@
 	let braindump = $state<Braindump | null>(null);
 	let errorText = $state<string | null>(null);
 	let viewRaw = $state(false);
+
+	let editing = $state(false);
+	let editText = $state('');
+	let saving = $state(false);
+	let editError = $state<string | null>(null);
+	let saved = $state(false);
+	let savedTimer: ReturnType<typeof setTimeout> | null = null;
+
+	onDestroy(() => {
+		if (savedTimer !== null) clearTimeout(savedTimer);
+	});
 
 	onMount(() => {
 		void (async () => {
@@ -34,6 +46,44 @@
 	function toggleRaw() {
 		viewRaw = !viewRaw;
 	}
+
+	function startEdit() {
+		if (!braindump) return;
+		editText = braindump.verbatim;
+		editError = null;
+		saved = false;
+		editing = true;
+	}
+
+	function cancelEdit() {
+		editing = false;
+		editError = null;
+	}
+
+	async function saveEdit() {
+		if (!braindump || saving) return;
+		saving = true;
+		editError = null;
+		try {
+			const res = await api.editBraindump(braindump.id, editText);
+			braindump = res;
+			editing = false;
+			viewRaw = false;
+			saved = true;
+			if (savedTimer !== null) clearTimeout(savedTimer);
+			savedTimer = setTimeout(() => {
+				saved = false;
+				savedTimer = null;
+			}, 1500);
+		} catch (e) {
+			void e;
+			editError = 'Could not save the correction.';
+			editing = true;
+		} finally {
+			saving = false;
+		}
+		await tick();
+	}
 </script>
 
 <div class="document-modal-overlay" role="dialog" aria-modal="true" aria-label="Document Modal">
@@ -49,21 +99,59 @@
 			<p data-testid="document-modal-error" class="document-modal-error">{errorText}</p>
 		{:else if braindump}
 			<div class="document-modal-body">
-				<button
-					type="button"
-					data-testid="document-modal-toggle-raw"
-					onclick={toggleRaw}
-				>
-					{viewRaw ? 'Show Cleaned' : 'View Raw'}
-				</button>
-				{#if viewRaw}
-					<p data-testid="document-modal-verbatim" class="document-modal-text verbatim">
-						{braindump.verbatim}
-					</p>
+				{#if editing}
+					<textarea
+						data-testid="document-modal-edit-input"
+						bind:value={editText}
+						rows="6"
+						class="document-modal-edit-input"
+					></textarea>
+					{#if editError}
+						<p data-testid="document-modal-edit-error" class="document-modal-error">{editError}</p>
+					{/if}
+					<div class="document-modal-edit-actions">
+						<button
+							type="button"
+							data-testid="document-modal-save"
+							onclick={saveEdit}
+							disabled={saving}
+						>
+							{saving ? 'Saving…' : 'Save correction'}
+						</button>
+						<button
+							type="button"
+							data-testid="document-modal-cancel"
+							onclick={cancelEdit}
+							disabled={saving}
+						>
+							Cancel
+						</button>
+					</div>
 				{:else}
-					<p data-testid="document-modal-cleaned" class="document-modal-text cleaned">
-						{braindump.cleaned}
-					</p>
+					<div class="document-modal-controls">
+						<button
+							type="button"
+							data-testid="document-modal-toggle-raw"
+							onclick={toggleRaw}
+						>
+							{viewRaw ? 'Show Cleaned' : 'View Raw'}
+						</button>
+						<button type="button" data-testid="document-modal-edit" onclick={startEdit}>
+							Edit
+						</button>
+					</div>
+					{#if saved}
+						<p data-testid="document-modal-saved" class="document-modal-saved">Saved</p>
+					{/if}
+					{#if viewRaw}
+						<p data-testid="document-modal-verbatim" class="document-modal-text verbatim">
+							{braindump.verbatim}
+						</p>
+					{:else}
+						<p data-testid="document-modal-cleaned" class="document-modal-text cleaned">
+							{braindump.cleaned}
+						</p>
+					{/if}
 				{/if}
 			</div>
 		{/if}
@@ -121,6 +209,10 @@
 		flex-direction: column;
 		gap: 0.75rem;
 	}
+	.document-modal-controls {
+		display: flex;
+		gap: 0.5rem;
+	}
 	.document-modal-body button {
 		align-self: flex-start;
 		padding: 0.3rem 0.6rem;
@@ -130,6 +222,22 @@
 		background: #1a1f2b;
 		color: #9aa3b2;
 		cursor: pointer;
+	}
+	.document-modal-edit-actions {
+		display: flex;
+		gap: 0.5rem;
+	}
+	.document-modal-edit-input {
+		inline-size: 100%;
+		font-family: inherit;
+		font-size: 0.9rem;
+		line-height: 1.5;
+		background: #0d0f15;
+		color: #e6e8ec;
+		border: 1px solid #2a2f3a;
+		border-radius: 0.4rem;
+		padding: 0.5rem;
+		resize: vertical;
 	}
 	.document-modal-text {
 		margin: 0;
@@ -145,5 +253,10 @@
 	}
 	.document-modal-error {
 		color: #ff7a7a;
+	}
+	.document-modal-saved {
+		color: #7ad19a;
+		font-size: 0.8rem;
+		margin: 0;
 	}
 </style>

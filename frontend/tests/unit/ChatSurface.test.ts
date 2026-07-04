@@ -46,10 +46,15 @@ const SILENT: ChatResponse = {
 type ChatApi = {
 	chat(query: string): Promise<ChatResponse>;
 	getBraindump(id: number): Promise<Braindump>;
+	editBraindump(id: number, verbatim: string): Promise<Braindump>;
 };
 
 function apiStub(chat: ChatApi['chat'], getBraindump: ChatApi['getBraindump']): ChatApi {
-	return { chat, getBraindump };
+	return {
+		chat,
+		getBraindump,
+		editBraindump: vi.fn<ChatApi['editBraindump']>(() => new Promise<Braindump>(() => {}))
+	};
 }
 
 async function submitQuery(

@@ -6,6 +6,7 @@
 	type ChatApi = {
 		chat(query: string): Promise<ChatResponse>;
 		getBraindump(id: number): Promise<Braindump>;
+		editBraindump(id: number, verbatim: string): Promise<Braindump>;
 	};
 
 	let { api }: { api: ChatApi } = $props();

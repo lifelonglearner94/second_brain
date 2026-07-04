@@ -229,6 +229,7 @@ export interface ApiClient {
 	getGraphDelta(since?: number): Promise<GraphDelta>;
 	chat(query: string): Promise<ChatResponse>;
 	getBraindump(id: number): Promise<Braindump>;
+	editBraindump(id: number, verbatim: string): Promise<Braindump>;
 	getMergeSuggestions(): Promise<ConceptMergeSuggestion[]>;
 	approveMergeSuggestion(id: number): Promise<void>;
 	rejectMergeSuggestion(id: number): Promise<void>;
@@ -262,6 +263,19 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 	async function postJson<T>(path: string, body: unknown, errorLabel: string): Promise<T> {
 		const res = await doFetch(`${baseUrl}${path}`, {
 			method: 'POST',
+			credentials: 'include',
+			headers: { 'content-type': 'application/json', accept: 'application/json' },
+			body: JSON.stringify(body)
+		});
+		if (!ok(res)) {
+			throw new Error(`${errorLabel} failed: ${res.status}`);
+		}
+		return (await res.json()) as T;
+	}
+
+	async function patchJson<T>(path: string, body: unknown, errorLabel: string): Promise<T> {
+		const res = await doFetch(`${baseUrl}${path}`, {
+			method: 'PATCH',
 			credentials: 'include',
 			headers: { 'content-type': 'application/json', accept: 'application/json' },
 			body: JSON.stringify(body)
@@ -328,6 +342,9 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		},
 		async getBraindump(id: number): Promise<Braindump> {
 			return getJson<Braindump>(`/braindumps/${id}`, 'GET /braindumps/:id');
+		},
+		async editBraindump(id: number, verbatim: string): Promise<Braindump> {
+			return patchJson<Braindump>(`/braindumps/${id}`, { verbatim }, 'PATCH /braindumps/:id');
 		},
 		async getMergeSuggestions(): Promise<ConceptMergeSuggestion[]> {
 			return getJson<ConceptMergeSuggestion[]>('/merge-suggestions', 'GET /merge-suggestions');
