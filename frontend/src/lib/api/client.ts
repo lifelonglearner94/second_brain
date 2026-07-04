@@ -50,6 +50,32 @@ export type LogoutOk = { logged_out: true };
 
 export type RecoverResponse = { error: string; message: string };
 
+export type GraphConcept = {
+	id: string;
+	label: string;
+	created_at: string;
+};
+
+export type GraphEdge = {
+	id: string;
+	source_concept_id: string;
+	target_concept_id: string;
+	original_type: string;
+	current_type: string;
+	created_at: string;
+};
+
+export type GraphPartition = {
+	concept_id: string;
+	partition_id: number;
+};
+
+export type GlobalTopologySnapshot = {
+	concepts: GraphConcept[];
+	edges: GraphEdge[];
+	partitions: GraphPartition[];
+};
+
 export interface ApiClient {
 	getHealth(): Promise<Health>;
 	registerBegin(): Promise<RegistrationBegin>;
@@ -59,6 +85,7 @@ export interface ApiClient {
 	logout(): Promise<LogoutOk>;
 	getMe(): Promise<Me>;
 	recover(): Promise<RecoverResponse>;
+	getGraph(): Promise<GlobalTopologySnapshot>;
 }
 
 function ok(res: Response): boolean {
@@ -117,6 +144,9 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		},
 		async recover(): Promise<RecoverResponse> {
 			return postJson<RecoverResponse>('/auth/recover', null, 'POST /auth/recover');
+		},
+		async getGraph(): Promise<GlobalTopologySnapshot> {
+			return getJson<GlobalTopologySnapshot>('/graph', 'GET /graph');
 		}
 	};
 }
