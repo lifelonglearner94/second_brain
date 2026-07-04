@@ -70,3 +70,17 @@ jobs:
           touch infrastructure/.env
           docker compose config >/dev/null
           bash infrastructure/test/topology.sh
+
+  zero-trust:
+    name: zero-trust (no secret baked into any Dockerfile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ADR-0004 / issue #30: assert no Dockerfile ENV/ARG/COPY bakes a secret
+      # literal, so images stay public-safe artifacts. GHA-blind: this job
+      # never reads/writes/references infrastructure/.env — it only scans
+      # Dockerfiles (and may read .env.example, which carries no values).
+      - name: scan all Dockerfiles for secret literals (ADR-0004)
+        run: bash infrastructure/test/zero-trust.sh
+      - name: self-test (planted secret fails · real Dockerfiles pass)
+        run: bash infrastructure/test/zero-trust-test.sh
