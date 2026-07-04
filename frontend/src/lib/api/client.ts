@@ -76,6 +76,23 @@ export type GlobalTopologySnapshot = {
 	partitions: GraphPartition[];
 };
 
+export type RetaggedEdge = {
+	id: string;
+	source_concept_id: string;
+	target_concept_id: string;
+	original_type: string;
+	current_type: string;
+};
+
+export type GraphDelta = {
+	cursor: number;
+	added_concepts: GraphConcept[];
+	added_edges: GraphEdge[];
+	deleted_concept_ids: string[];
+	deleted_edge_ids: string[];
+	retagged_edges: RetaggedEdge[];
+};
+
 export type LogEntry = {
 	timestamp: number;
 	level: string;
@@ -100,6 +117,7 @@ export interface ApiClient {
 	getMe(): Promise<Me>;
 	recover(): Promise<RecoverResponse>;
 	getGraph(): Promise<GlobalTopologySnapshot>;
+	getGraphDelta(since: number): Promise<GraphDelta>;
 	getAdminLogs(limit?: number): Promise<LogsResponse>;
 }
 
@@ -162,6 +180,9 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		},
 		async getGraph(): Promise<GlobalTopologySnapshot> {
 			return getJson<GlobalTopologySnapshot>('/graph', 'GET /graph');
+		},
+		async getGraphDelta(since: number): Promise<GraphDelta> {
+			return getJson<GraphDelta>(`/graph/delta?since=${since}`, 'GET /graph/delta');
 		},
 		async getAdminLogs(limit?: number): Promise<LogsResponse> {
 			const path = limit !== undefined ? `/admin/logs?limit=${limit}` : '/admin/logs';
