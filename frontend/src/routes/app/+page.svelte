@@ -2,26 +2,23 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { apiClient } from '$lib/api';
-	import type { GlobalTopologySnapshot, GraphDelta } from '$lib/api/client';
+	import type { GraphDelta } from '$lib/api/client';
 	import { session } from '$lib/state/session.svelte';
 	import { createIdb } from '$lib/state/idb';
 	import { loadViewport, saveViewport } from '$lib/state/viewport';
-	import { loadSpatialViewGraph } from '$lib/graph/load';
 	import { frozenGraphStatus } from '$lib/graph/frozen-graph';
 	import {
 		buildSpatialViewGraph,
-		projectToGraphData,
-		buildGraphData,
 		type GraphData,
 		type GraphNode,
 		type GraphLink
 	} from '$lib/graph/build';
 	import { detectRendererCapability, probeRendererCapability } from '$lib/graph/capability';
 	import { renderSpatialViewGraph2D, type Render2DHandle } from '$lib/graph/render2d';
-	import { syncDelta, onWindowFocus } from '$lib/graph/delta-sync';
-	import { applyDelta } from '$lib/graph/delta';
+	import { onWindowFocus } from '$lib/graph/delta-sync';
 	import { createIngestApi, type IngestResponse } from '$lib/capture/ingest';
 	import { pendingCaptures } from '$lib/state/pending-captures.svelte';
+	import { graphStore } from '$lib/state/graph.svelte';
 	import ActiveCapture from '$lib/capture/ActiveCapture.svelte';
 
 	const HIGHLIGHT = '#ffffff';
@@ -69,26 +66,15 @@
 	let fg: FgInstance | null = null;
 	let handle2d: Render2DHandle | null = null;
 	let rendererChoice: '3d' | '2d' = '3d';
-	let snapshot = $state<GlobalTopologySnapshot | null>(null);
-	let deltaCursor = $state(0);
 	let online = $state(typeof navigator !== 'undefined' ? navigator.onLine : true);
 
 	const deepgramApiKey = import.meta.env.VITE_DEEPGRAM_API_KEY as string | undefined;
-	const ingestApi = createIngestApi(apiClient, () => deltaCursor);
+	const ingestApi = createIngestApi(apiClient, () => graphStore.cursor);
 
 	function onIngest(res: IngestResponse): void {
-		if (!snapshot || !fg) return;
-		const merged = applyDelta(snapshot, {
-			cursor: res.cursor,
-			added_concepts: res.concepts,
-			added_edges: res.edges,
-			deleted_concept_ids: [],
-			deleted_edge_ids: [],
-			retagged_edges: []
-		});
-		snapshot = merged;
-		deltaCursor = res.cursor;
-		fg.graphData(buildGraphData(merged));
+		if (!graphStore.snapshot || !fg) return;
+		graphStore.mergeIngest(res);
+		fg.graphData(graphStore.data);
 	}
 	async function onLogout() {
 		busy = true;
@@ -132,19 +118,16 @@
 
 		(async () => {
 			try {
-				const loaded = await loadSpatialViewGraph(apiClient, idb);
+				const { source, fetchedAt } = await graphStore.loadFromNetworkOrCache(apiClient, idb);
 				if (destroyed) return;
-				const frozen = frozenGraphStatus(loaded.source, loaded.snapshot.fetchedAt, online);
+				const frozen = frozenGraphStatus(source, fetchedAt, online);
 				fetchedAtLabel = frozen.label;
-				snapshot = loaded.snapshot;
-				deltaCursor = Math.floor(new Date(loaded.snapshot.fetchedAt).getTime() / 1000);
-				const svg = buildSpatialViewGraph(loaded.snapshot);
-				const graphData = projectToGraphData(svg);
+				const svg = buildSpatialViewGraph(graphStore.snapshot!);
 				rendererChoice = detectRendererCapability(probeRendererCapability());
 				if (rendererChoice === '2d') {
 					await renderGraph2D(svg, frozen.status);
 				} else {
-					await renderGraph3D(graphData, frozen.status);
+					await renderGraph3D(graphStore.data, frozen.status);
 				}
 			} catch (e) {
 				if (destroyed) return;
@@ -170,13 +153,11 @@
 		void pendingCaptures.load();
 
 		async function reconcileOnFocus(): Promise<void> {
-			if (destroyed || !snapshot) return;
-			const outcome = await syncDelta({ snapshot, cursor: deltaCursor }, apiClient);
+			if (destroyed || !graphStore.snapshot) return;
+			const outcome = await graphStore.syncDelta(apiClient);
 			if (destroyed || !outcome.applied) return;
-			snapshot = outcome.state.snapshot;
-			deltaCursor = outcome.state.cursor;
-			if (fg && hasDeltaChanges(outcome.delta)) {
-				fg.graphData(buildGraphData(snapshot));
+			if (fg && outcome.delta && hasDeltaChanges(outcome.delta)) {
+				fg.graphData(graphStore.data);
 			}
 		}
 

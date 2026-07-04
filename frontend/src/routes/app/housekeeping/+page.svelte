@@ -1,10 +1,21 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { apiClient } from '$lib/api';
 	import { housekeeping } from '$lib/state/housekeeping.svelte';
+	import { graphStore } from '$lib/state/graph.svelte';
+	import { createIdb } from '$lib/state/idb';
 	import HousekeepingQueue from '$lib/housekeeping/HousekeepingQueue.svelte';
 
 	onMount(() => {
-		housekeeping.load();
+		(async () => {
+			try {
+				await graphStore.loadFromNetworkOrCache(apiClient, createIdb());
+			} catch {
+				// Offline / no cached snapshot: the queue still renders with
+				// numeric concept ids as the label fallback.
+			}
+			await housekeeping.load();
+		})();
 	});
 
 	async function onRefresh() {

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, waitFor } from '@testing-library/svelte';
 import HousekeepingQueue from '../../src/lib/housekeeping/HousekeepingQueue.svelte';
 import { HousekeepingStore, type HousekeepingApi } from '../../src/lib/state/housekeeping.svelte';
+import { GraphStore } from '../../src/lib/state/graph.svelte';
 import type {
 	GlobalTopologySnapshot,
 	ConceptMergeSuggestion,
@@ -52,7 +53,6 @@ const TYPE_PROPOSAL: OntologyTypeProposal = {
 
 function apiStub(overrides: Partial<HousekeepingApi> = {}): HousekeepingApi {
 	return {
-		getGraph: vi.fn(async () => SNAPSHOT),
 		getMergeSuggestions: vi.fn(async () => [CONCEPT_SUGGESTION]),
 		approveMergeSuggestion: vi.fn(async () => undefined),
 		getOntology: vi.fn(async () => ONTOLOGY),
@@ -63,7 +63,9 @@ function apiStub(overrides: Partial<HousekeepingApi> = {}): HousekeepingApi {
 }
 
 async function makeLoadedStore(api: HousekeepingApi): Promise<HousekeepingStore> {
-	const store = new HousekeepingStore(api);
+	const graph = new GraphStore();
+	graph.loadSnapshot(SNAPSHOT);
+	const store = new HousekeepingStore(api, graph);
 	await store.load();
 	return store;
 }
@@ -160,7 +162,7 @@ describe('HousekeepingQueue.svelte — the low-epistemic-weight HITL surface (AD
 
 	it('renders a loading state before the first load completes', async () => {
 		const api = apiStub();
-		const store = new HousekeepingStore(api);
+		const store = new HousekeepingStore(api, new GraphStore());
 		const { getByTestId } = render(HousekeepingQueue, { props: { store } });
 
 		expect(getByTestId('housekeeping-loading')).toBeTruthy();
