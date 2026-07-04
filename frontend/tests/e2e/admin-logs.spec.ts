@@ -76,8 +76,9 @@ test('the admin tab is hidden from primary nav and revealed by a non-obvious ges
 
 	await page.goto('/app');
 
-	// Not in primary nav.
-	await expect(page.getByTestId('app-placeholder')).toBeVisible({ timeout: 10_000 });
+	// Not in primary nav. app-title (the header) confirms the app shell loaded;
+	// admin-link must be absent until the 5-tap gesture reveals it.
+	await expect(page.getByTestId('app-title')).toBeVisible({ timeout: 10_000 });
 	await expect(page.getByTestId('admin-link')).toHaveCount(0);
 
 	// Five taps on the title reveals the hidden admin entry.
