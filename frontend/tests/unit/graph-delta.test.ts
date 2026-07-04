@@ -213,4 +213,84 @@ describe('applyDelta — reconcile the Spatial View-Graph with a Delta Sync payl
 			expect(reconciled.edges[0]?.current_type).toBe('affects');
 		});
 	});
+
+	describe('reconciliation reaches the graphology Spatial View-Graph via buildGraphData', () => {
+		it('added concepts and edges appear as graphology nodes and typed links', () => {
+			const delta: GraphDelta = {
+				cursor: 1700000000,
+				added_concepts: [{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }],
+				added_edges: [
+					{
+						id: 'e2',
+						source_concept_id: 'c3',
+						target_concept_id: 'c1',
+						original_type: 'disrupts',
+						current_type: 'disrupts',
+						created_at: '2026-07-03T00:00:00Z'
+					}
+				],
+				deleted_concept_ids: [],
+				deleted_edge_ids: [],
+				retagged_edges: []
+			};
+			const data = buildGraphData(applyDelta(BASE, delta));
+			expect(data.nodes.map((n) => n.id).sort()).toEqual(['c1', 'c2', 'c3']);
+			expect(data.nodes.find((n) => n.id === 'c3')?.label).toBe('caffeine');
+			const disrupts = data.links.find((l) => l.source === 'c3' && l.target === 'c1');
+			expect(disrupts?.label).toBe('disrupts');
+		});
+
+		it('deleted concepts and edges are gone from the graphology graph', () => {
+			const delta: GraphDelta = {
+				cursor: 1700000000,
+				added_concepts: [],
+				added_edges: [],
+				deleted_concept_ids: ['c2'],
+				deleted_edge_ids: ['e1'],
+				retagged_edges: []
+			};
+			const data = buildGraphData(applyDelta(BASE, delta));
+			expect(data.nodes.map((n) => n.id)).toEqual(['c1']);
+			expect(data.links).toEqual([]);
+		});
+
+		it('a retagged edge renders with the new current_type as its link label', () => {
+			const delta: GraphDelta = {
+				cursor: 1700000000,
+				added_concepts: [],
+				added_edges: [],
+				deleted_concept_ids: [],
+				deleted_edge_ids: [],
+				retagged_edges: [
+					{
+						id: 'e1',
+						source_concept_id: 'c1',
+						target_concept_id: 'c2',
+						original_type: 'affects',
+						current_type: 'endangers'
+					}
+				]
+			};
+			const data = buildGraphData(applyDelta(BASE, delta));
+			const link = data.links.find((l) => l.source === 'c1' && l.target === 'c2');
+			expect(link?.label).toBe('endangers');
+		});
+
+		it('an empty delta leaves the rebuilt graphology graph unchanged', () => {
+			const delta: GraphDelta = {
+				cursor: 1700000000,
+				added_concepts: [],
+				added_edges: [],
+				deleted_concept_ids: [],
+				deleted_edge_ids: [],
+				retagged_edges: []
+			};
+			const before = buildGraphData(BASE);
+			const after = buildGraphData(applyDelta(BASE, delta));
+			expect(after.nodes.map((n) => n.id).sort()).toEqual(before.nodes.map((n) => n.id).sort());
+			expect(after.links.map((l) => `${l.source}-${l.label}-${l.target}`).sort()).toEqual(
+				before.links.map((l) => `${l.source}-${l.label}-${l.target}`).sort()
+			);
+		});
+	});
 });
