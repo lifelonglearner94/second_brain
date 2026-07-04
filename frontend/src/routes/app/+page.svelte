@@ -269,6 +269,7 @@
 	<header>
 		<h1><button type="button" data-testid="app-title" class="title-button" onclick={onHeaderTap}>Second Brain</button></h1>
 		<p class="tagline">Signed in as <code data-testid="user-id">{session.userId}</code></p>
+		<a href="/app/chat" class="chat-link" data-testid="chat-link">Chat</a>
 		<button
 			type="button"
 			data-testid="logout-button"
@@ -358,6 +359,18 @@
 	code {
 		font-family: monospace;
 		color: #7ab7ff;
+	}
+	.chat-link {
+		color: #7ab7ff;
+		text-decoration: none;
+		font-size: 0.95rem;
+		padding: 0.4rem 0.8rem;
+		border: 1px solid #2a2f3a;
+		border-radius: 0.5rem;
+		background: #1a1f2b;
+	}
+	.chat-link:hover {
+		text-decoration: underline;
 	}
 	.admin-entry {
 		margin: 0 0 1.5rem;

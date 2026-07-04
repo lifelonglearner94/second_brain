@@ -114,6 +114,42 @@ export type BraindumpDto = {
 	created_at: string;
 };
 
+export type RetrievalMode = 'seed_then_expand' | 'no_seed_fallback';
+
+export type BraindumpSource = 'subgraph' | 'backfill' | 'vector_direct';
+
+export type ChatCitation = {
+	id: number;
+	verbatim: string;
+	cleaned: string;
+	created_at: number;
+	score: number;
+	source: BraindumpSource;
+};
+
+export type ChatPath = {
+	source_concept_id: number;
+	source_concept_label: string;
+	target_concept_id: number;
+	target_concept_label: string;
+	edge_type: string;
+};
+
+export type ChatResponse = {
+	answer: string;
+	citations: ChatCitation[];
+	paths: ChatPath[];
+	silent: boolean;
+	mode: RetrievalMode;
+};
+
+export type Braindump = {
+	id: number;
+	verbatim: string;
+	cleaned: string;
+	created_at: number;
+};
+
 export interface ApiClient {
 	getHealth(): Promise<Health>;
 	registerBegin(): Promise<RegistrationBegin>;
@@ -127,6 +163,8 @@ export interface ApiClient {
 	getAdminLogs(limit?: number): Promise<LogsResponse>;
 	submitBraindump(verbatim: string): Promise<BraindumpDto>;
 	getGraphDelta(since?: number): Promise<GraphDelta>;
+	chat(query: string): Promise<ChatResponse>;
+	getBraindump(id: number): Promise<Braindump>;
 }
 
 function ok(res: Response): boolean {
@@ -199,6 +237,12 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		async getGraphDelta(since?: number): Promise<GraphDelta> {
 			const path = since !== undefined ? `/graph/delta?since=${since}` : '/graph/delta';
 			return getJson<GraphDelta>(path, 'GET /graph/delta');
+		},
+		async chat(query: string): Promise<ChatResponse> {
+			return postJson<ChatResponse>('/chat', { query }, 'POST /chat');
+		},
+		async getBraindump(id: number): Promise<Braindump> {
+			return getJson<Braindump>(`/braindumps/${id}`, 'GET /braindumps/:id');
 		}
 	};
 }
