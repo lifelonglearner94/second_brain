@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ActiveCaptureStore } from '../../src/lib/capture/active-capture.svelte';
 import type { SttSource, SttSourceLabel } from '../../src/lib/capture/stt';
 import type { IngestApi, IngestResponse } from '../../src/lib/capture/ingest';
+import { PendingCapturesStore } from '../../src/lib/state/pending-captures.svelte';
+import type { IdbStore, PendingCapture } from '../../src/lib/state/idb';
 import { mergeIntoGraph } from '../../src/lib/graph/merge';
 import { buildGraphData } from '../../src/lib/graph/build';
 import type { GlobalTopologySnapshot } from '../../src/lib/api/client';
@@ -14,6 +16,21 @@ function fakeDeepgramSource(emits: string[]): SttSource {
 		},
 		async stop() {}
 	};
+}
+
+function pendingStore() {
+	const enqueued: PendingCapture[] = [];
+	const idb: IdbStore = {
+		saveTopologySnapshot: vi.fn(),
+		loadTopologySnapshot: vi.fn(),
+		clearTopologySnapshot: vi.fn(),
+		enqueuePendingCapture: vi.fn(async (c: PendingCapture) => {
+			enqueued.push(c);
+		}),
+		listPendingCaptures: vi.fn(async () => [...enqueued]),
+		removePendingCapture: vi.fn()
+	} as unknown as IdbStore;
+	return new PendingCapturesStore(idb);
 }
 
 const SNAPSHOT: GlobalTopologySnapshot = {
@@ -44,7 +61,10 @@ describe('Active Capture vertical slice — STT → buffer → explicit submit �
 		await store.startStt(fakeDeepgramSource(['caffeine ', 'disrupts sleep']));
 		expect(store.text).toBe('caffeine disrupts sleep');
 
-		const res = await store.submit(makeIngest(ingested));
+		const outcome = await store.submit(makeIngest(ingested), true, pendingStore());
+		expect(outcome.kind).toBe('submitted');
+		if (outcome.kind !== 'submitted') throw new Error('expected submitted outcome');
+		const res = outcome.res;
 		expect(res.concepts[0]?.label).toBe('caffeine');
 
 		expect(store.text).toBe('');
@@ -78,14 +98,19 @@ describe('Active Capture vertical slice — STT → buffer → explicit submit �
 		expect(label).toBe('web-speech');
 		expect(store.text).toBe('offline capture');
 
-		const res = await store.submit(makeIngest({
-			braindump: { id: 'b2', created_at: '300' },
-			concepts: [{ id: 'c3', label: 'offline-thought', created_at: '300' }],
-			edges: [],
-			cursor: 300
-		}));
-		expect(res.concepts[0]?.label).toBe('offline-thought');
+		const outcome = await store.submit(
+			makeIngest({
+				braindump: { id: 'b2', created_at: '300' },
+				concepts: [{ id: 'c3', label: 'offline-thought', created_at: '300' }],
+				edges: [],
+				cursor: 300
+			}),
+			true,
+			pendingStore()
+		);
+		expect(outcome.kind).toBe('queued');
 		expect(store.text).toBe('');
+		expect(store.status).toBe('queued');
 	});
 
 	it('does not ingest until the user explicitly submits — chunk arrival alone never POSTs', async () => {
@@ -99,7 +124,7 @@ describe('Active Capture vertical slice — STT → buffer → explicit submit �
 		};
 		await store.startStt(fakeDeepgramSource(['a chunk']));
 		expect(calls).toHaveLength(0);
-		await store.submit(ingest);
+		await store.submit(ingest, true, pendingStore());
 		expect(calls).toEqual(['a chunk']);
 	});
 });

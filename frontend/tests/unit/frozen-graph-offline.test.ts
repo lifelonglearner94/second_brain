@@ -3,7 +3,6 @@ import fakeIndexedDB from 'fake-indexeddb';
 import { createIdb, type IdbStore, type TopologySnapshot } from '../../src/lib/state/idb';
 import { loadSpatialViewGraph } from '../../src/lib/graph/load';
 import { frozenGraphStatus } from '../../src/lib/graph/frozen-graph';
-import { shouldQueuePending } from '../../src/lib/capture/pending';
 import type { GlobalTopologySnapshot } from '../../src/lib/api/client';
 
 const CACHED: TopologySnapshot = {
@@ -53,8 +52,6 @@ describe('offline-open story — frozen-graph render, staleness indicator, captu
 		expect(frozen.label).not.toBeNull();
 		expect(frozen.label).toContain(CACHED.fetchedAt);
 		expect(frozen.label?.toLowerCase()).toContain('offline');
-
-		expect(shouldQueuePending(false, null)).toBe(true);
 	});
 
 	it('never renders a blank screen on connectivity failure with no cache — the load throws a user-meaningful error and frozenGraphStatus maps it to a non-blank label', async () => {
@@ -88,7 +85,5 @@ describe('offline-open story — frozen-graph render, staleness indicator, captu
 		const frozen = frozenGraphStatus(loaded.source, loaded.snapshot.fetchedAt, true);
 		expect(frozen.status).toBe('ready');
 		expect(frozen.label).toBeNull();
-
-		expect(shouldQueuePending(true, null)).toBe(false);
 	});
 });

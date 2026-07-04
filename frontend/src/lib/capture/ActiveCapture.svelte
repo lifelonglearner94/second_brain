@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { ActiveCaptureStore } from '$lib/capture/active-capture.svelte';
 	import { buildSttSources } from '$lib/capture/stt';
-	import { submitActiveCapture } from '$lib/capture/pending';
 	import type { IngestApi, IngestResponse } from '$lib/capture/ingest';
 	import type { PendingCapturesStore } from '$lib/state/pending-captures.svelte';
 
@@ -48,7 +47,7 @@
 		busy = true;
 		store.error = null;
 		try {
-			const outcome = await submitActiveCapture(store, online, pending, ingest);
+			const outcome = await store.submit(ingest, online, pending);
 			if (outcome.kind === 'submitted') {
 				oningest?.(outcome.res);
 			}

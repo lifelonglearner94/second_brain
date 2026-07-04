@@ -1,5 +1,7 @@
 import type { SttSource, SttSourceLabel } from './stt';
 import type { IngestApi, IngestResponse } from './ingest';
+import type { PendingCapturesStore } from '$lib/state/pending-captures.svelte';
+import type { PendingCapture } from '$lib/state/idb';
 
 export type ActiveCaptureStatus =
 	| 'idle'
@@ -8,6 +10,10 @@ export type ActiveCaptureStatus =
 	| 'submitted'
 	| 'queued'
 	| 'error';
+
+export type CaptureSubmission =
+	| { kind: 'submitted'; res: IngestResponse }
+	| { kind: 'queued' };
 
 export class ActiveCaptureStore {
 	text = $state<string>('');
@@ -68,10 +74,26 @@ export class ActiveCaptureStore {
 		}
 	}
 
-	async submit(ingest: IngestApi): Promise<IngestResponse> {
+	async submit(
+		ingest: IngestApi,
+		online: boolean,
+		pending: PendingCapturesStore
+	): Promise<CaptureSubmission> {
 		const verbatim = this.text;
 		if (verbatim.trim().length === 0) {
 			throw new Error('Active Capture buffer is empty — nothing to submit');
+		}
+		if (this.shouldQueuePending(online)) {
+			const capture: PendingCapture = {
+				id: crypto.randomUUID(),
+				text: verbatim,
+				createdAt: new Date().toISOString()
+			};
+			await pending.enqueue(capture);
+			await this.stopStt();
+			this.clear();
+			this.status = 'queued';
+			return { kind: 'queued' };
 		}
 		this.status = 'submitting';
 		try {
@@ -80,12 +102,16 @@ export class ActiveCaptureStore {
 			this.text = '';
 			this.error = null;
 			this.status = 'submitted';
-			return res;
+			return { kind: 'submitted', res };
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : String(e);
 			this.status = 'error';
 			throw e;
 		}
+	}
+
+	private shouldQueuePending(online: boolean): boolean {
+		return !online || this.sttSourceLabel === 'web-speech';
 	}
 
 	private async stopCurrentSource(): Promise<void> {

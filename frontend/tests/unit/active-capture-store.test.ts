@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ActiveCaptureStore } from '../../src/lib/capture/active-capture.svelte';
 import type { SttSource, SttSourceLabel } from '../../src/lib/capture/stt';
 import type { IngestApi, IngestResponse } from '../../src/lib/capture/ingest';
+import { PendingCapturesStore } from '../../src/lib/state/pending-captures.svelte';
+import type { IdbStore, PendingCapture } from '../../src/lib/state/idb';
 
 function fakeSource(
 	label: SttSourceLabel,
@@ -33,6 +35,25 @@ function fakeIngest(res: IngestResponse): IngestApi & { calls: string[] } {
 		},
 		calls
 	};
+}
+
+function fakeIdb(): IdbStore & { enqueued: PendingCapture[] } {
+	const enqueued: PendingCapture[] = [];
+	return {
+		enqueued,
+		saveTopologySnapshot: vi.fn(),
+		loadTopologySnapshot: vi.fn(),
+		clearTopologySnapshot: vi.fn(),
+		enqueuePendingCapture: vi.fn(async (c: PendingCapture) => {
+			enqueued.push(c);
+		}),
+		listPendingCaptures: vi.fn(async () => [...enqueued]),
+		removePendingCapture: vi.fn()
+	} as unknown as IdbStore & { enqueued: PendingCapture[] };
+}
+
+function pendingStore() {
+	return new PendingCapturesStore(fakeIdb());
 }
 
 const INGESTED: IngestResponse = {
@@ -155,7 +176,7 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 		source.emit('caffeine ');
 		source.emit('disrupts sleep');
 		expect(ingest.calls).toHaveLength(0);
-		await store.submit(ingest);
+		await store.submit(ingest, true, pendingStore());
 		expect(ingest.calls).toEqual(['caffeine disrupts sleep']);
 	});
 
@@ -164,7 +185,7 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 		const ingest = fakeIngest(INGESTED);
 		store.appendSttChunk('caffein disrupts');
 		store.setText('caffeine disrupts sleep');
-		await store.submit(ingest);
+		await store.submit(ingest, true, pendingStore());
 		expect(ingest.calls).toEqual(['caffeine disrupts sleep']);
 	});
 
@@ -172,7 +193,7 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 		const store = new ActiveCaptureStore();
 		const ingest = fakeIngest(INGESTED);
 		store.setText('a thought');
-		await store.submit(ingest);
+		await store.submit(ingest, true, pendingStore());
 		expect(store.text).toBe('');
 		expect(store.status).toBe('submitted');
 		expect(store.sttSourceLabel).toBeNull();
@@ -182,15 +203,18 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 		const store = new ActiveCaptureStore();
 		const ingest = fakeIngest(INGESTED);
 		store.setText('caffeine disrupts sleep');
-		const res = await store.submit(ingest);
-		expect(res.concepts[0]?.label).toBe('caffeine');
-		expect(res.cursor).toBe(1_800);
+		const outcome = await store.submit(ingest, true, pendingStore());
+		expect(outcome.kind).toBe('submitted');
+		if (outcome.kind === 'submitted') {
+			expect(outcome.res.concepts[0]?.label).toBe('caffeine');
+			expect(outcome.res.cursor).toBe(1_800);
+		}
 	});
 
 	it('refuses to submit an empty buffer (no empty braindumps — backend #5 rejects empty verbatim)', async () => {
 		const store = new ActiveCaptureStore();
 		const ingest = fakeIngest(INGESTED);
-		await expect(store.submit(ingest)).rejects.toThrow(/empty/i);
+		await expect(store.submit(ingest, true, pendingStore())).rejects.toThrow(/empty/i);
 		expect(ingest.calls).toHaveLength(0);
 	});
 
@@ -198,7 +222,7 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 		const store = new ActiveCaptureStore();
 		const ingest = fakeIngest(INGESTED);
 		store.setText('   \n\t  ');
-		await expect(store.submit(ingest)).rejects.toThrow(/empty/i);
+		await expect(store.submit(ingest, true, pendingStore())).rejects.toThrow(/empty/i);
 		expect(ingest.calls).toHaveLength(0);
 	});
 
@@ -208,7 +232,7 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 		const source = fakeSource('deepgram');
 		await store.startStt(source);
 		source.emit('a thought');
-		await store.submit(ingest);
+		await store.submit(ingest, true, pendingStore());
 		expect(store.sttSourceLabel).toBeNull();
 	});
 
@@ -220,8 +244,115 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 			}
 		};
 		store.setText('a thought');
-		await expect(store.submit(ingest)).rejects.toThrow(/503/);
+		await expect(store.submit(ingest, true, pendingStore())).rejects.toThrow(/503/);
 		expect(store.status).toBe('error');
 		expect(store.text).toBe('a thought');
+	});
+});
+
+describe('ActiveCaptureStore.submit(ingest, online, pending) — the queue-vs-submit decision (ADR-0005/0007)', () => {
+	it('enqueues a Pending Capture instead of ingesting when the browser is offline', async () => {
+		const idb = fakeIdb();
+		const pending = new PendingCapturesStore(idb);
+		const store = new ActiveCaptureStore();
+		store.text = 'offline capture';
+		store.sttSourceLabel = 'deepgram';
+		const ingest = fakeIngest(INGESTED);
+
+		const outcome = await store.submit(ingest, false, pending);
+
+		expect(outcome.kind).toBe('queued');
+		expect(ingest.calls).toHaveLength(0);
+		expect(idb.enqueuePendingCapture).toHaveBeenCalledOnce();
+		const captured = (idb.enqueuePendingCapture as ReturnType<typeof vi.fn>).mock.calls[0][0];
+		expect(captured.text).toBe('offline capture');
+		expect(captured.id).toBeTruthy();
+		expect(captured.createdAt).toBeTruthy();
+		expect(pending.items).toHaveLength(1);
+		expect(pending.items[0]?.text).toBe('offline capture');
+		expect(store.text).toBe('');
+		expect(store.status).toBe('queued');
+	});
+
+	it('enqueues when only the offline STT fallback filled the buffer (web-speech), even while online', async () => {
+		const idb = fakeIdb();
+		const pending = new PendingCapturesStore(idb);
+		const store = new ActiveCaptureStore();
+		store.text = 'web speech capture';
+		store.sttSourceLabel = 'web-speech';
+		const ingest = fakeIngest(INGESTED);
+
+		const outcome = await store.submit(ingest, true, pending);
+
+		expect(outcome.kind).toBe('queued');
+		expect(ingest.calls).toHaveLength(0);
+		expect(idb.enqueuePendingCapture).toHaveBeenCalledOnce();
+		expect(pending.items[0]?.text).toBe('web speech capture');
+		expect(store.status).toBe('queued');
+	});
+
+	it('submits immediately through the #19 ingest path when online with Deepgram', async () => {
+		const idb = fakeIdb();
+		const pending = new PendingCapturesStore(idb);
+		const store = new ActiveCaptureStore();
+		store.text = 'online capture';
+		store.sttSourceLabel = 'deepgram';
+		const ingest = fakeIngest(INGESTED);
+
+		const outcome = await store.submit(ingest, true, pending);
+
+		expect(outcome.kind).toBe('submitted');
+		if (outcome.kind === 'submitted') {
+			expect(outcome.res.braindump.id).toBe('7');
+		}
+		expect(ingest.calls).toEqual(['online capture']);
+		expect(idb.enqueuePendingCapture).not.toHaveBeenCalled();
+		expect(pending.items).toHaveLength(0);
+		expect(store.text).toBe('');
+		expect(store.status).toBe('submitted');
+	});
+
+	it('rejects an empty buffer the same way the #19 path does (no enqueue, no ingest)', async () => {
+		const idb = fakeIdb();
+		const pending = new PendingCapturesStore(idb);
+		const store = new ActiveCaptureStore();
+		store.text = '   ';
+		const ingest = fakeIngest(INGESTED);
+
+		await expect(store.submit(ingest, false, pending)).rejects.toThrow(/empty/);
+		expect(ingest.calls).toHaveLength(0);
+		expect(idb.enqueuePendingCapture).not.toHaveBeenCalled();
+	});
+
+	it('enqueues when offline with no STT label (pure keyboard input offline) — ADR-0005', async () => {
+		const idb = fakeIdb();
+		const pending = new PendingCapturesStore(idb);
+		const store = new ActiveCaptureStore();
+		store.text = 'keyboard offline';
+		store.sttSourceLabel = null;
+		const ingest = fakeIngest(INGESTED);
+
+		const outcome = await store.submit(ingest, false, pending);
+
+		expect(outcome.kind).toBe('queued');
+		expect(ingest.calls).toHaveLength(0);
+		expect(pending.items[0]?.text).toBe('keyboard offline');
+		expect(store.status).toBe('queued');
+	});
+
+	it('submits immediately when online with no STT label (pure keyboard input online)', async () => {
+		const idb = fakeIdb();
+		const pending = new PendingCapturesStore(idb);
+		const store = new ActiveCaptureStore();
+		store.text = 'keyboard online';
+		store.sttSourceLabel = null;
+		const ingest = fakeIngest(INGESTED);
+
+		const outcome = await store.submit(ingest, true, pending);
+
+		expect(outcome.kind).toBe('submitted');
+		expect(ingest.calls).toEqual(['keyboard online']);
+		expect(pending.items).toHaveLength(0);
+		expect(store.status).toBe('submitted');
 	});
 });
