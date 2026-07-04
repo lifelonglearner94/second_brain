@@ -31,6 +31,45 @@ const GEMINI_EMBED_DIM: usize = 768;
 
 const CLEAN_SYSTEM: &str = "You clean a braindump's verbatim text into a readable rendering. Preserve meaning and order; fix only transcription artifacts (STT hallucinations, typos, casing, punctuation). Return only the cleaned text, no commentary.";
 
+/// Reasoning effort for thinking-capable Gemini 2.5+ models, mapped to a
+/// `thinkingConfig.thinkingBudget` token count. `GEMINI_REASONING_EFFORT` is
+/// optional: when unset, no `thinkingConfig` is sent (preserves behavior for
+/// non-thinking models like 2.0-flash); when set to `none`, thinking is
+/// explicitly disabled via budget 0. Budgets are tuned for 2.5-flash (range
+/// 0–24576); operators using 2.5-pro may raise `high` toward its 32768 cap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReasoningEffort {
+    None,
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    /// Parse the `GEMINI_REASONING_EFFORT` env value, case-insensitively.
+    fn parse(raw: &str) -> Result<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "none" => Ok(Self::None),
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            other => Err(Error::Internal(format!(
+                "GEMINI_REASONING_EFFORT must be one of none|low|medium|high, got {other:?}"
+            ))),
+        }
+    }
+
+    /// Token budget for `thinkingConfig.thinkingBudget`.
+    fn budget(self) -> i32 {
+        match self {
+            Self::None => 0,
+            Self::Low => 1024,
+            Self::Medium => 8192,
+            Self::High => 24576,
+        }
+    }
+}
+
 /// Real Gemini client for all three seams. Constructed from env; `from_env`
 /// returns `None` when `GEMINI_API_KEY` is unset, so dev/CI without a key
 /// falls back to the fake clients (the ingest pipeline stays hermetic).
@@ -39,6 +78,8 @@ pub struct GeminiClient {
     api_key: String,
     text_model: String,
     embed_model: String,
+    /// `None` = `GEMINI_REASONING_EFFORT` unset → don't send `thinkingConfig`.
+    reasoning: Option<ReasoningEffort>,
     http: reqwest::Client,
 }
 
@@ -50,6 +91,16 @@ impl GeminiClient {
             std::env::var("GEMINI_TEXT_MODEL").unwrap_or_else(|_| DEFAULT_TEXT_MODEL.to_string());
         let embed_model =
             std::env::var("GEMINI_EMBED_MODEL").unwrap_or_else(|_| DEFAULT_EMBED_MODEL.to_string());
+        let reasoning = match std::env::var("GEMINI_REASONING_EFFORT") {
+            Ok(raw) => match ReasoningEffort::parse(&raw) {
+                Ok(effort) => Some(effort),
+                Err(e) => {
+                    tracing::warn!(error = %e, "ignoring GEMINI_REASONING_EFFORT; no thinkingConfig will be sent");
+                    None
+                }
+            },
+            Err(_) => None,
+        };
         let http = reqwest::Client::builder()
             .build()
             .map_err(|e| tracing::warn!(error = %e, "reqwest client build failed; no Gemini"))
@@ -58,11 +109,20 @@ impl GeminiClient {
             api_key,
             text_model,
             embed_model,
+            reasoning,
             http,
         })
     }
 
-    async fn generate(&self, system: &str, user: &str, config: Value) -> Result<String> {
+    async fn generate(&self, system: &str, user: &str, mut config: Value) -> Result<String> {
+        if let Some(effort) = self.reasoning {
+            if let Some(obj) = config.as_object_mut() {
+                obj.insert(
+                    "thinkingConfig".to_string(),
+                    json!({"thinkingBudget": effort.budget()}),
+                );
+            }
+        }
         let url = format!(
             "{GEMINI_BASE}/models/{}:generateContent?key={}",
             self.text_model, self.api_key
@@ -377,5 +437,26 @@ mod tests {
         assert_eq!(result.edges[0].from_label, "Maria");
         assert_eq!(result.edges[0].type_slug, "endangers");
         assert_eq!(result.edges[0].to_label, "Q3 review");
+    }
+
+    #[test]
+    fn reasoning_effort_parses_case_insensitively() {
+        assert_eq!(ReasoningEffort::parse(" none ").unwrap(), ReasoningEffort::None);
+        assert_eq!(ReasoningEffort::parse("LOW").unwrap(), ReasoningEffort::Low);
+        assert_eq!(ReasoningEffort::parse("Medium").unwrap(), ReasoningEffort::Medium);
+        assert_eq!(ReasoningEffort::parse("high").unwrap(), ReasoningEffort::High);
+    }
+
+    #[test]
+    fn reasoning_effort_rejects_unknown_keyword() {
+        assert!(ReasoningEffort::parse("ultra").is_err());
+        assert!(ReasoningEffort::parse("").is_err());
+    }
+
+    #[test]
+    fn reasoning_effort_budgets_are_ordered_and_none_is_zero() {
+        assert_eq!(ReasoningEffort::None.budget(), 0);
+        assert!(ReasoningEffort::Low.budget() < ReasoningEffort::Medium.budget());
+        assert!(ReasoningEffort::Medium.budget() < ReasoningEffort::High.budget());
     }
 }
