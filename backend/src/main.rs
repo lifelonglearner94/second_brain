@@ -2,19 +2,20 @@
 //! database, wire the trait seams, and serve the Axum app.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use second_brain_backend::{
     auth,
     config::{Config, LogFormat},
     db::Db,
-    embedding::FakeEmbedding,
-    extractor::FakeExtractor,
-    llm::FakeLlm,
+    embedding::{EmbeddingClient, FakeEmbedding},
+    extractor::Extractor,
+    gemini::GeminiClient,
+    llm::LlmClient,
     logs::LogBuffer,
     routes,
     state::AppState,
 };
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -29,12 +30,47 @@ async fn main() -> anyhow::Result<()> {
         &config.webauthn_rp_origin,
         &config.webauthn_rp_name,
     )?;
+
+    // Wire the real Gemini seams when an API key is present; otherwise fall
+    // back to the fakes so a dev/CI box without a key still runs (the ingest
+    // pipeline is exercised end-to-end with stub extraction/embedding). One
+    // GeminiClient implements all three seams (clean, extract, embed).
+    let (llm, extractor, embedding): (
+        Arc<dyn LlmClient>,
+        Arc<dyn Extractor>,
+        Arc<dyn EmbeddingClient + Send + Sync>,
+    ) = match GeminiClient::from_env() {
+        Some(gemini) => {
+            tracing::info!("gemini seams wired (real Gemini LLM + extractor + embeddings)");
+            let llm: Arc<dyn LlmClient> = Arc::new(gemini.clone());
+            let extractor: Arc<dyn Extractor> = Arc::new(gemini.clone());
+            let embedding: Arc<dyn EmbeddingClient + Send + Sync> = Arc::new(gemini);
+            (llm, extractor, embedding)
+        }
+        None => {
+            tracing::warn!(
+                "GEMINI_API_KEY unset — falling back to fake LLM/extractor/embedding. \
+                 Set it to run real extraction."
+            );
+            (
+                Arc::new(second_brain_backend::llm::FakeLlm),
+                Arc::new(second_brain_backend::extractor::FakeExtractor),
+                Arc::new(FakeEmbedding { dim: 1024 }),
+            )
+        }
+    };
+
+    // The vec0 embedding tables are dim-dependent (the embedding model fixes
+    // the dimensionality), so they are created here at the live client's dim
+    // rather than in the dim-agnostic schema migration.
+    db.ensure_vec_tables(embedding.dim())?;
+
     let state = AppState {
         db,
         config: Arc::new(config.clone()),
-        llm: Arc::new(FakeLlm),
-        embedding: Arc::new(FakeEmbedding { dim: 1024 }),
-        extractor: Arc::new(FakeExtractor),
+        llm,
+        extractor,
+        embedding,
         auth: auth::AuthService::new(webauthn),
         log_buffer,
     };

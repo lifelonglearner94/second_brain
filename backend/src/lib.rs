@@ -11,6 +11,8 @@ pub mod db;
 pub mod embedding;
 pub mod error;
 pub mod extractor;
+pub mod gemini;
+pub mod graph;
 pub mod llm;
 pub mod logs;
 pub mod routes;

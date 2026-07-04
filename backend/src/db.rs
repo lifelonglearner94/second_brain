@@ -57,6 +57,21 @@ impl Db {
         Self::open(":memory:")
     }
 
+    /// Create the `sqlite-vec` vec0 virtual tables for concept and braindump
+    /// embeddings. The dimensionality is fixed by the configured embedding
+    /// model, so this is a one-time setup call run at `AppState` construction
+    /// (not in `migrate`, which is dim-agnostic). Sync + brief: a one-shot
+    /// `CREATE VIRTUAL TABLE IF NOT EXISTS` at startup; the async runtime is
+    /// not blocked meaningfully.
+    ///
+    /// `vec0(... distance_metric=cosine)` makes the `MATCH ... ORDER BY
+    /// distance` KNN query return cosine distance (1 − cosine similarity), so
+    /// identity resolution reads similarity = 1 − distance (ADR-0001).
+    pub fn ensure_vec_tables(&self, dim: usize) -> Result<()> {
+        let conn = self.0.lock().expect("db mutex poisoned");
+        ensure_vec_tables(&conn, dim)
+    }
+
     /// Run `f` against the connection on a blocking thread.
     ///
     /// The closure owns everything it needs (it must be `'static`); borrow
@@ -162,6 +177,91 @@ fn migrate(conn: &Connection) -> Result<()> {
         ('produces', 'Produces', 'A generates, creates, or yields B.', unixepoch()),
         ('derived_from', 'Derived from', 'A originates from or is abstracted out of B.', unixepoch());",
     )?;
+
+    // Issue #6 — concept identity, edge accretion, provenance, type history
+    // (ADR-0001 / ADR-0002 / ADR-0003 / ADR-0010). Forward-only additive: new
+    // tables only, the existing ontology/braindumps tables are untouched.
+    //
+    // Concepts accrete by embedding match (ADR-0001); identity is not label
+    // equality. `concept_provenance` is the extraction provenance symmetric to
+    // edge provenance (ADR-0010): deleting a braindump drops its row here, and a
+    // concept vanishes when its last extractor is removed.
+    //
+    // Edges accrete by (source, original_type, target) — the original_type is
+    // the LLM's first assertion and anchors identity; the *current* type is a
+    // projection off `edge_type_history` (ADR-0003), never a stored field.
+    // `edge_provenance` is the asserted_by list (ADR-0002). Type-history rows
+    // cascade on edge deletion; provenance rows cascade on concept/edge/braindump
+    // deletion.
+    //
+    // `merge_suggestions` surfaces borderline identity pairs for human
+    // confirm/reject (ADR-0001); the queue/approval UI is a later slice.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS concepts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            label       TEXT NOT NULL,
+            created_at  INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS concept_provenance (
+            concept_id    INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+            braindump_id  INTEGER NOT NULL REFERENCES braindumps(id) ON DELETE CASCADE,
+            PRIMARY KEY (concept_id, braindump_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS edges (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+            target_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+            original_type     TEXT NOT NULL,
+            created_at        INTEGER NOT NULL,
+            UNIQUE (source_concept_id, original_type, target_concept_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS edge_provenance (
+            edge_id      INTEGER NOT NULL REFERENCES edges(id) ON DELETE CASCADE,
+            braindump_id INTEGER NOT NULL REFERENCES braindumps(id) ON DELETE CASCADE,
+            PRIMARY KEY (edge_id, braindump_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS edge_type_history (
+            edge_id    INTEGER NOT NULL REFERENCES edges(id) ON DELETE CASCADE,
+            seq_index  INTEGER NOT NULL,
+            type_slug  TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (edge_id, seq_index)
+        );
+
+        CREATE TABLE IF NOT EXISTS merge_suggestions (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind                TEXT NOT NULL,
+            braindump_id        INTEGER NOT NULL REFERENCES braindumps(id) ON DELETE CASCADE,
+            new_concept_label   TEXT NOT NULL,
+            new_concept_id      INTEGER REFERENCES concepts(id) ON DELETE CASCADE,
+            existing_concept_id INTEGER REFERENCES concepts(id) ON DELETE CASCADE,
+            similarity          REAL NOT NULL,
+            status              TEXT NOT NULL DEFAULT 'pending',
+            created_at          INTEGER NOT NULL
+        );",
+    )?;
+    Ok(())
+}
+
+/// Create the embedding vec0 virtual tables at the given dimensionality.
+/// Idempotent. A model swap (different dim) requires a migration that drops
+/// and recreates these tables — out of scope for this slice.
+pub(crate) fn ensure_vec_tables(conn: &Connection, dim: usize) -> Result<()> {
+    assert!(dim > 0, "embedding dimension must be positive");
+    conn.execute_batch(&format!(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS concept_embeddings USING vec0(
+            concept_id INTEGER PRIMARY KEY,
+            embedding float[{dim}] distance_metric=cosine
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS braindump_embeddings USING vec0(
+            braindump_id INTEGER PRIMARY KEY,
+            embedding float[{dim}] distance_metric=cosine
+        );"
+    ))?;
     Ok(())
 }
 
@@ -285,5 +385,58 @@ mod tests {
             count_first, count_second,
             "re-migrating must not duplicate seeds"
         );
+    }
+
+    #[tokio::test]
+    async fn migrations_create_extraction_tables() {
+        let db = Db::open_in_memory().unwrap();
+        db.run(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")?;
+            let names: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .filter_map(std::result::Result::ok)
+                .collect();
+            for expected in [
+                "concepts",
+                "concept_provenance",
+                "edges",
+                "edge_provenance",
+                "edge_type_history",
+                "merge_suggestions",
+            ] {
+                assert!(
+                    names.contains(&expected.to_string()),
+                    "extraction table `{expected}` must exist: {names:?}"
+                );
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_vec_tables_creates_knn_virtual_tables() {
+        let db = Db::open_in_memory().unwrap();
+        db.ensure_vec_tables(8).unwrap();
+        db.run(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?) ORDER BY name",
+            )?;
+            let names: Vec<String> = stmt
+                .query_map(["concept_embeddings", "braindump_embeddings"], |r| {
+                    r.get::<_, String>(0)
+                })?
+                .collect::<rusqlite::Result<_>>()?;
+            assert_eq!(
+                names,
+                ["braindump_embeddings", "concept_embeddings"],
+                "both vec0 virtual tables must exist"
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
     }
 }
