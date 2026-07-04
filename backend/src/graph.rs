@@ -27,7 +27,7 @@ use serde::Serialize;
 
 use crate::db::{now_seconds, Db};
 use crate::embedding::EmbeddingClient;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
 
 /// Cosine similarity at or above which a newly-extracted concept is deemed the
@@ -456,6 +456,14 @@ fn retract_extraction(conn: &rusqlite::Connection, braindump_id: i64) -> Result<
             (SELECT 1 FROM edge_provenance WHERE edge_id = edges.id)",
         [],
     )?;
+    // The vec0 concept_embeddings table has no FK cascade — clean embeddings for
+    // concepts about to vanish, so KNN never returns a deleted concept's vector.
+    conn.execute(
+        "DELETE FROM concept_embeddings WHERE concept_id IN
+            (SELECT id FROM concepts WHERE NOT EXISTS
+                (SELECT 1 FROM concept_provenance WHERE concept_id = concepts.id))",
+        [],
+    )?;
     conn.execute(
         "DELETE FROM concepts WHERE NOT EXISTS
             (SELECT 1 FROM concept_provenance WHERE concept_id = concepts.id)",
@@ -647,11 +655,186 @@ pub async fn braindump_embedding_stored(db: &Db, braindump_id: i64) -> Result<bo
     .await
 }
 
+// --- issue #7: braindump deletion + merge-suggestion queue ---
+
+/// Delete a braindump and cascade through the graph (ADR-0002 / ADR-0007 /
+/// ADR-0010). Drops the braindump's id from every concept's extraction
+/// provenance and every edge's `asserted_by`; a concept vanishes when its last
+/// extracting braindump is removed, an edge vanishes when its last asserter is
+/// removed, and an edge whose endpoint concept vanishes is cascade-deleted
+/// (ADR-0010 addendum — an edge with a missing endpoint is meaningless).
+/// Returns `false` if no braindump with `id` exists.
+pub async fn delete_braindump(db: &Db, braindump_id: i64) -> Result<bool> {
+    db.run(move |conn| {
+        let exists = conn
+            .query_row(
+                "SELECT 1 FROM braindumps WHERE id = ?1",
+                params![braindump_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Ok(false);
+        }
+        conn.execute_batch("BEGIN")?;
+        let res = retract_extraction(conn, braindump_id).and_then(|_| {
+            let n = conn.execute(
+                "DELETE FROM braindumps WHERE id = ?1",
+                params![braindump_id],
+            )?;
+            Ok(n > 0)
+        });
+        match res {
+            Ok(deleted) => {
+                conn.execute_batch("COMMIT")?;
+                Ok(deleted)
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    })
+    .await
+}
+
+/// Approve a pending concept merge suggestion (ADR-0001 / ADR-0010): fold the
+/// `new_concept_id` into the `existing_concept_id` — union their extraction
+/// provenance and repoint edges from the fold concept onto the surviving one,
+/// merging duplicate edges by unioning provenance (ADR-0002 accretion). The
+/// fold concept and the suggestion are removed. `NotFound` if the suggestion
+/// does not exist.
+pub async fn approve_merge_suggestion(db: &Db, suggestion_id: i64) -> Result<()> {
+    db.run(move |conn| {
+        let pair = conn
+            .query_row(
+                "SELECT new_concept_id, existing_concept_id FROM merge_suggestions
+                 WHERE id = ?1",
+                params![suggestion_id],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        let Some((fold_id, keep_id)) = pair else {
+            return Err(Error::NotFound(format!(
+                "merge suggestion {suggestion_id} not found"
+            )));
+        };
+        if fold_id == keep_id {
+            return Err(Error::BadRequest(
+                "merge suggestion references the same concept twice".into(),
+            ));
+        }
+        conn.execute_batch("BEGIN")?;
+        let res = merge_concepts_conn(conn, keep_id, fold_id);
+        match res {
+            Ok(()) => {
+                conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    })
+    .await
+}
+
+/// Reject a pending concept merge suggestion (ADR-0001): keep the two concepts
+/// separate and drop the suggestion. `NotFound` if the suggestion does not exist.
+pub async fn reject_merge_suggestion(db: &Db, suggestion_id: i64) -> Result<()> {
+    db.run(move |conn| {
+        let n = conn.execute(
+            "DELETE FROM merge_suggestions WHERE id = ?1",
+            params![suggestion_id],
+        )?;
+        if n == 0 {
+            return Err(Error::NotFound(format!(
+                "merge suggestion {suggestion_id} not found"
+            )));
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Fold `fold_id` into `keep_id` (the survivor) inside an open transaction:
+/// repoint/merge edges touching the fold concept, union extraction provenance,
+/// drop the fold concept's embedding (vec0 has no FK cascade), then delete the
+/// fold concept — its remaining provenance and any merge suggestions referencing
+/// it cascade away.
+fn merge_concepts_conn(conn: &rusqlite::Connection, keep_id: i64, fold_id: i64) -> Result<()> {
+    // Edges touching the fold concept: merge duplicates (union provenance) and
+    // repoint the rest onto the survivor. Iterated in Rust because the edges
+    // table's UNIQUE (source, original_type, target) would otherwise trip on a
+    // straight UPDATE when a duplicate already exists on the survivor.
+    let fold_edges: Vec<(i64, i64, i64, String)> = conn
+        .prepare(
+            "SELECT id, source_concept_id, target_concept_id, original_type
+             FROM edges WHERE source_concept_id = ?1 OR target_concept_id = ?1",
+        )?
+        .query_map(params![fold_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    for (edge_id, src, tgt, otype) in fold_edges {
+        let new_src = if src == fold_id { keep_id } else { src };
+        let new_tgt = if tgt == fold_id { keep_id } else { tgt };
+        let collision = conn
+            .query_row(
+                "SELECT id FROM edges
+                 WHERE source_concept_id = ?1 AND original_type = ?2
+                   AND target_concept_id = ?3 AND id != ?4",
+                params![new_src, &otype, new_tgt, edge_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?;
+        if let Some(keeper_edge_id) = collision {
+            // Same (source, original_type, target) already on the survivor →
+            // union provenance onto the keeper, then drop the fold edge (its
+            // type-history + remaining provenance cascade).
+            conn.execute(
+                "INSERT OR IGNORE INTO edge_provenance (edge_id, braindump_id)
+                 SELECT ?1, braindump_id FROM edge_provenance WHERE edge_id = ?2",
+                params![keeper_edge_id, edge_id],
+            )?;
+            conn.execute("DELETE FROM edges WHERE id = ?1", params![edge_id])?;
+        } else {
+            conn.execute(
+                "UPDATE edges
+                 SET source_concept_id = ?1, target_concept_id = ?2
+                 WHERE id = ?3",
+                params![new_src, new_tgt, edge_id],
+            )?;
+        }
+    }
+
+    // Union extraction provenance: the fold concept's extractors accrete onto
+    // the survivor (ADR-0010: a merged concept's provenance is the union).
+    conn.execute(
+        "INSERT OR IGNORE INTO concept_provenance (concept_id, braindump_id)
+         SELECT ?1, braindump_id FROM concept_provenance WHERE concept_id = ?2",
+        params![keep_id, fold_id],
+    )?;
+    // The vec0 concept_embeddings table has no FK cascade — clean manually.
+    conn.execute(
+        "DELETE FROM concept_embeddings WHERE concept_id = ?1",
+        params![fold_id],
+    )?;
+    // Delete the fold concept; cascades drop its remaining provenance, any
+    // edges still referencing it (none — all repointed above), and merge
+    // suggestions that reference it as new/existing (the approved one included).
+    conn.execute("DELETE FROM concepts WHERE id = ?1", params![fold_id])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::braindump::insert_braindump;
+    use crate::braindump::{get_braindump, insert_braindump};
     use crate::embedding::FakeEmbedding;
+    use crate::error::Error;
     use crate::extractor::{ExtractedConcept, ExtractedEdge};
 
     /// In-memory Db with vec tables at the fake embedding dim.
@@ -693,6 +876,51 @@ mod tests {
     async fn seed_braindump(db: &Db, text: &str) -> i64 {
         let b = insert_braindump(db, text, text).await.unwrap();
         b.id
+    }
+
+    /// Insert a pending concept merge suggestion directly (the borderline
+    /// detection path is covered by the ingest tests; the merge operation is
+    /// the unit under test here).
+    async fn seed_suggestion(
+        db: &Db,
+        braindump_id: i64,
+        new_concept_id: i64,
+        existing_concept_id: i64,
+    ) -> i64 {
+        db.run(move |conn| {
+            let created_at = now_seconds();
+            conn.execute(
+                "INSERT INTO merge_suggestions
+                    (kind, braindump_id, new_concept_label, new_concept_id,
+                     existing_concept_id, similarity, status, created_at)
+                 VALUES ('concept', ?1, 'label', ?2, ?3, 0.9, 'pending', ?4)",
+                params![
+                    braindump_id,
+                    new_concept_id,
+                    existing_concept_id,
+                    created_at
+                ],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Back an edge with a braindump that did not extract its endpoint concepts
+    /// (simulates a future chat-inference asserter, ADR-0006 — used to exercise
+    /// the endpoint-vanishing cascade, ADR-0010 addendum).
+    async fn seed_edge_provenance(db: &Db, edge_id: i64, braindump_id: i64) {
+        db.run(move |conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO edge_provenance (edge_id, braindump_id)
+                 VALUES (?1, ?2)",
+                params![edge_id, braindump_id],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -1074,6 +1302,424 @@ mod tests {
         assert_eq!(outcome, IngestOutcome::default());
         assert_eq!(count_concepts(&db).await, 0);
         assert!(braindump_embedding_stored(&db, bd).await.unwrap());
+    }
+
+    // --- issue #7: braindump deletion with provenance cascade (ADR-0002/0007/0010) ---
+
+    #[tokio::test]
+    async fn delete_braindump_drops_extraction_provenance_and_vanishes_on_last_extractor() {
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd1 = seed_braindump(&db, "thinking about q3").await;
+        let bd2 = seed_braindump(&db, "q3 again").await;
+        ingest_extraction(
+            &db,
+            &emb,
+            bd1,
+            "thinking about q3",
+            extraction(&["Q3"], &[]),
+        )
+        .await
+        .unwrap();
+        ingest_extraction(&db, &emb, bd2, "q3 again", extraction(&["Q3"], &[]))
+            .await
+            .unwrap();
+        let cid = db_concept_id_for_label(&db, "Q3").await;
+        let mut prov = concept_provenance(&db, cid).await.unwrap();
+        prov.sort_unstable();
+        assert_eq!(prov, vec![bd1, bd2]);
+
+        // Delete bd1: Q3 still extracted by bd2 → survives, provenance = [bd2].
+        assert!(
+            delete_braindump(&db, bd1).await.unwrap(),
+            "deleting an existing braindump reports true"
+        );
+        assert_eq!(concept_provenance(&db, cid).await.unwrap(), vec![bd2]);
+        assert!(
+            get_concept(&db, cid).await.unwrap().is_some(),
+            "concept survives while another braindump extracts it"
+        );
+        assert!(
+            get_braindump(&db, bd1).await.unwrap().is_none(),
+            "braindump row removed"
+        );
+
+        // Delete bd2: Q3's last extractor gone → concept vanishes (ADR-0010).
+        assert!(delete_braindump(&db, bd2).await.unwrap());
+        assert!(
+            get_concept(&db, cid).await.unwrap().is_none(),
+            "concept vanishes when its last extracting braindump is deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_braindump_drops_edge_provenance_and_vanishes_on_last_asserter() {
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd1 = seed_braindump(&db, "maria endangers q3").await;
+        let bd2 = seed_braindump(&db, "maria still endangers q3").await;
+        ingest_extraction(
+            &db,
+            &emb,
+            bd1,
+            "maria endangers q3",
+            extraction(
+                &["Maria", "Q3 launch"],
+                &[("Maria", "endangers", "Q3 launch")],
+            ),
+        )
+        .await
+        .unwrap();
+        ingest_extraction(
+            &db,
+            &emb,
+            bd2,
+            "maria still endangers q3",
+            extraction(
+                &["Maria", "Q3 launch"],
+                &[("Maria", "endangers", "Q3 launch")],
+            ),
+        )
+        .await
+        .unwrap();
+        let maria = db_concept_id_for_label(&db, "Maria").await;
+        let q3 = db_concept_id_for_label(&db, "Q3 launch").await;
+        let edge = find_edge(&db, maria, "endangers", q3)
+            .await
+            .unwrap()
+            .expect("edge created");
+
+        // Delete bd1: edge still asserted by bd2 → survives (ADR-0002).
+        delete_braindump(&db, bd1).await.unwrap();
+        assert_eq!(edge_provenance(&db, edge.id).await.unwrap(), vec![bd2]);
+        assert!(
+            find_edge(&db, maria, "endangers", q3)
+                .await
+                .unwrap()
+                .is_some(),
+            "edge survives while another braindump asserts it"
+        );
+
+        // Delete bd2: last asserter gone → edge vanishes (ADR-0002).
+        delete_braindump(&db, bd2).await.unwrap();
+        assert!(
+            find_edge(&db, maria, "endangers", q3)
+                .await
+                .unwrap()
+                .is_none(),
+            "edge vanishes when its last asserter is deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_braindump_cascade_deletes_edge_when_endpoint_concept_vanishes() {
+        // ADR-0010 addendum: an edge whose endpoint concept vanishes is
+        // cascade-deleted, even if another asserter still backs it (a future
+        // chat inference may assert an edge without extracting the endpoint —
+        // ADR-0006). An edge with a missing endpoint is meaningless.
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd1 = seed_braindump(&db, "maria endangers q3").await;
+        let bd2 = seed_braindump(&db, "maria something").await;
+        ingest_extraction(
+            &db,
+            &emb,
+            bd1,
+            "maria endangers q3",
+            extraction(
+                &["Maria", "Q3 launch"],
+                &[("Maria", "endangers", "Q3 launch")],
+            ),
+        )
+        .await
+        .unwrap();
+        // bd2 extracts only Maria, so Q3's sole extractor is bd1.
+        ingest_extraction(
+            &db,
+            &emb,
+            bd2,
+            "maria something",
+            extraction(&["Maria"], &[]),
+        )
+        .await
+        .unwrap();
+        let maria = db_concept_id_for_label(&db, "Maria").await;
+        let q3 = db_concept_id_for_label(&db, "Q3 launch").await;
+        let edge = find_edge(&db, maria, "endangers", q3)
+            .await
+            .unwrap()
+            .expect("edge created");
+        // Simulate a non-extracting asserter (future chat inference, ADR-0006)
+        // backing the edge, so it still has provenance after bd1 is removed.
+        seed_edge_provenance(&db, edge.id, bd2).await;
+        let mut prov = edge_provenance(&db, edge.id).await.unwrap();
+        prov.sort_unstable();
+        assert_eq!(prov, vec![bd1, bd2]);
+
+        // Delete bd1: Q3's only extractor → Q3 vanishes. The edge still has bd2
+        // as an asserter, but its endpoint (Q3) is gone → cascade-deleted.
+        delete_braindump(&db, bd1).await.unwrap();
+        assert!(
+            get_concept(&db, q3).await.unwrap().is_none(),
+            "Q3 vanishes: sole extractor deleted"
+        );
+        assert!(
+            find_edge(&db, maria, "endangers", q3)
+                .await
+                .unwrap()
+                .is_none(),
+            "edge cascade-deleted: endpoint concept vanished"
+        );
+        assert!(
+            get_concept(&db, maria).await.unwrap().is_some(),
+            "Maria survives: bd2 still extracts it"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_braindump_removes_row_and_braindump_embedding() {
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd = seed_braindump(&db, "maria").await;
+        ingest_extraction(&db, &emb, bd, "maria", extraction(&["Maria"], &[]))
+            .await
+            .unwrap();
+        assert!(braindump_embedding_stored(&db, bd).await.unwrap());
+
+        assert!(delete_braindump(&db, bd).await.unwrap());
+        assert!(
+            get_braindump(&db, bd).await.unwrap().is_none(),
+            "braindump row removed"
+        );
+        assert!(
+            !braindump_embedding_stored(&db, bd).await.unwrap(),
+            "braindump embedding removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_braindump_cleans_concept_embeddings_for_vanished_concepts() {
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd = seed_braindump(&db, "maria").await;
+        ingest_extraction(&db, &emb, bd, "maria", extraction(&["Maria"], &[]))
+            .await
+            .unwrap();
+        let cid = db_concept_id_for_label(&db, "Maria").await;
+        assert!(concept_embedding_stored(&db, cid).await);
+
+        delete_braindump(&db, bd).await.unwrap();
+        assert!(
+            !concept_embedding_stored(&db, cid).await,
+            "vanished concept's embedding cleaned (no orphan in KNN)"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_missing_braindump_returns_false() {
+        let db = test_db();
+        assert!(
+            !delete_braindump(&db, 9999).await.unwrap(),
+            "deleting a non-existent braindump reports false"
+        );
+    }
+
+    // --- issue #7: concept merge-suggestion queue (ADR-0001/0002/0010) ---
+
+    #[tokio::test]
+    async fn approve_merge_unions_extraction_provenance_and_drops_fold_concept() {
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd1 = seed_braindump(&db, "maria").await;
+        let bd2 = seed_braindump(&db, "beta").await;
+        ingest_extraction(&db, &emb, bd1, "maria", extraction(&["Maria"], &[]))
+            .await
+            .unwrap();
+        ingest_extraction(&db, &emb, bd2, "beta", extraction(&["Beta"], &[]))
+            .await
+            .unwrap();
+        let maria = db_concept_id_for_label(&db, "Maria").await;
+        let beta = db_concept_id_for_label(&db, "Beta").await;
+        let suggestion = seed_suggestion(&db, bd2, beta, maria).await;
+
+        approve_merge_suggestion(&db, suggestion).await.unwrap();
+
+        // The keeper (maria) carries the fold concept's extraction provenance
+        // (ADR-0010: a merged concept's provenance is the union of its members').
+        let mut prov = concept_provenance(&db, maria).await.unwrap();
+        prov.sort_unstable();
+        assert_eq!(prov, vec![bd1, bd2]);
+        // The fold concept (beta) is gone.
+        assert!(
+            get_concept(&db, beta).await.unwrap().is_none(),
+            "fold concept deleted on approve"
+        );
+        // The suggestion is consumed.
+        assert!(
+            !merge_suggestions(&db)
+                .await
+                .unwrap()
+                .iter()
+                .any(|s| s.id == suggestion),
+            "approved suggestion dropped from the queue"
+        );
+    }
+
+    #[tokio::test]
+    async fn approve_merge_folds_edges_onto_surviving_concept() {
+        // ADR-0002 consequence: merging folds edges from both concepts onto the
+        // merged node; contradictory edges (different type) coexist rather than
+        // being silently resolved.
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd1 = seed_braindump(&db, "maria endangers q3").await;
+        let bd2 = seed_braindump(&db, "beta helps q3").await;
+        ingest_extraction(
+            &db,
+            &emb,
+            bd1,
+            "maria endangers q3",
+            extraction(&["Maria", "Q3"], &[("Maria", "endangers", "Q3")]),
+        )
+        .await
+        .unwrap();
+        ingest_extraction(
+            &db,
+            &emb,
+            bd2,
+            "beta helps q3",
+            extraction(&["Beta", "Q3"], &[("Beta", "helps", "Q3")]),
+        )
+        .await
+        .unwrap();
+        let maria = db_concept_id_for_label(&db, "Maria").await;
+        let beta = db_concept_id_for_label(&db, "Beta").await;
+        let q3 = db_concept_id_for_label(&db, "Q3").await;
+        let suggestion = seed_suggestion(&db, bd2, beta, maria).await;
+
+        approve_merge_suggestion(&db, suggestion).await.unwrap();
+
+        // Beta's edge (Beta→Q3[helps]) folded onto Maria → Maria→Q3[helps].
+        let folded = find_edge(&db, maria, "helps", q3)
+            .await
+            .unwrap()
+            .expect("folded edge present");
+        assert_eq!(edge_provenance(&db, folded.id).await.unwrap(), vec![bd2]);
+        // Maria's own edge (endangers) still present — contradictory edges coexist.
+        assert!(
+            find_edge(&db, maria, "endangers", q3)
+                .await
+                .unwrap()
+                .is_some(),
+            "pre-existing edge preserved"
+        );
+        assert_eq!(count_edges(&db).await, 2, "two edges, both now Maria→Q3");
+        assert!(get_concept(&db, beta).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn approve_merge_unions_provenance_when_duplicate_edges_collide() {
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd1 = seed_braindump(&db, "maria helps q3").await;
+        let bd2 = seed_braindump(&db, "beta helps q3").await;
+        ingest_extraction(
+            &db,
+            &emb,
+            bd1,
+            "maria helps q3",
+            extraction(&["Maria", "Q3"], &[("Maria", "helps", "Q3")]),
+        )
+        .await
+        .unwrap();
+        ingest_extraction(
+            &db,
+            &emb,
+            bd2,
+            "beta helps q3",
+            extraction(&["Beta", "Q3"], &[("Beta", "helps", "Q3")]),
+        )
+        .await
+        .unwrap();
+        let maria = db_concept_id_for_label(&db, "Maria").await;
+        let beta = db_concept_id_for_label(&db, "Beta").await;
+        let q3 = db_concept_id_for_label(&db, "Q3").await;
+        let suggestion = seed_suggestion(&db, bd2, beta, maria).await;
+
+        approve_merge_suggestion(&db, suggestion).await.unwrap();
+
+        // Both asserted →Q3[helps]; after fold they collide on (Maria, helps, Q3)
+        // → one edge, provenance unioned (ADR-0002 accretion).
+        let edge = find_edge(&db, maria, "helps", q3)
+            .await
+            .unwrap()
+            .expect("merged edge present");
+        let mut prov = edge_provenance(&db, edge.id).await.unwrap();
+        prov.sort_unstable();
+        assert_eq!(prov, vec![bd1, bd2]);
+        assert_eq!(count_edges(&db).await, 1, "duplicate edges merged into one");
+        assert!(get_concept(&db, beta).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn reject_merge_keeps_concepts_separate_and_drops_suggestion() {
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd1 = seed_braindump(&db, "maria").await;
+        let bd2 = seed_braindump(&db, "beta").await;
+        ingest_extraction(&db, &emb, bd1, "maria", extraction(&["Maria"], &[]))
+            .await
+            .unwrap();
+        ingest_extraction(&db, &emb, bd2, "beta", extraction(&["Beta"], &[]))
+            .await
+            .unwrap();
+        let maria = db_concept_id_for_label(&db, "Maria").await;
+        let beta = db_concept_id_for_label(&db, "Beta").await;
+        let suggestion = seed_suggestion(&db, bd2, beta, maria).await;
+
+        reject_merge_suggestion(&db, suggestion).await.unwrap();
+
+        assert!(
+            get_concept(&db, maria).await.unwrap().is_some(),
+            "keeper survives reject"
+        );
+        assert!(
+            get_concept(&db, beta).await.unwrap().is_some(),
+            "fold concept survives reject"
+        );
+        assert_eq!(
+            concept_provenance(&db, maria).await.unwrap(),
+            vec![bd1],
+            "provenance unchanged on reject"
+        );
+        assert!(
+            !merge_suggestions(&db)
+                .await
+                .unwrap()
+                .iter()
+                .any(|s| s.id == suggestion),
+            "rejected suggestion dropped from the queue"
+        );
+    }
+
+    #[tokio::test]
+    async fn approve_missing_suggestion_is_not_found() {
+        let db = test_db();
+        let result = approve_merge_suggestion(&db, 9999).await;
+        assert!(
+            matches!(result, Err(Error::NotFound(_))),
+            "approving a missing suggestion is NotFound: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reject_missing_suggestion_is_not_found() {
+        let db = test_db();
+        let result = reject_merge_suggestion(&db, 9999).await;
+        assert!(
+            matches!(result, Err(Error::NotFound(_))),
+            "rejecting a missing suggestion is NotFound: {result:?}"
+        );
     }
 
     // --- test helpers ---

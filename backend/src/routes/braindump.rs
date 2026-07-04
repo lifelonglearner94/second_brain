@@ -16,6 +16,7 @@
 //! [`crate::graph::ingest_extraction`].
 
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::Json;
 use serde::Deserialize;
 
@@ -121,4 +122,19 @@ pub async fn edit(
         "edit: re-extraction + accretion complete"
     );
     Ok(Json(braindump))
+}
+
+/// `DELETE /braindumps/:id` — remove a braindump and cascade through the graph
+/// (ADR-0002 / ADR-0007 / ADR-0010). The braindump's id drops from every
+/// concept's extraction provenance and every edge's `asserted_by`; a concept
+/// vanishes when its last extracting braindump is removed, an edge vanishes
+/// when its last asserter is removed, and an edge whose endpoint concept
+/// vanishes is cascade-deleted (ADR-0010 addendum). `404` if no such braindump.
+pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> Result<StatusCode> {
+    let deleted = graph::delete_braindump(&state.db, id).await?;
+    if !deleted {
+        return Err(Error::NotFound(format!("braindump {id} not found")));
+    }
+    tracing::debug!(braindump_id = id, "braindump deleted: provenance cascaded");
+    Ok(StatusCode::NO_CONTENT)
 }
