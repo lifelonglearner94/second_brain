@@ -1484,4 +1484,397 @@ mod tests {
             .unwrap();
         assert_eq!(snapshot_rows, 1, "one snapshot row per proposal");
     }
+
+    /// Propose a pending thematic inference (helper for the endorse tests).
+    async fn seed_pending_thematic(
+        db: &Db,
+        source: i64,
+        target: i64,
+        proposed_type: &str,
+        cluster: Vec<i64>,
+    ) -> ChatInferenceProposal {
+        propose_thematic_inference(db, source, target, proposed_type, cluster, None)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn endorse_thematic_persists_edge_with_thematic_provenance_and_snapshot() {
+        // ADR-0006 + ADR-0009: on endorsement the edge persists with
+        // `asserted_by: [Chat_Inference_ID, mode: thematic_inference]` and
+        // the frozen Thematic Snapshot attached to the provenance row. The
+        // snapshot_id on edge_inference_provenance must match the proposal's
+        // snapshot — the receipt travels with the edge so the user can audit
+        // the ephemeral cluster months later.
+        let db = test_db();
+        let (maria, q3, beta, _bd) = seed_cluster(&db).await;
+        let proposal = seed_pending_thematic(&db, maria, beta, "endangers", vec![maria, q3, beta]).await;
+        let snapshot_id = proposal.snapshot.as_ref().expect("snapshot present").id;
+
+        let endorsed = endorse_inference_proposal(&db, proposal.id).await.unwrap();
+        assert_eq!(endorsed.status, STATUS_ENDORSED);
+        assert!(endorsed.resolved_at.is_some());
+
+        // The direct edge Maria —[endangers]→ Beta persists.
+        let edge = crate::graph::find_edge(&db, maria, "endangers", beta)
+            .await
+            .unwrap()
+            .expect("endorsed thematic edge persisted");
+        assert_eq!(edge.original_type, "endangers");
+        // Type history initialised at index 0 (ADR-0003).
+        let history = crate::graph::edge_type_history(&db, edge.id).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].seq_index, 0);
+        assert_eq!(history[0].type_slug, "endangers");
+        // Provenance: this proposal is the asserter, origin thematic, with snapshot.
+        let assertions = edge_inference_asserted_by(&db, edge.id).await.unwrap();
+        assert_eq!(assertions.len(), 1);
+        assert_eq!(assertions[0].chat_inference_id, proposal.id);
+        assert_eq!(assertions[0].mode, THEMATIC_MODE);
+        assert_eq!(
+            assertions[0].snapshot_id, Some(snapshot_id),
+            "the frozen snapshot is attached to the persisted provenance"
+        );
+        // No braindump provenance — the inference is the sole origin.
+        assert!(
+            crate::graph::edge_provenance(&db, edge.id).await.unwrap().is_empty(),
+            "thematic inference edge has no braindump asserter"
+        );
+        // The snapshot row is unchanged (frozen receipt, not re-evaluated).
+        let refreshed = get_inference_proposal(&db, proposal.id).await.unwrap().unwrap();
+        assert_eq!(
+            refreshed.snapshot.as_ref().unwrap().id,
+            snapshot_id,
+            "snapshot id stable across endorse"
+        );
+    }
+
+    #[tokio::test]
+    async fn endorse_thematic_accretes_onto_existing_edge_with_snapshot() {
+        // ADR-0002 accretion: if the direct edge already exists (asserted by
+        // a braindump), endorsing a thematic inference adds the inference as
+        // a co-asserter with its snapshot, rather than duplicating the edge.
+        let db = test_db();
+        let emb = fake_embedding();
+        // Seed the cluster path Maria —[endangers]→ Q3 —[depends_on]→ Beta.
+        let bd_path = seed_braindump(&db, "maria endangers q3 which beta depends on").await;
+        ingest_extraction(
+            &db,
+            &emb,
+            bd_path,
+            "maria endangers q3 which beta depends on",
+            extraction(
+                &["Maria", "Q3 launch", "Beta release"],
+                &[
+                    ("Maria", "endangers", "Q3 launch"),
+                    ("Q3 launch", "depends_on", "Beta release"),
+                ],
+            ),
+        )
+        .await
+        .unwrap();
+        let maria = concept_id(&db, "Maria").await;
+        let q3 = concept_id(&db, "Q3 launch").await;
+        let beta = concept_id(&db, "Beta release").await;
+        // Separately assert the direct edge Maria —[endangers]→ Beta.
+        let bd_direct = seed_braindump(&db, "maria endangers the beta release directly").await;
+        ingest_extraction(
+            &db,
+            &emb,
+            bd_direct,
+            "maria endangers the beta release directly",
+            extraction(
+                &["Maria", "Beta release"],
+                &[("Maria", "endangers", "Beta release")],
+            ),
+        )
+        .await
+        .unwrap();
+        let existing_edge = crate::graph::find_edge(&db, maria, "endangers", beta)
+            .await
+            .unwrap()
+            .expect("direct edge pre-exists");
+
+        let proposal =
+            seed_pending_thematic(&db, maria, beta, "endangers", vec![maria, q3, beta]).await;
+        endorse_inference_proposal(&db, proposal.id).await.unwrap();
+
+        // Same edge (no duplicate), now asserted by both the braindump and
+        // the thematic inference with its snapshot.
+        let edge = crate::graph::find_edge(&db, maria, "endangers", beta)
+            .await
+            .unwrap()
+            .expect("edge still present");
+        assert_eq!(edge.id, existing_edge.id, "edge accreted, not duplicated");
+        let assertions = edge_inference_asserted_by(&db, edge.id).await.unwrap();
+        assert_eq!(assertions.len(), 1);
+        assert_eq!(assertions[0].chat_inference_id, proposal.id);
+        assert_eq!(assertions[0].mode, THEMATIC_MODE);
+        assert!(assertions[0].snapshot_id.is_some(), "snapshot attached on accretion");
+    }
+
+    #[tokio::test]
+    async fn thematic_snapshot_is_immutable_across_partition_evolution() {
+        // ADR-0009: endorsement is immutable; the snapshot is a frozen receipt,
+        // never re-evaluated as the partition evolves. After endorsing a
+        // thematic proposal, adding more braindumps (which changes the graph
+        // topology and would produce a different Louvain partition) must NOT
+        // change the snapshot's braindump_ids or concept_ids — the receipt is
+        // frozen at proposal time.
+        let db = test_db();
+        let (maria, q3, beta, _bd) = seed_cluster(&db).await;
+        let proposal =
+            seed_pending_thematic(&db, maria, beta, "endangers", vec![maria, q3, beta]).await;
+        let snapshot_before = proposal.snapshot.clone().unwrap();
+        endorse_inference_proposal(&db, proposal.id).await.unwrap();
+
+        // Add a new braindump that changes the graph topology (a new concept
+        // + edge). The partition that motivated the proposal is now stale.
+        let emb = fake_embedding();
+        let bd_new = seed_braindump(&db, "gamma produces delta").await;
+        ingest_extraction(
+            &db,
+            &emb,
+            bd_new,
+            "gamma produces delta",
+            extraction(&["Gamma", "Delta"], &[("Gamma", "produces", "Delta")]),
+        )
+        .await
+        .unwrap();
+
+        // The endorsed proposal's snapshot is unchanged — frozen receipt.
+        let refreshed = get_inference_proposal(&db, proposal.id).await.unwrap().unwrap();
+        let snapshot_after = refreshed.snapshot.as_ref().unwrap();
+        assert_eq!(snapshot_after.id, snapshot_before.id, "snapshot id stable");
+        assert_eq!(
+            snapshot_after.braindump_ids, snapshot_before.braindump_ids,
+            "braindump_ids frozen — not recomputed"
+        );
+        assert_eq!(
+            snapshot_after.concept_ids, snapshot_before.concept_ids,
+            "concept_ids frozen — not recomputed"
+        );
+        // The edge's provenance snapshot_id is also stable.
+        let edge = crate::graph::find_edge(&db, maria, "endangers", beta)
+            .await
+            .unwrap()
+            .unwrap();
+        let assertions = edge_inference_asserted_by(&db, edge.id).await.unwrap();
+        assert_eq!(assertions[0].snapshot_id, Some(snapshot_before.id));
+    }
+
+    #[tokio::test]
+    async fn thematic_and_structural_inferences_are_distinguishable_by_origin_tag() {
+        // ADR-0006: the explicit origin tag lets the HITL queue distinguish
+        // graph-backed proposals from LLM-hallucinated hypotheses. A thematic
+        // and a structural proposal for the same edge carry different modes;
+        // after both are endorsed, the edge's provenance lists both origins.
+        let db = test_db();
+        let (maria, q3, beta, _bd) = seed_cluster(&db).await;
+
+        // Structural: the real path Maria —[endangers]→ Q3 —[depends_on]→ Beta.
+        let structural = seed_pending(
+            &db,
+            maria,
+            beta,
+            "endangers",
+            vec![hop(maria, "endangers", q3), hop(q3, "depends_on", beta)],
+        )
+        .await;
+        // Thematic: a Louvain-motivated bridge between the same pair.
+        let thematic =
+            seed_pending_thematic(&db, maria, beta, "helps", vec![maria, q3, beta]).await;
+
+        assert_eq!(structural.mode, STRUCTURAL_MODE);
+        assert_eq!(thematic.mode, THEMATIC_MODE);
+        assert!(
+            structural.snapshot.is_none(),
+            "structural carries no snapshot"
+        );
+        assert!(thematic.snapshot.is_some(), "thematic carries a snapshot");
+
+        // Endorse both — they persist as different typed edges (endangers vs
+        // helps) with distinguishable provenance origins.
+        endorse_inference_proposal(&db, structural.id).await.unwrap();
+        endorse_inference_proposal(&db, thematic.id).await.unwrap();
+
+        let endanger_edge = crate::graph::find_edge(&db, maria, "endangers", beta)
+            .await
+            .unwrap()
+            .unwrap();
+        let helps_edge = crate::graph::find_edge(&db, maria, "helps", beta)
+            .await
+            .unwrap()
+            .unwrap();
+        let endanger_assertions = edge_inference_asserted_by(&db, endanger_edge.id).await.unwrap();
+        let helps_assertions = edge_inference_asserted_by(&db, helps_edge.id).await.unwrap();
+        assert_eq!(endanger_assertions[0].mode, STRUCTURAL_MODE);
+        assert!(endanger_assertions[0].snapshot_id.is_none());
+        assert_eq!(helps_assertions[0].mode, THEMATIC_MODE);
+        assert!(helps_assertions[0].snapshot_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn propose_thematic_rejects_self_edge() {
+        let db = test_db();
+        let (maria, q3, _beta, _bd) = seed_cluster(&db).await;
+        let err = propose_thematic_inference(&db, maria, maria, "endangers", vec![maria, q3], None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
+        assert!(err.to_string().contains("distinct"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn propose_thematic_rejects_endpoints_not_in_cluster() {
+        let db = test_db();
+        let (maria, q3, beta, _bd) = seed_cluster(&db).await;
+        // Maria is in the cluster but the cluster list omits Beta — a
+        // thematic inference must bridge cluster-mates.
+        let err = propose_thematic_inference(&db, maria, beta, "endangers", vec![maria, q3], None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
+        assert!(err.to_string().contains("cluster-mates"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn propose_thematic_rejects_unsanctioned_type() {
+        let db = test_db();
+        let (maria, q3, beta, _bd) = seed_cluster(&db).await;
+        let err = propose_thematic_inference(&db, maria, beta, "bamboozles", vec![maria, q3, beta], None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
+        assert!(err.to_string().contains("/ontology/propose"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn propose_thematic_rejects_nonexistent_cluster_concept() {
+        let db = test_db();
+        let (maria, q3, beta, _bd) = seed_cluster(&db).await;
+        let ghost = 9999;
+        let err = propose_thematic_inference(
+            &db,
+            maria,
+            beta,
+            "endangers",
+            vec![maria, q3, beta, ghost],
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
+        assert!(err.to_string().contains("does not exist"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn propose_thematic_rejects_cluster_with_no_braindump_evidence() {
+        // A cluster of concepts with no braindump-backed edges between them
+        // has no thematic density from user thoughts. A thematic inference
+        // must rest on user evidence, not LLM-on-LLM deduction.
+        let db = test_db();
+        let emb = fake_embedding();
+        // Two concepts extracted from separate braindumps, no edges between them.
+        let bd1 = seed_braindump(&db, "thinking about alpha").await;
+        ingest_extraction(&db, &emb, bd1, "thinking about alpha", extraction(&["Alpha"], &[]))
+            .await
+            .unwrap();
+        let bd2 = seed_braindump(&db, "thinking about beta").await;
+        ingest_extraction(&db, &emb, bd2, "thinking about beta", extraction(&["Beta"], &[]))
+            .await
+            .unwrap();
+        let alpha = concept_id(&db, "Alpha").await;
+        let beta = concept_id(&db, "Beta").await;
+
+        let err = propose_thematic_inference(
+            &db,
+            alpha,
+            beta,
+            "endangers",
+            vec![alpha, beta],
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
+        assert!(
+            err.to_string().contains("no braindump-backed edges"),
+            "{err:?}"
+        );
+        // No snapshot or proposal created.
+        let snapshot_rows: i64 = db
+            .run(|conn| Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(snapshot_rows, 0, "no snapshot written on rejection");
+        assert!(list_inference_proposals(&db).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn propose_thematic_rejects_empty_type() {
+        let db = test_db();
+        let (maria, q3, beta, _bd) = seed_cluster(&db).await;
+        let err = propose_thematic_inference(&db, maria, beta, "  ", vec![maria, q3, beta], None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn propose_thematic_rejects_empty_cluster() {
+        let db = test_db();
+        let (maria, _q3, beta, _bd) = seed_cluster(&db).await;
+        let err = propose_thematic_inference(&db, maria, beta, "endangers", vec![], None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn list_returns_thematic_and_structural_proposals_oldest_first() {
+        let db = test_db();
+        let (maria, q3, beta, _bd) = seed_cluster(&db).await;
+        let p1 = seed_pending(
+            &db,
+            maria,
+            beta,
+            "endangers",
+            vec![hop(maria, "endangers", q3), hop(q3, "depends_on", beta)],
+        )
+        .await;
+        let p2 = seed_pending_thematic(&db, maria, beta, "helps", vec![maria, q3, beta]).await;
+        let listed = list_inference_proposals(&db).await.unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].id, p1.id);
+        assert_eq!(listed[1].id, p2.id);
+        assert_eq!(listed[0].mode, STRUCTURAL_MODE);
+        assert_eq!(listed[1].mode, THEMATIC_MODE);
+        assert!(listed[0].snapshot.is_none());
+        assert!(listed[1].snapshot.is_some());
+    }
+
+    #[tokio::test]
+    async fn reject_thematic_keeps_graph_untouched_and_marks_rejected() {
+        let db = test_db();
+        let (maria, q3, beta, _bd) = seed_cluster(&db).await;
+        let proposal =
+            seed_pending_thematic(&db, maria, beta, "endangers", vec![maria, q3, beta]).await;
+
+        let rejected = reject_inference_proposal(&db, proposal.id).await.unwrap();
+        assert_eq!(rejected.status, STATUS_REJECTED);
+        assert!(rejected.resolved_at.is_some());
+        assert!(
+            crate::graph::find_edge(&db, maria, "endangers", beta)
+                .await
+                .unwrap()
+                .is_none(),
+            "no edge persisted on reject"
+        );
+        // The snapshot row remains (audit trail of what was proposed) but the
+        // proposal is no longer pending.
+        let refreshed = get_inference_proposal(&db, proposal.id).await.unwrap().unwrap();
+        assert_eq!(refreshed.status, STATUS_REJECTED);
+        assert!(refreshed.snapshot.is_some(), "snapshot preserved on reject");
+    }
 }
