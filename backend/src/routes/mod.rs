@@ -13,6 +13,7 @@ mod auth;
 mod braindump;
 mod health;
 mod ontology;
+mod retrieval;
 
 /// Build the full router. State is threaded in here (rather than via
 /// `.with_state` on the caller) because the auth middleware needs it at
@@ -41,6 +42,7 @@ pub fn router(state: AppState) -> Router {
             "/braindumps/{id}",
             get(braindump::read).patch(braindump::edit),
         )
+        .route("/retrieve", post(retrieval::retrieve))
         .route("/admin/logs", get(admin::logs))
         .route_layer(from_fn_with_state(state.clone(), require_session));
 
