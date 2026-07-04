@@ -4,3 +4,12 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Rust
+target/
+**/*.rs.bk
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal

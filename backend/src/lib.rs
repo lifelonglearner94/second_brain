@@ -1,0 +1,15 @@
+//! Second Brain backend — the Rust/Axum orchestrator and graph engine.
+//!
+//! Module layout is intentionally seam-first (per the skeleton issue):
+//! the HTTP layer, DB access, and the LLM/embedding clients are behind traits
+//! so later slices plug in real implementations without rewiring call sites.
+
+pub mod config;
+pub mod db;
+pub mod embedding;
+pub mod error;
+pub mod llm;
+pub mod routes;
+pub mod state;
+
+pub use db::Db;
