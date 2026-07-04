@@ -7,6 +7,10 @@
 	import { loadViewport, saveViewport } from '$lib/state/viewport';
 	import { loadSpatialViewGraph } from '$lib/graph/load';
 	import { buildGraphData, type GraphData, type GraphNode, type GraphLink } from '$lib/graph/build';
+	import { mergeIntoGraph } from '$lib/graph/merge';
+	import type { GlobalTopologySnapshot } from '$lib/api/client';
+	import { createIngestApi, type IngestResponse } from '$lib/capture/ingest';
+	import ActiveCapture from '$lib/capture/ActiveCapture.svelte';
 
 	const HIGHLIGHT = '#ffffff';
 
@@ -52,6 +56,32 @@
 
 	let graphContainer = $state<HTMLDivElement | null>(null);
 	let fg: FgInstance | null = null;
+	let snapshot = $state<GlobalTopologySnapshot | null>(null);
+	let deltaCursor = $state(0);
+
+	const deepgramApiKey = import.meta.env.VITE_DEEPGRAM_API_KEY as string | undefined;
+	const ingestApi = createIngestApi(apiClient, () => deltaCursor);
+
+	function maxCreatedAt(snap: GlobalTopologySnapshot): number {
+		let max = 0;
+		for (const c of snap.concepts) {
+			const t = Number(c.created_at);
+			if (Number.isFinite(t) && t > max) max = t;
+		}
+		for (const e of snap.edges) {
+			const t = Number(e.created_at);
+			if (Number.isFinite(t) && t > max) max = t;
+		}
+		return max;
+	}
+
+	function onIngest(res: IngestResponse): void {
+		if (!snapshot || !fg) return;
+		const merged = mergeIntoGraph(snapshot, res);
+		snapshot = merged;
+		deltaCursor = res.cursor;
+		fg.graphData(buildGraphData(merged));
+	}
 	async function onLogout() {
 		busy = true;
 		logoutError = null;
@@ -91,11 +121,13 @@
 
 		(async () => {
 			try {
-				const loaded = await loadSpatialViewGraph(apiClient, idb);
-				if (destroyed) return;
-				fetchedAtLabel = loaded.source === 'cache' ? loaded.snapshot.fetchedAt : null;
-				const data = buildGraphData(loaded.snapshot);
-				await renderGraph(data, loaded.source === 'cache' ? 'offline' : 'ready');
+			const loaded = await loadSpatialViewGraph(apiClient, idb);
+			if (destroyed) return;
+			fetchedAtLabel = loaded.source === 'cache' ? loaded.snapshot.fetchedAt : null;
+			snapshot = loaded.snapshot;
+			deltaCursor = maxCreatedAt(loaded.snapshot);
+			const data = buildGraphData(loaded.snapshot);
+			await renderGraph(data, loaded.source === 'cache' ? 'offline' : 'ready');
 			} catch (e) {
 				if (destroyed) return;
 				errorMessage = e instanceof Error ? e.message : String(e);
@@ -193,6 +225,10 @@
 		{/if}
 	</header>
 
+	<section class="capture-section" data-testid="capture-section">
+		<ActiveCapture ingest={ingestApi} {deepgramApiKey} oningest={onIngest} />
+	</section>
+
 	<section class="graph-section" data-testid="graph-view" aria-live="polite">
 		<div class="graph-canvas" bind:this={graphContainer}></div>
 
@@ -288,9 +324,12 @@
 		border: 1px solid #2a2f3a;
 		border-radius: 0.5rem;
 		overflow: hidden;
-		block-size: calc(100vh - 7rem);
-		min-block-size: 24rem;
+		block-size: calc(100vh - 13rem);
+		min-block-size: 20rem;
 		background: #0b0d12;
+	}
+	.capture-section {
+		margin-block-end: 1rem;
 	}
 	.graph-canvas {
 		position: absolute;

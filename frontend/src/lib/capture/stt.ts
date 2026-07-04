@@ -26,3 +26,26 @@ export async function chooseSttSource(opts: SttSourceOptions): Promise<SttSource
 	}
 	return null;
 }
+
+export type SttSourcePair = {
+	primary: SttSource | null;
+	fallback: SttSource | null;
+};
+
+async function webSpeechSource(opts: SttSourceOptions): Promise<SttSource> {
+	if (opts.buildWebSpeech) return opts.buildWebSpeech();
+	const { WebSpeechSttSource } = await import('./web-speech');
+	return new WebSpeechSttSource();
+}
+
+export async function buildSttSources(opts: SttSourceOptions): Promise<SttSourcePair> {
+	if (opts.deepgramApiKey) {
+		const primary = await chooseSttSource(opts);
+		const fallback = opts.webSpeechAvailable ? await webSpeechSource(opts) : null;
+		return { primary, fallback };
+	}
+	if (opts.webSpeechAvailable) {
+		return { primary: await webSpeechSource(opts), fallback: null };
+	}
+	return { primary: null, fallback: null };
+}
