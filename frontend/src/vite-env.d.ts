@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
 	readonly VITE_BACKEND_BASE_URL?: string;
+	readonly VITE_DEEPGRAM_API_KEY?: string;
 }
 
 interface ImportMeta {
