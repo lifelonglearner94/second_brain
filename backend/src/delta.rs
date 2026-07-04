@@ -25,7 +25,7 @@ use serde::Serialize;
 
 use crate::db::{now_seconds, Db};
 use crate::error::Result;
-use crate::graph::Concept;
+use crate::graph::{current_type_subquery, Concept};
 
 /// The delta-sync response: every change since the client's cursor, plus a
 /// fresh cursor for the next pull.
@@ -117,15 +117,12 @@ fn added_concepts_since(conn: &rusqlite::Connection, since: i64) -> Result<Vec<C
 }
 
 fn added_edges_since(conn: &rusqlite::Connection, since: i64) -> Result<Vec<DeltaEdge>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
-                e.created_at,
-                (SELECT type_slug FROM edge_type_history
-                 WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1) AS current_type
-         FROM edges e
-         WHERE e.created_at > ?1
-         ORDER BY e.id",
-    )?;
+                e.created_at, ({}) AS current_type
+         FROM edges e WHERE e.created_at > ?1 ORDER BY e.id",
+        current_type_subquery()
+    ))?;
     let rows = stmt
         .query_map(params![since], |r| {
             Ok(DeltaEdge {
@@ -160,18 +157,16 @@ fn tombstoned_since(conn: &rusqlite::Connection, kind: &str, since: i64) -> Resu
 /// carrying their current type, so including them here would double-report.
 /// `current_type` is the projection of the last history entry (ADR-0003).
 fn retagged_edges_since(conn: &rusqlite::Connection, since: i64) -> Result<Vec<RetaggedEdge>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
-                (SELECT type_slug FROM edge_type_history
-                 WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1) AS current_type
+                ({}) AS current_type
          FROM edges e
-         WHERE e.created_at <= ?1
-           AND EXISTS (
-               SELECT 1 FROM edge_type_history eth
-               WHERE eth.edge_id = e.id AND eth.seq_index > 0 AND eth.created_at > ?1
-           )
+         WHERE e.created_at <= ?1 AND EXISTS (
+             SELECT 1 FROM edge_type_history eth
+             WHERE eth.edge_id = e.id AND eth.seq_index > 0 AND eth.created_at > ?1)
          ORDER BY e.id",
-    )?;
+        current_type_subquery()
+    ))?;
     let rows = stmt
         .query_map(params![since], |r| {
             Ok(RetaggedEdge {

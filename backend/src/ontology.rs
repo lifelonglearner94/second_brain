@@ -19,6 +19,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::db::{now_seconds, Db};
 use crate::error::{Error, Result};
+use crate::graph::{current_type_subquery, vec_to_blob};
 use crate::llm::Llm;
 
 /// Cosine similarity at or above which a proposed type is deemed a 1:1
@@ -340,14 +341,10 @@ pub async fn current_edge_type(db: &Db, edge_id: i64) -> Result<Option<String>> 
 pub async fn edges_with_current_type(db: &Db, slug: &str) -> Result<Vec<i64>> {
     let slug = slug.to_string();
     db.run(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT e.id FROM edges e
-             WHERE (
-                 SELECT type_slug FROM edge_type_history
-                 WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1
-             ) = ?1
-             ORDER BY e.id",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT e.id FROM edges e WHERE ({}) = ?1 ORDER BY e.id",
+            current_type_subquery()
+        ))?;
         let ids = stmt
             .query_map(params![slug], |r| r.get::<_, i64>(0))?
             .collect::<rusqlite::Result<_>>()?;
@@ -391,18 +388,24 @@ pub async fn knn_type(db: &Db, query_vec: &[f32]) -> Result<Option<(String, f32)
     .await
 }
 
+/// Whether a slug already exists in the ontology (connection-scoped helper
+/// for use inside `db.run` closures).
+pub(crate) fn ontology_slug_exists_conn(
+    conn: &rusqlite::Connection,
+    slug: &str,
+) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM ontology WHERE slug = ?1",
+        params![slug],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
 /// Whether a slug already exists in the ontology.
 pub async fn ontology_slug_exists(db: &Db, slug: &str) -> Result<bool> {
     let slug = slug.to_string();
-    db.run(move |conn| {
-        let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM ontology WHERE slug = ?1",
-            params![slug],
-            |r| r.get(0),
-        )?;
-        Ok(n > 0)
-    })
-    .await
+    db.run(move |conn| ontology_slug_exists_conn(conn, &slug)).await
 }
 
 /// All ontology types as `(slug, label, description)`, ordered by `id`. Used
@@ -589,13 +592,14 @@ fn append_type_history_conn(
 async fn edge_endpoints_and_type(db: &Db, edge_id: i64) -> Result<(String, String, String)> {
     db.run(move |conn| {
         let row = conn.query_row(
-            "SELECT sc.label, tc.label,
-                    (SELECT type_slug FROM edge_type_history
-                     WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1)
-             FROM edges e
-             JOIN concepts sc ON sc.id = e.source_concept_id
-             JOIN concepts tc ON tc.id = e.target_concept_id
-             WHERE e.id = ?1",
+            &format!(
+                "SELECT sc.label, tc.label, ({})
+                 FROM edges e
+                 JOIN concepts sc ON sc.id = e.source_concept_id
+                 JOIN concepts tc ON tc.id = e.target_concept_id
+                 WHERE e.id = ?1",
+                current_type_subquery()
+            ),
             params![edge_id],
             |r| {
                 Ok((
@@ -662,15 +666,6 @@ impl RefactorRunner {
 /// out-of-band.
 pub async fn await_pending_refactors(state: &crate::state::AppState) {
     state.refactor_runner.await_all().await;
-}
-
-/// f32 slice → little-endian byte blob, the on-disk format sqlite-vec expects.
-fn vec_to_blob(v: &[f32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(v.len() * 4);
-    for f in v {
-        bytes.extend_from_slice(&f.to_le_bytes());
-    }
-    bytes
 }
 
 #[cfg(test)]

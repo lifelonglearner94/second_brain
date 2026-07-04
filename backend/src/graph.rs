@@ -240,12 +240,12 @@ fn accrete(
             outcome.edges_rejected += 1;
             continue;
         }
-        if let Some(edge_id) = find_edge_id(conn, source_id, &edge.type_slug, target_id)? {
+        if let Some(edge_id) = find_edge_id_conn(conn, source_id, &edge.type_slug, target_id)? {
             insert_edge_provenance(conn, edge_id, braindump_id)?;
             outcome.edges_accreted += 1;
         } else {
-            let edge_id = insert_edge(conn, source_id, target_id, &edge.type_slug)?;
-            init_type_history(conn, edge_id, &edge.type_slug)?;
+            let edge_id = insert_edge_conn(conn, source_id, target_id, &edge.type_slug)?;
+            init_type_history_conn(conn, edge_id, &edge.type_slug)?;
             insert_edge_provenance(conn, edge_id, braindump_id)?;
             outcome.edges_created += 1;
         }
@@ -359,7 +359,7 @@ fn insert_edge_provenance(
     Ok(())
 }
 
-fn insert_edge(
+pub(crate) fn insert_edge_conn(
     conn: &rusqlite::Connection,
     source_id: i64,
     target_id: i64,
@@ -376,7 +376,11 @@ fn insert_edge(
 
 /// Initialize the append-only type history at index 0 = the LLM's original
 /// assertion (ADR-0003). The edge's current type is a projection off this log.
-fn init_type_history(conn: &rusqlite::Connection, edge_id: i64, type_slug: &str) -> Result<()> {
+pub(crate) fn init_type_history_conn(
+    conn: &rusqlite::Connection,
+    edge_id: i64,
+    type_slug: &str,
+) -> Result<()> {
     let created_at = now_seconds();
     conn.execute(
         "INSERT INTO edge_type_history (edge_id, seq_index, type_slug, created_at)
@@ -386,7 +390,7 @@ fn init_type_history(conn: &rusqlite::Connection, edge_id: i64, type_slug: &str)
     Ok(())
 }
 
-fn find_edge_id(
+pub(crate) fn find_edge_id_conn(
     conn: &rusqlite::Connection,
     source_id: i64,
     original_type: &str,
@@ -401,6 +405,39 @@ fn find_edge_id(
         )
         .optional()?;
     Ok(id)
+}
+
+/// Whether `source —[type]→ target` exists wearing `type` as its current
+/// projected type (ADR-0003) — the structural-inference traversability check.
+pub(crate) fn edge_exists_with_current_type_conn(
+    conn: &rusqlite::Connection,
+    source_id: i64,
+    type_slug: &str,
+    target_id: i64,
+) -> Result<bool> {
+    let exists = conn
+        .query_row(
+            &format!(
+                "SELECT 1 FROM edges e WHERE e.source_concept_id = ?1
+                 AND e.target_concept_id = ?2 AND ({}) = ?3",
+                current_type_subquery()
+            ),
+            params![source_id, target_id, type_slug],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    Ok(exists)
+}
+
+/// Whether a concept with `id` exists in the graph.
+pub(crate) fn concept_exists_conn(conn: &rusqlite::Connection, id: i64) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM concepts WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
 }
 
 fn insert_merge_suggestion(
@@ -518,6 +555,12 @@ fn tombstone_orphan_concepts(conn: &rusqlite::Connection) -> Result<()> {
         params![now],
     )?;
     Ok(())
+}
+
+/// The canonical current-type projection SQL fragment (ADR-0003): the last
+/// `edge_type_history` entry, correlated on the outer edges alias `e`.
+pub(crate) fn current_type_subquery() -> &'static str {
+    "SELECT type_slug FROM edge_type_history WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1"
 }
 
 /// f32 slice → little-endian byte blob, the on-disk format sqlite-vec expects.
@@ -740,14 +783,12 @@ pub async fn all_concepts(db: &Db) -> Result<Vec<Concept>> {
 /// edge it equals the original assertion.
 pub async fn all_edges_with_current_type(db: &Db) -> Result<Vec<EdgeProjection>> {
     db.run(|conn| {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
-                    e.created_at,
-                    (SELECT type_slug FROM edge_type_history
-                     WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1) AS current_type
-             FROM edges e
-             ORDER BY e.id",
-        )?;
+                    e.created_at, ({}) AS current_type
+             FROM edges e ORDER BY e.id",
+            current_type_subquery()
+        ))?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(EdgeProjection {
@@ -1951,6 +1992,32 @@ mod tests {
             matches!(result, Err(Error::NotFound(_))),
             "rejecting a missing suggestion is NotFound: {result:?}"
         );
+    }
+
+    // --- issue #36: shared graph-mutation vocabulary (characterization) ---
+
+    #[test]
+    fn current_type_subquery_returns_the_projection_fragment() {
+        // ADR-0003: the current type is the last entry of the append-only
+        // edge_type_history, correlated on the outer edges alias `e`. One
+        // fragment, seven former call sites route through it.
+        assert_eq!(
+            current_type_subquery(),
+            "SELECT type_slug FROM edge_type_history WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1"
+        );
+    }
+
+    #[test]
+    fn vec_to_blob_encodes_f32_slice_as_little_endian_bytes() {
+        // The on-disk format sqlite-vec expects (issue #36: one vec_to_blob,
+        // not two). Pin the exact byte layout so the shared helper never
+        // drifts from what sqlite-vec reads.
+        let vec = vec![1.0_f32, 0.0, -0.5];
+        let blob = vec_to_blob(&vec);
+        assert_eq!(blob.len(), 12, "4 bytes per f32");
+        assert_eq!(&blob[0..4], &1.0_f32.to_le_bytes());
+        assert_eq!(&blob[4..8], &0.0_f32.to_le_bytes());
+        assert_eq!(&blob[8..12], &(-0.5_f32).to_le_bytes());
     }
 
     // --- test helpers ---
