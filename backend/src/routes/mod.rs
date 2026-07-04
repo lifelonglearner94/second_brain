@@ -10,6 +10,7 @@ use crate::state::AppState;
 
 mod auth;
 mod health;
+mod ontology;
 
 /// Build the full router. State is threaded in here (rather than via
 /// `.with_state` on the caller) because the auth middleware needs it at
@@ -35,6 +36,7 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(health::health))
+        .route("/ontology", get(ontology::ontology))
         .merge(auth_routes)
         .merge(protected_routes)
         .with_state(state)

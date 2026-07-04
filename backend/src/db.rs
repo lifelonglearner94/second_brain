@@ -111,6 +111,42 @@ fn migrate(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);",
     )?;
+
+    // Issue #3 — the governed edge-type vocabulary (ontology). The LLM draws
+    // types from here and never invents beyond it; governance (propose/approve,
+    // type-embeddings, event-sourced refactor — ADR-0003) is a later slice.
+    //
+    // `id` is a stable surrogate primary key. The future type-embeddings vec
+    // table and the per-edge event-sourced type-history log both FK-reference
+    // `ontology.id`, so those slices append new tables and never re-migrate
+    // this one. `slug` is the machine key the LLM emits; governance may rename
+    // a slug via a refactor (recorded in the history log), but the `id` it
+    // anchors on is immutable. Seeds use `INSERT OR IGNORE` so re-opening a
+    // database is idempotent and never duplicates the day-zero vocabulary.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS ontology (
+            id           INTEGER PRIMARY KEY,
+            slug         TEXT NOT NULL UNIQUE,
+            label        TEXT NOT NULL,
+            description  TEXT NOT NULL,
+            created_at   INTEGER NOT NULL
+        );
+
+        INSERT OR IGNORE INTO ontology (slug, label, description, created_at) VALUES
+        ('relates_to', 'Relates to', 'Generic association between two concepts; the fallback when no more specific type fits.', unixepoch()),
+        ('causes', 'Causes', 'A brings about B; B would not have occurred without A.', unixepoch()),
+        ('affects', 'Affects', 'A influences or has an effect on B, without strictly causing it.', unixepoch()),
+        ('endangers', 'Endangers', 'A puts B at risk or under threat.', unixepoch()),
+        ('helps', 'Helps', 'A benefits, aids, or contributes positively to B.', unixepoch()),
+        ('part_of', 'Part of', 'A is a component or member of the larger whole B.', unixepoch()),
+        ('depends_on', 'Depends on', 'A requires or relies on B to exist or function.', unixepoch()),
+        ('supports', 'Supports', 'A backs, justifies, or lends weight to B.', unixepoch()),
+        ('contradicts', 'Contradicts', 'A is in tension with or opposes B.', unixepoch()),
+        ('precedes', 'Precedes', 'A comes before B in time or sequence.', unixepoch()),
+        ('enables', 'Enables', 'A makes B possible or allows it to happen.', unixepoch()),
+        ('produces', 'Produces', 'A generates, creates, or yields B.', unixepoch()),
+        ('derived_from', 'Derived from', 'A originates from or is abstracted out of B.', unixepoch());",
+    )?;
     Ok(())
 }
 
@@ -137,9 +173,102 @@ mod tests {
                 .collect();
             assert!(names.contains(&"passkeys".to_string()));
             assert!(names.contains(&"sessions".to_string()));
+            assert!(names.contains(&"ontology".to_string()));
             Ok(())
         })
         .await
         .unwrap();
+    }
+
+    /// The day-zero edge-type vocabulary the LLM draws from. Independent of the
+    /// seed implementation: the expected slugs are a known-good literal sourced
+    /// from the issue spec, not recomputed from the migration.
+    const EXPECTED_SEED_SLUGS: &[&str] = &[
+        "relates_to",
+        "causes",
+        "affects",
+        "endangers",
+        "helps",
+        "part_of",
+        "depends_on",
+        "supports",
+        "contradicts",
+        "precedes",
+        "enables",
+        "produces",
+        "derived_from",
+    ];
+
+    #[tokio::test]
+    async fn ontology_table_is_seeded_with_edge_types() {
+        let db = Db::open_in_memory().unwrap();
+        db.run(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT slug, label, description FROM ontology ORDER BY id")?;
+            let rows: Vec<(String, String, String)> = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            assert!(!rows.is_empty(), "ontology must be seeded with edge types");
+
+            let slugs: Vec<&str> = rows.iter().map(|(s, _, _)| s.as_str()).collect();
+            let mut sorted = slugs.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                slugs.len(),
+                sorted.len(),
+                "ontology slugs must be unique: {slugs:?}"
+            );
+
+            for slug in EXPECTED_SEED_SLUGS {
+                assert!(
+                    slugs.contains(slug),
+                    "ontology missing seed slug `{slug}`: {slugs:?}"
+                );
+            }
+            for (slug, label, description) in &rows {
+                assert!(!label.is_empty(), "label for `{slug}` must be non-empty");
+                assert!(
+                    !description.is_empty(),
+                    "description for `{slug}` must be non-empty"
+                );
+            }
+
+            let causes = rows
+                .iter()
+                .find(|(s, _, _)| s == "causes")
+                .expect("causes is seeded");
+            assert_eq!(causes.1, "Causes");
+            assert_eq!(
+                causes.2,
+                "A brings about B; B would not have occurred without A."
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ontology_seed_is_idempotent() {
+        let db = Db::open_in_memory().unwrap();
+        let count_first = db
+            .run(|conn| {
+                Ok(conn.query_row("SELECT COUNT(*) FROM ontology", [], |r| r.get::<_, i64>(0))?)
+            })
+            .await
+            .unwrap();
+        db.run(|conn| migrate(conn).map(|_| ())).await.unwrap();
+        let count_second = db
+            .run(|conn| {
+                Ok(conn.query_row("SELECT COUNT(*) FROM ontology", [], |r| r.get::<_, i64>(0))?)
+            })
+            .await
+            .unwrap();
+        assert!(count_first > 0, "ontology must be seeded on first open");
+        assert_eq!(
+            count_first, count_second,
+            "re-migrating must not duplicate seeds"
+        );
     }
 }
