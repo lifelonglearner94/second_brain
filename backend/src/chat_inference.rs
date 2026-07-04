@@ -1,10 +1,22 @@
-//! Chat write-back, structural mode (issue #11, ADR-0006).
+//! Chat write-back, structural + thematic modes (issues #11 + #13, ADR-0006).
 //!
 //! Chat is not only a read surface (ADR-0005) but a governed write-back
-//! surface. When chat traces an existing multi-hop edge path, it may *propose*
-//! a direct edge summarizing it — a Structural Inference. The proposal is
-//! graph-backed (deterministic, low-risk): its evidence is a traversable edge
-//! path, captured verbatim in the proposal row.
+//! surface. It proposes inferences as candidate edges, routed through the
+//! same fractal governance built for concepts (ADR-0001) and types
+//! (ADR-0003). Two proposal modes, distinct epistemic status:
+//!
+//! - **Structural Inference** (issue #11, `origin: structural_inference`): the
+//!   LLM traces an existing multi-hop edge path and proposes a direct edge
+//!   summarizing it — "the graph supports this; I'm labeling existing
+//!   structure." Graph-backed, deterministic, low-risk. The proposal's
+//!   evidence is a traversable edge path, captured verbatim in `evidence_path`.
+//!
+//! - **Thematic Inference** (issue #13, `origin: thematic_inference`): the LLM
+//!   observes thematic density in the current Thematic Read Model partition
+//!   (ADR-0008) — concepts clustered by Louvain with no connecting edge path —
+//!   and proposes a new edge bridging the gap. Not graph-backed: the evidence
+//!   is a statistical hypothesis from a non-deterministic partition that won't
+//!   exist tomorrow. Riskier by nature.
 //!
 //! The inference-claim is ALWAYS human-gated — no auto-endorse. Endorsing an
 //! LLM deduction is the highest-stakes graph mutation (it can drift the brain
@@ -14,15 +26,15 @@
 //!
 //! On endorsement the edge persists (or accretes, if it already exists) with
 //! provenance recorded in `edge_inference_provenance` as
-//! `asserted_by: [Chat_Inference_ID, mode: structural]` — origin-typed so user
-//! thoughts (braindump provenance, ADR-0002) and LLM deductions stay
-//! distinguishable. Structural inferences carry NO Thematic Snapshot
-//! (ADR-0009): their evidence is the graph itself, always present, recorded in
-//! `evidence_path`.
-//!
-//! Thematic mode (ADR-0006, issue #13) is the riskier, non-graph-backed sibling
-//! and is out of scope here; the `mode` column and the shared queue surface
-//! are sized for it, but only `structural` is emitted by this slice.
+//! `asserted_by: [Chat_Inference_ID, mode: structural|thematic]` — origin-typed
+//! so user thoughts (braindump provenance, ADR-0002) and LLM deductions stay
+//! distinguishable, and within LLM deductions, graph-backed summaries stay
+//! distinguishable from LLM-hallucinated hypotheses. Structural inferences
+//! carry NO Thematic Snapshot (ADR-0009): their evidence is the graph itself,
+//! always present, recorded in `evidence_path`. Thematic inferences carry a
+//! Thematic Snapshot — a frozen capture of the motivating cluster's braindumps
+//! — because the ephemeral evidence must be preserved as an audit trail even
+//! after the cluster dissolves.
 
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -34,6 +46,13 @@ use crate::error::{Error, Result};
 /// graph-backed, deterministic mode — "the graph supports this; I'm labeling
 /// existing structure."
 pub const STRUCTURAL_MODE: &str = "structural_inference";
+
+/// Origin tag for a thematic inference proposal (ADR-0006). The non-graph-
+/// backed, statistical-hypothesis mode — "Louvain clustered these with no
+/// connecting edge path; I'm proposing a bridge." Riskier than structural:
+/// the evidence is an ephemeral Louvain partition that won't exist tomorrow,
+/// so the proposal carries a Thematic Snapshot (ADR-0009) as a frozen receipt.
+pub const THEMATIC_MODE: &str = "thematic_inference";
 
 /// Proposal lifecycle statuses. `pending` is the queue; `endorsed`/`rejected`
 /// are the two HITL termini. There is no auto-endorse.
@@ -52,9 +71,38 @@ pub struct EvidenceEdge {
     pub target_concept_id: i64,
 }
 
+/// A frozen capture of a cluster's composition at the moment a Thematic
+/// Inference is proposed (ADR-0009). The cluster that motivated the proposal
+/// is ephemeral (Louvain is non-deterministic, ADR-0008) and will not exist
+/// tomorrow; the snapshot is the historical receipt that lets the user audit,
+/// months later, exactly why they endorsed a thematic proposal. Endorsement is
+/// immutable — the snapshot is a frozen receipt, never re-evaluated as the
+/// partition evolves.
+///
+/// `braindump_ids` is the braindump evidence whose edges formed the thematic
+/// density — computed backend-side from `edge_provenance` (the braindump
+/// asserters of edges between cluster concepts) so the receipt is a verifiable
+/// computation, not an LLM claim. `concept_ids` is the cluster's concept
+/// composition, from the LLM's observation of the current partition (the only
+/// thing the backend cannot re-derive — the partition is session-scoped and
+/// non-deterministic). Both are frozen at proposal time and survive the
+/// deletion of their constituent braindumps/concepts (no FK — ADR-0009).
+///
+/// Structural inferences carry NO snapshot (ADR-0009): their evidence is the
+/// graph itself, always present, recorded in `evidence_path`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThematicSnapshot {
+    pub id: i64,
+    pub braindump_ids: Vec<i64>,
+    pub concept_ids: Vec<i64>,
+    pub captured_at: i64,
+}
+
 /// A pending or resolved chat-inference proposal (read model). `status` is
 /// `pending`, `endorsed`, or `rejected`. `evidence_path` is the traversable
-/// edge path that backs a structural proposal (empty for thematic — issue #13).
+/// edge path that backs a structural proposal (empty for thematic — not
+/// graph-backed). `snapshot` is the frozen Thematic Snapshot carried by a
+/// thematic proposal (ADR-0009); `None` for structural proposals.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ChatInferenceProposal {
     pub id: i64,
@@ -67,16 +115,20 @@ pub struct ChatInferenceProposal {
     pub status: String,
     pub created_at: i64,
     pub resolved_at: Option<i64>,
+    pub snapshot: Option<ThematicSnapshot>,
 }
 
 /// One chat-inference assertion backing an edge (ADR-0006 origin-typed
-/// provenance). `mode` is `structural_inference` or `thematic_inference`. The
-/// braindump-origin half of `asserted_by` lives in `edge_provenance`
-/// (ADR-0002); this is the chat-inference half.
+/// provenance). `mode` is `structural_inference` or `thematic_inference`.
+/// `snapshot_id` is the frozen Thematic Snapshot for thematic assertions
+/// (ADR-0009); `None` for structural. The braindump-origin half of
+/// `asserted_by` lives in `edge_provenance` (ADR-0002); this is the
+/// chat-inference half.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InferenceAssertion {
     pub chat_inference_id: i64,
     pub mode: String,
+    pub snapshot_id: Option<i64>,
 }
 
 /// Propose a structural inference (ADR-0006 structural mode): a direct edge
@@ -146,8 +198,8 @@ pub async fn propose_structural_inference(
             conn.execute(
                 "INSERT INTO chat_inference_proposals
                     (mode, source_concept_id, target_concept_id, proposed_type,
-                     evidence_path, rationale, status, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     evidence_path, rationale, snapshot_id, status, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8)",
                 params![
                     STRUCTURAL_MODE,
                     source_concept_id,
@@ -170,6 +222,7 @@ pub async fn propose_structural_inference(
                 status: STATUS_PENDING.to_string(),
                 created_at,
                 resolved_at: None,
+                snapshot: None,
             })
         })
         .await?;
@@ -218,13 +271,153 @@ fn validate_path(
     Ok(())
 }
 
-/// Endorse a pending structural inference proposal (ADR-0006): persist the
+/// Propose a thematic inference (ADR-0006 thematic mode): a new edge
+/// `source —[proposed_type]→ target` bridging cluster-mates that Louvain
+/// grouped together but that have no connecting edge path. Not graph-backed —
+/// a statistical hypothesis from a non-deterministic partition that won't
+/// exist tomorrow. The proposal enters the queue as `pending` — NEVER
+/// auto-endorsed. On a later endorse the edge persists with
+/// `asserted_by: [this proposal's id, mode: thematic_inference]` plus the
+/// Thematic Snapshot attached to the provenance.
+///
+/// `cluster_concept_ids` is the LLM's observation of the motivating cluster's
+/// composition (the concepts Louvain grouped together). The backend computes
+/// the snapshot's `braindump_ids` from `edge_provenance` — the braindumps that
+/// asserted edges between cluster concepts — so the frozen receipt is a
+/// verifiable computation, not an LLM claim (ADR-0009). The concept_ids come
+/// from the LLM because the partition is session-scoped and non-deterministic;
+/// the backend cannot re-derive them.
+///
+/// Validation: `proposed_type` must be a governed ontology slug (ADR-0002);
+/// `source` and `target` must be distinct and both in `cluster_concept_ids`
+/// (a thematic inference bridges cluster-mates); every cluster concept must
+/// exist; the computed `braindump_ids` must be non-empty (a cluster with no
+/// braindump-backed edges has no thematic density from user thoughts — a
+/// thematic inference must rest on user evidence, not LLM-on-LLM deduction).
+/// No graph-traversability check: the partition is non-deterministic, so
+/// "no edge path" is the LLM's observation at proposal time; the HITL
+/// reviewer is the gate, and the snapshot is the receipt.
+pub async fn propose_thematic_inference(
+    db: &Db,
+    source_concept_id: i64,
+    target_concept_id: i64,
+    proposed_type: &str,
+    cluster_concept_ids: Vec<i64>,
+    rationale: Option<&str>,
+) -> Result<ChatInferenceProposal> {
+    let proposed_type = proposed_type.trim().to_string();
+    if proposed_type.is_empty() {
+        return Err(Error::BadRequest("proposed_type must be non-empty".into()));
+    }
+    if source_concept_id == target_concept_id {
+        return Err(Error::BadRequest(
+            "source and target must be distinct — a thematic inference bridges two cluster-mates".into(),
+        ));
+    }
+    let mut cluster = cluster_concept_ids;
+    cluster.sort_unstable();
+    cluster.dedup();
+    if cluster.is_empty() {
+        return Err(Error::BadRequest("cluster_concept_ids must be non-empty".into()));
+    }
+    if !cluster.contains(&source_concept_id) || !cluster.contains(&target_concept_id) {
+        return Err(Error::BadRequest(
+            "source_concept_id and target_concept_id must be in cluster_concept_ids — \
+             a thematic inference bridges cluster-mates (ADR-0006)"
+                .into(),
+        ));
+    }
+    let rationale = rationale
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let created_at = now_seconds();
+    let proposal = db
+        .run(move |conn| {
+            if !ontology_slug_exists_conn(conn, &proposed_type)? {
+                return Err(Error::BadRequest(format!(
+                    "proposed type `{proposed_type}` is not in the ontology; \
+                     propose it via POST /ontology/propose and re-propose the \
+                     inference once approved"
+                )));
+            }
+            for &cid in &cluster {
+                if !concept_exists_conn(conn, cid)? {
+                    return Err(Error::BadRequest(format!(
+                        "cluster concept id {cid} does not exist"
+                    )));
+                }
+            }
+            let braindump_ids = compute_cluster_braindump_ids_conn(conn, &cluster)?;
+            if braindump_ids.is_empty() {
+                return Err(Error::BadRequest(
+                    "the motivating cluster has no braindump-backed edges between \
+                     its concepts — no thematic density from user thoughts"
+                        .into(),
+                ));
+            }
+            let braindump_json = serde_json::to_string(&braindump_ids)
+                .map_err(|e| Error::internal(format!("encode braindump_ids: {e}")))?;
+            let concept_json = serde_json::to_string(&cluster)
+                .map_err(|e| Error::internal(format!("encode concept_ids: {e}")))?;
+            conn.execute(
+                "INSERT INTO thematic_snapshots (braindump_ids, concept_ids, captured_at)
+                 VALUES (?1, ?2, ?3)",
+                params![braindump_json, concept_json, created_at],
+            )?;
+            let snapshot_id = conn.last_insert_rowid();
+            let evidence_json = serde_json::to_string(&Vec::<EvidenceEdge>::new())
+                .map_err(|e| Error::internal(format!("encode empty evidence_path: {e}")))?;
+            conn.execute(
+                "INSERT INTO chat_inference_proposals
+                    (mode, source_concept_id, target_concept_id, proposed_type,
+                     evidence_path, rationale, snapshot_id, status, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    THEMATIC_MODE,
+                    source_concept_id,
+                    target_concept_id,
+                    proposed_type,
+                    evidence_json,
+                    rationale,
+                    snapshot_id,
+                    STATUS_PENDING,
+                    created_at
+                ],
+            )?;
+            Ok(ChatInferenceProposal {
+                id: conn.last_insert_rowid(),
+                mode: THEMATIC_MODE.to_string(),
+                source_concept_id,
+                target_concept_id,
+                proposed_type,
+                evidence_path: Vec::new(),
+                rationale,
+                status: STATUS_PENDING.to_string(),
+                created_at,
+                resolved_at: None,
+                snapshot: Some(ThematicSnapshot {
+                    id: snapshot_id,
+                    braindump_ids,
+                    concept_ids: cluster,
+                    captured_at: created_at,
+                }),
+            })
+        })
+        .await?;
+    Ok(proposal)
+}
+
+/// Endorse a pending chat-inference proposal (ADR-0006): persist the
 /// direct edge `source —[proposed_type]→ target` and record the proposal as
 /// its chat-inference asserter. The edge accretes (ADR-0002): if the direct
 /// edge already exists — asserted by a braindump, or by an earlier endorsed
 /// inference — the new assertion is added to its provenance rather than
 /// duplicated. Type history is initialised at index 0 for a newly-created
-/// edge (ADR-0003).
+/// edge (ADR-0003). The proposal's `mode` origin-tags the persisted
+/// provenance (`structural_inference` or `thematic_inference`); for a
+/// thematic proposal, the frozen Thematic Snapshot (ADR-0009) is attached
+/// to the provenance row so the user can audit the ephemeral cluster that
+/// motivated the edge, even after the cluster dissolves.
 ///
 /// `NotFound` if the proposal does not exist; `Conflict` if it is not
 /// `pending` (already endorsed or rejected — endorsement is immutable, no
@@ -242,6 +435,8 @@ pub async fn endorse_inference_proposal(db: &Db, id: i64) -> Result<ChatInferenc
     let source = proposal.source_concept_id;
     let target = proposal.target_concept_id;
     let proposed_type = proposal.proposed_type.clone();
+    let mode = proposal.mode.clone();
+    let snapshot_id = proposal.snapshot.as_ref().map(|s| s.id);
     db.run(move |conn| {
         conn.execute_batch("BEGIN")?;
         match (|| -> Result<()> {
@@ -253,7 +448,7 @@ pub async fn endorse_inference_proposal(db: &Db, id: i64) -> Result<ChatInferenc
                     init_type_history_conn(conn, eid, &proposed_type)?;
                     eid
                 };
-            insert_inference_provenance_conn(conn, edge_id, id, STRUCTURAL_MODE)?;
+            insert_inference_provenance_conn(conn, edge_id, id, &mode, snapshot_id)?;
             let now = now_seconds();
             conn.execute(
                 "UPDATE chat_inference_proposals
@@ -316,9 +511,13 @@ pub async fn reject_inference_proposal(db: &Db, id: i64) -> Result<ChatInference
 pub async fn list_inference_proposals(db: &Db) -> Result<Vec<ChatInferenceProposal>> {
     db.run(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, mode, source_concept_id, target_concept_id, proposed_type,
-                    evidence_path, rationale, status, created_at, resolved_at
-             FROM chat_inference_proposals ORDER BY id",
+            "SELECT p.id, p.mode, p.source_concept_id, p.target_concept_id,
+                    p.proposed_type, p.evidence_path, p.rationale,
+                    p.status, p.created_at, p.resolved_at,
+                    s.id, s.braindump_ids, s.concept_ids, s.captured_at
+             FROM chat_inference_proposals p
+             LEFT JOIN thematic_snapshots s ON p.snapshot_id = s.id
+             ORDER BY p.id",
         )?;
         let rows = stmt
             .query_map([], row_to_proposal)?
@@ -333,9 +532,13 @@ pub async fn get_inference_proposal(db: &Db, id: i64) -> Result<Option<ChatInfer
     db.run(move |conn| {
         let row = conn
             .query_row(
-                "SELECT id, mode, source_concept_id, target_concept_id, proposed_type,
-                        evidence_path, rationale, status, created_at, resolved_at
-                 FROM chat_inference_proposals WHERE id = ?1",
+                "SELECT p.id, p.mode, p.source_concept_id, p.target_concept_id,
+                        p.proposed_type, p.evidence_path, p.rationale,
+                        p.status, p.created_at, p.resolved_at,
+                        s.id, s.braindump_ids, s.concept_ids, s.captured_at
+                 FROM chat_inference_proposals p
+                 LEFT JOIN thematic_snapshots s ON p.snapshot_id = s.id
+                 WHERE p.id = ?1",
                 params![id],
                 row_to_proposal,
             )
@@ -348,6 +551,22 @@ pub async fn get_inference_proposal(db: &Db, id: i64) -> Result<Option<ChatInfer
 fn row_to_proposal(r: &rusqlite::Row) -> rusqlite::Result<ChatInferenceProposal> {
     let evidence_json: String = r.get(5)?;
     let evidence_path: Vec<EvidenceEdge> = serde_json::from_str(&evidence_json).unwrap_or_default();
+    let snapshot = match r.get::<_, Option<i64>>(10)? {
+        Some(id) => {
+            let braindump_json: String = r.get(11)?;
+            let concept_json: String = r.get(12)?;
+            let braindump_ids: Vec<i64> =
+                serde_json::from_str(&braindump_json).unwrap_or_default();
+            let concept_ids: Vec<i64> = serde_json::from_str(&concept_json).unwrap_or_default();
+            Some(ThematicSnapshot {
+                id,
+                braindump_ids,
+                concept_ids,
+                captured_at: r.get(13)?,
+            })
+        }
+        None => None,
+    };
     Ok(ChatInferenceProposal {
         id: r.get(0)?,
         mode: r.get(1)?,
@@ -359,17 +578,19 @@ fn row_to_proposal(r: &rusqlite::Row) -> rusqlite::Result<ChatInferenceProposal>
         status: r.get(7)?,
         created_at: r.get(8)?,
         resolved_at: r.get(9)?,
+        snapshot,
     })
 }
 
 /// The chat-inference assertions backing an edge (ADR-0006 origin-typed
 /// provenance). The braindump-origin half of `asserted_by` lives in
 /// `edge_provenance` (ADR-0002); this is the chat-inference half. An edge's
-/// full asserter list is the union of both.
+/// full asserter list is the union of both. `snapshot_id` is the frozen
+/// Thematic Snapshot for thematic assertions (ADR-0009); `None` for structural.
 pub async fn edge_inference_asserted_by(db: &Db, edge_id: i64) -> Result<Vec<InferenceAssertion>> {
     db.run(move |conn| {
         let mut stmt = conn.prepare(
-            "SELECT chat_inference_id, mode FROM edge_inference_provenance
+            "SELECT chat_inference_id, mode, snapshot_id FROM edge_inference_provenance
              WHERE edge_id = ?1 ORDER BY chat_inference_id",
         )?;
         let rows = stmt
@@ -377,6 +598,7 @@ pub async fn edge_inference_asserted_by(db: &Db, edge_id: i64) -> Result<Vec<Inf
                 Ok(InferenceAssertion {
                     chat_inference_id: r.get(0)?,
                     mode: r.get(1)?,
+                    snapshot_id: r.get(2)?,
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
@@ -474,15 +696,58 @@ fn insert_inference_provenance_conn(
     edge_id: i64,
     chat_inference_id: i64,
     mode: &str,
+    snapshot_id: Option<i64>,
 ) -> Result<()> {
     let created_at = now_seconds();
     conn.execute(
         "INSERT OR IGNORE INTO edge_inference_provenance
-            (edge_id, chat_inference_id, mode, created_at)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![edge_id, chat_inference_id, mode, created_at],
+            (edge_id, chat_inference_id, mode, snapshot_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![edge_id, chat_inference_id, mode, snapshot_id, created_at],
     )?;
     Ok(())
+}
+
+fn concept_exists_conn(conn: &rusqlite::Connection, id: i64) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM concepts WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// Compute the braindump ids whose edges formed the thematic density of a
+/// cluster (ADR-0009): the distinct braindumps that asserted edges (via
+/// `edge_provenance`, ADR-0002) where BOTH endpoints are in the cluster and
+/// the edge is not a self-edge. This is the verifiable, backend-computed half
+/// of the Thematic Snapshot — the receipt of user-thought evidence that
+/// motivated the proposal. Chat-inference-backed edges
+/// (`edge_inference_provenance`) are NOT included: the snapshot captures user
+/// thoughts, not LLM deductions. Uses `json_each` so the cluster is passed as
+/// one JSON parameter regardless of size.
+fn compute_cluster_braindump_ids_conn(
+    conn: &rusqlite::Connection,
+    cluster_concept_ids: &[i64],
+) -> Result<Vec<i64>> {
+    if cluster_concept_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cluster_json = serde_json::to_string(cluster_concept_ids)
+        .map_err(|e| Error::internal(format!("encode cluster_concept_ids: {e}")))?;
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT ep.braindump_id
+         FROM edge_provenance ep
+         JOIN edges e ON ep.edge_id = e.id
+         WHERE e.source_concept_id != e.target_concept_id
+           AND e.source_concept_id IN (SELECT value FROM json_each(?1))
+           AND e.target_concept_id IN (SELECT value FROM json_each(?1))
+         ORDER BY ep.braindump_id",
+    )?;
+    let ids = stmt
+        .query_map(params![cluster_json], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
 }
 
 #[cfg(test)]
@@ -1092,7 +1357,9 @@ mod tests {
     async fn structural_proposal_carries_no_thematic_snapshot() {
         // ADR-0009: structural inferences carry NO Thematic Snapshot — their
         // evidence is the graph itself (the `evidence_path`), always present.
-        // The proposal row has no snapshot column; the endorse writes none.
+        // The `thematic_snapshots` table exists (thematic mode uses it, issue
+        // #13) but structural mode never populates it; the proposal's
+        // `snapshot_id` is NULL and the endorse writes NULL to provenance.
         let db = test_db();
         let (maria, q3, beta) = seed_path(&db).await;
         let proposal = seed_pending(
@@ -1105,25 +1372,116 @@ mod tests {
         .await;
         endorse_inference_proposal(&db, proposal.id).await.unwrap();
 
-        // No snapshot-bearing table is populated by structural mode.
-        let snapshot_tables: i64 = db
-            .run(|conn| {
-                Ok(conn.query_row(
-                    "SELECT count(*) FROM sqlite_master
-                     WHERE type='table' AND name LIKE '%thematic_snapshot%'",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
+        // Structural mode writes no snapshot rows.
+        let snapshot_rows: i64 = db
+            .run(|conn| Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?))
             .await
             .unwrap();
-        assert_eq!(snapshot_tables, 0, "no snapshot table for structural mode");
-        // The assertion carries only the mode — no snapshot reference.
+        assert_eq!(snapshot_rows, 0, "structural mode writes no snapshot");
+        // The proposal's snapshot is None.
+        assert!(proposal.snapshot.is_none(), "structural proposal has no snapshot");
+        // The provenance assertion carries the mode but no snapshot.
         let edge = crate::graph::find_edge(&db, maria, "endangers", beta)
             .await
             .unwrap()
             .unwrap();
         let assertions = edge_inference_asserted_by(&db, edge.id).await.unwrap();
         assert_eq!(assertions[0].mode, STRUCTURAL_MODE);
+        assert!(assertions[0].snapshot_id.is_none(), "structural provenance has no snapshot");
+    }
+
+    // --- issue #13: thematic inference (ADR-0006 thematic mode + ADR-0009) ---
+
+    /// Seed the canonical thematic cluster: `Maria —[endangers]→ Q3 launch
+    /// —[depends_on]→ Beta release`, all extracted from one braindump. Louvain
+    /// sees a single connected component; the braindump that asserted the edges
+    /// is the snapshot evidence. There is no direct Maria→Beta edge — the
+    /// thematic gap the LLM bridges. Returns (maria, q3, beta, cluster_bd).
+    async fn seed_cluster(db: &Db) -> (i64, i64, i64, i64) {
+        let (maria, q3, beta) = seed_path(db).await;
+        let bd: i64 = db
+            .run(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT ep.braindump_id
+                     FROM edge_provenance ep
+                     JOIN edges e ON ep.edge_id = e.id
+                     WHERE e.source_concept_id = ?1 AND e.target_concept_id = ?2
+                     ORDER BY ep.braindump_id LIMIT 1",
+                    params![maria, q3],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        (maria, q3, beta, bd)
+    }
+
+    #[tokio::test]
+    async fn propose_thematic_inference_creates_pending_proposal_with_frozen_snapshot() {
+        // ADR-0006 thematic mode + ADR-0009: the LLM observes a Louvain cluster
+        // (Maria/Q3/Beta — connected by edges but no direct Maria→Beta edge)
+        // and proposes a bridging edge Maria —[endangers]→ Beta. The proposal
+        // carries a Thematic Snapshot: the braindump ids whose edges formed
+        // the thematic density, frozen at proposal time. The proposal is
+        // pending — no auto-endorse.
+        let db = test_db();
+        let (maria, q3, beta, cluster_bd) = seed_cluster(&db).await;
+
+        let proposal = propose_thematic_inference(
+            &db,
+            maria,
+            beta,
+            "endangers",
+            vec![maria, q3, beta],
+            Some("  Louvain clustered Maria/Q3/Beta with no direct Maria→Beta edge  "),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(proposal.mode, THEMATIC_MODE);
+        assert_eq!(proposal.status, STATUS_PENDING);
+        assert_eq!(proposal.source_concept_id, maria);
+        assert_eq!(proposal.target_concept_id, beta);
+        assert_eq!(proposal.proposed_type, "endangers");
+        assert!(
+            proposal.evidence_path.is_empty(),
+            "thematic mode has no evidence path — not graph-backed"
+        );
+        assert_eq!(
+            proposal.rationale.as_deref(),
+            Some("Louvain clustered Maria/Q3/Beta with no direct Maria→Beta edge"),
+            "rationale trimmed"
+        );
+        assert!(proposal.resolved_at.is_none());
+
+        // The snapshot is the frozen receipt: the braindump ids whose edges
+        // formed the density, plus the cluster's concept composition.
+        let snapshot = proposal
+            .snapshot
+            .as_ref()
+            .expect("thematic proposal carries a Thematic Snapshot");
+        assert_eq!(
+            snapshot.braindump_ids, vec![cluster_bd],
+            "snapshot captured the cluster's braindump evidence (computed backend-side)"
+        );
+        assert_eq!(
+            snapshot.concept_ids,
+            vec![maria, q3, beta],
+            "snapshot captured the cluster's composition (LLM's observation)"
+        );
+        // No edge persisted yet — no auto-endorse.
+        assert!(
+            crate::graph::find_edge(&db, maria, "endangers", beta)
+                .await
+                .unwrap()
+                .is_none(),
+            "no edge persisted on a pending thematic proposal"
+        );
+        // The snapshot row is in the table (frozen receipt).
+        let snapshot_rows: i64 = db
+            .run(|conn| Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(snapshot_rows, 1, "one snapshot row per proposal");
     }
 }
