@@ -1,7 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { onMount } from 'svelte';
-	import { session } from '$lib/auth/session';
+	import { session } from '$lib/state/session.svelte';
 
 	let { children } = $props();
 

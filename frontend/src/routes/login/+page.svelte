@@ -3,7 +3,7 @@
 	import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
 	import { apiClient } from '$lib/api';
 	import { registerPasskey, loginPasskey, recoverPasskey } from '$lib/auth/flow';
-	import { session } from '$lib/auth/session';
+	import { session } from '$lib/state/session.svelte';
 
 	let busy = $state<null | 'register' | 'login' | 'recover'>(null);
 	let status = $state<string | null>(null);

@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { apiClient } from '$lib/api';
 	import type { GlobalTopologySnapshot, GraphDelta } from '$lib/api/client';
-	import { session } from '$lib/auth/session';
+	import { session } from '$lib/state/session.svelte';
 	import { createIdb } from '$lib/state/idb';
 	import { loadViewport, saveViewport } from '$lib/state/viewport';
 	import { loadSpatialViewGraph } from '$lib/graph/load';
@@ -21,7 +21,7 @@
 	import { syncDelta, onWindowFocus } from '$lib/graph/delta-sync';
 	import { mergeIntoGraph } from '$lib/graph/merge';
 	import { createIngestApi, type IngestResponse } from '$lib/capture/ingest';
-	import { pendingCaptures } from '$lib/capture/pending-captures';
+	import { pendingCaptures } from '$lib/state/pending-captures.svelte';
 	import ActiveCapture from '$lib/capture/ActiveCapture.svelte';
 
 	const HIGHLIGHT = '#ffffff';

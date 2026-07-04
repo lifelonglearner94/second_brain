@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { apiClient } from '$lib/api';
-	import { pendingCaptures } from '$lib/capture/pending-captures';
+	import { pendingCaptures } from '$lib/state/pending-captures.svelte';
 	import { createIngestApi, type IngestResponse } from '$lib/capture/ingest';
 	import PendingCaptures from '$lib/capture/PendingCaptures.svelte';
 

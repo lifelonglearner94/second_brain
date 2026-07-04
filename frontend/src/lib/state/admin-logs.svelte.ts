@@ -1,3 +1,4 @@
+import { apiClient } from '$lib/api';
 import type { LogEntry, LogsResponse } from '$lib/api/client';
 
 export type AdminLogStatus = 'idle' | 'loading' | 'loaded' | 'error';
@@ -51,3 +52,5 @@ export class AdminLogStore {
 		});
 	});
 }
+
+export const adminLogs = new AdminLogStore(apiClient);

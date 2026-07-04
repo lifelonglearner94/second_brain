@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { apiClient } from '$lib/api';
-	import { endorsementQueue } from '$lib/endorsement/queue';
+	import { endorsementQueue } from '$lib/state/endorsement-queue.svelte';
 	import { spatialGraph } from '$lib/state/spatial-graph.svelte';
 	import EndorsementQueue from '$lib/endorsement/EndorsementQueue.svelte';
 

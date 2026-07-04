@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { housekeeping } from '$lib/housekeeping';
+	import { housekeeping } from '$lib/state/housekeeping.svelte';
 	import HousekeepingQueue from '$lib/housekeeping/HousekeepingQueue.svelte';
 
 	onMount(() => {

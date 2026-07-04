@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminLogs } from '$lib/admin/logs';
+	import { adminLogs } from '$lib/state/admin-logs.svelte';
 
 	onMount(() => {
 		adminLogs.refresh();
