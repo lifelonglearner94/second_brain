@@ -9,7 +9,7 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn health_reports_db_and_sqlite_vec_ok() {
     let db = Db::open_in_memory().unwrap();
-    let app = routes::router().with_state(AppState::for_tests(db));
+    let app = routes::router(AppState::for_tests(db));
 
     let response = app
         .oneshot(

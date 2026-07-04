@@ -12,6 +12,12 @@ pub struct Config {
     pub log_format: LogFormat,
     /// Value for the `RUST_LOG`-style env filter.
     pub rust_log: String,
+    /// WebAuthn relying-party id (effective domain of `webauthn_rp_origin`).
+    pub webauthn_rp_id: String,
+    /// WebAuthn relying-party origin, e.g. `https://brain.example.com`.
+    pub webauthn_rp_origin: String,
+    /// Human-friendly relying-party name shown to the user by authenticators.
+    pub webauthn_rp_name: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +44,11 @@ impl Config {
                 .unwrap_or_else(|_| "second_brain.db".to_string()),
             rust_log: env::var("RUST_LOG")
                 .unwrap_or_else(|_| "info,second_brain_backend=debug".to_string()),
+            webauthn_rp_id: env::var("WEBAUTHN_RP_ID").unwrap_or_else(|_| "localhost".to_string()),
+            webauthn_rp_origin: env::var("WEBAUTHN_RP_ORIGIN")
+                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
+            webauthn_rp_name: env::var("WEBAUTHN_RP_NAME")
+                .unwrap_or_else(|_| "Second Brain".to_string()),
             log_format,
         }
     }
@@ -49,6 +60,9 @@ impl Config {
             database_url: ":memory:".to_string(),
             log_format: LogFormat::Plain,
             rust_log: "warn".to_string(),
+            webauthn_rp_id: "localhost".to_string(),
+            webauthn_rp_origin: "http://localhost:8080".to_string(),
+            webauthn_rp_name: "Second Brain (test)".to_string(),
         }
     }
 }

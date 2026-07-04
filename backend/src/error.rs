@@ -13,6 +13,9 @@ pub enum Error {
     #[error("sqlite-vec extension load failed: {0}")]
     SqliteVec(String),
 
+    #[error("webauthn error: {0}")]
+    WebAuthn(String),
+
     #[error("not found: {0}")]
     NotFound(String),
 
@@ -32,11 +35,18 @@ impl Error {
     }
 }
 
+impl From<webauthn_rs::prelude::WebauthnError> for Error {
+    fn from(e: webauthn_rs::prelude::WebauthnError) -> Self {
+        Error::WebAuthn(e.to_string())
+    }
+}
+
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let status = match &self {
             Error::NotFound(_) => StatusCode::NOT_FOUND,
             Error::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Error::WebAuthn(_) => StatusCode::BAD_REQUEST,
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };

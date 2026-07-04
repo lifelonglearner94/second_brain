@@ -1,12 +1,41 @@
 //! HTTP routes. Each domain module owns its router; `router()` stitches them
 //! together. Routes are added incrementally as slices land.
 
+use axum::middleware::from_fn_with_state;
+use axum::routing::{get, post};
 use axum::Router;
 
+use crate::auth::middleware::require_session;
 use crate::state::AppState;
 
+mod auth;
 mod health;
 
-pub fn router() -> Router<AppState> {
-    Router::new().route("/health", axum::routing::get(health::health))
+/// Build the full router. State is threaded in here (rather than via
+/// `.with_state` on the caller) because the auth middleware needs it at
+/// layer-build time — `axum::middleware::from_fn_with_state` is the only
+/// `from_fn` variant that lets a middleware extract `State<AppState>`.
+pub fn router(state: AppState) -> Router {
+    // Public auth routes — no session required. The WebAuthn begin/finish
+    // pairs are stateless here; the opaque `state` token carries flow state.
+    let auth_routes: Router<AppState> = Router::new()
+        .route("/auth/register/begin", post(auth::register_begin))
+        .route("/auth/register/finish", post(auth::register_finish))
+        .route("/auth/login/begin", post(auth::login_begin))
+        .route("/auth/login/finish", post(auth::login_finish))
+        .route("/auth/recover", post(auth::recover));
+
+    // Protected routes — every handler behind this layer requires a valid
+    // session cookie. `/me` is the demonstrator; `/auth/logout` needs the
+    // validated session to invalidate it.
+    let protected_routes: Router<AppState> = Router::new()
+        .route("/me", get(auth::me))
+        .route("/auth/logout", post(auth::logout))
+        .route_layer(from_fn_with_state(state.clone(), require_session));
+
+    Router::new()
+        .route("/health", get(health::health))
+        .merge(auth_routes)
+        .merge(protected_routes)
+        .with_state(state)
 }

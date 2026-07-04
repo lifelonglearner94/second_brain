@@ -4,6 +4,7 @@
 use std::net::SocketAddr;
 
 use second_brain_backend::{
+    auth,
     config::{Config, LogFormat},
     db::Db,
     embedding::FakeEmbedding,
@@ -20,13 +21,19 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(bind = %config.bind_addr, "starting second-brain backend");
 
     let db = Db::open(&config.database_url)?;
+    let webauthn = auth::build_webauthn(
+        &config.webauthn_rp_id,
+        &config.webauthn_rp_origin,
+        &config.webauthn_rp_name,
+    )?;
     let state = AppState {
         db,
         config: Arc::new(config.clone()),
         llm: Arc::new(FakeLlm),
         embedding: Arc::new(FakeEmbedding { dim: 1024 }),
+        auth: auth::AuthService::new(webauthn),
     };
-    let app = routes::router().with_state(state);
+    let app = routes::router(state);
 
     let addr: SocketAddr = config.bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;

@@ -4,6 +4,7 @@
 //! the HTTP layer, DB access, and the LLM/embedding clients are behind traits
 //! so later slices plug in real implementations without rewiring call sites.
 
+pub mod auth;
 pub mod config;
 pub mod db;
 pub mod embedding;
