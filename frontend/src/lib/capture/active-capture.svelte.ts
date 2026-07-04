@@ -1,7 +1,13 @@
 import type { SttSource, SttSourceLabel } from './stt';
 import type { IngestApi, IngestResponse } from './ingest';
 
-export type ActiveCaptureStatus = 'idle' | 'listening' | 'submitting' | 'submitted' | 'error';
+export type ActiveCaptureStatus =
+	| 'idle'
+	| 'listening'
+	| 'submitting'
+	| 'submitted'
+	| 'queued'
+	| 'error';
 
 export class ActiveCaptureStore {
 	text = $state<string>('');

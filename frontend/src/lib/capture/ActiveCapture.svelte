@@ -1,15 +1,19 @@
 <script lang="ts">
 	import { ActiveCaptureStore } from '$lib/capture/active-capture.svelte';
 	import { buildSttSources } from '$lib/capture/stt';
+	import { submitActiveCapture } from '$lib/capture/pending';
 	import type { IngestApi, IngestResponse } from '$lib/capture/ingest';
+	import type { PendingCapturesStore } from '$lib/state/pending-captures.svelte';
 
 	type Props = {
 		ingest: IngestApi;
 		deepgramApiKey?: string;
 		oningest?: (res: IngestResponse) => void;
+		pending: PendingCapturesStore;
+		online?: boolean;
 	};
 
-	let { ingest, deepgramApiKey, oningest }: Props = $props();
+	let { ingest, deepgramApiKey, oningest, pending, online = true }: Props = $props();
 
 	const store = new ActiveCaptureStore();
 	let busy = $state(false);
@@ -44,8 +48,10 @@
 		busy = true;
 		store.error = null;
 		try {
-			const res = await store.submit(ingest);
-			oningest?.(res);
+			const outcome = await submitActiveCapture(store, online, pending, ingest);
+			if (outcome.kind === 'submitted') {
+				oningest?.(outcome.res);
+			}
 		} catch (e) {
 			store.error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -88,6 +94,11 @@
 	{#if store.sttSourceLabel}
 		<p class="source" data-testid="stt-source">
 			STT: {store.sttSourceLabel === 'deepgram' ? 'Deepgram Nova-3' : 'Web Speech (offline)'}
+		</p>
+	{/if}
+	{#if store.status === 'queued'}
+		<p class="queued" data-testid="active-capture-queued">
+			Saved offline — review in Pending Captures when back online.
 		</p>
 	{/if}
 	{#if store.error}
@@ -135,6 +146,11 @@
 		margin: 0;
 		font-size: 0.8rem;
 		color: #9aa3b2;
+	}
+	.queued {
+		margin: 0;
+		font-size: 0.85rem;
+		color: #f0c674;
 	}
 	.error {
 		margin: 0;
