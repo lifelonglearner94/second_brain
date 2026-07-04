@@ -19,6 +19,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 axum-extra = { version = "0.10", default-features = false, features = ["cookie"] }
 base64 = "0.22"
 cookie = "0.18"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 http = "1"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
