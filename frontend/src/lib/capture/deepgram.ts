@@ -37,15 +37,15 @@ export class DeepgramSttSource implements SttSource {
 	async start(onChunk: (chunk: string) => void): Promise<void> {
 		this.onChunk = onChunk;
 		const { DeepgramClient } = await import('@deepgram/sdk');
-		const client = new DeepgramClient({ key: this.opts.apiKey });
+		const client = new DeepgramClient({ apiKey: this.opts.apiKey });
 		const socket = (await client.listen.v1.connect({
 			model: this.opts.model ?? 'nova-3',
 			language: this.opts.language ?? 'de',
 			encoding: 'linear16',
 			sample_rate: 16000,
 			channels: 1,
-			interim_results: true,
-			smart_format: true,
+			interim_results: 'true',
+			smart_format: 'true',
 			Authorization: this.opts.apiKey
 		})) as unknown as DeepgramLiveSocket;
 

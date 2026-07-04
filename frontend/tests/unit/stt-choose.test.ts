@@ -12,7 +12,10 @@ function fakeSource(label: 'deepgram' | 'web-speech'): SttSource {
 
 describe('chooseSttSource — Deepgram primary, Web Speech offline fallback, keyboard-only otherwise', () => {
 	it('picks Deepgram (Nova-3) when an API key is configured', async () => {
-		const buildDeepgram = vi.fn((key: string) => fakeSource('deepgram'));
+		const buildDeepgram = vi.fn((key: string) => {
+			void key;
+			return fakeSource('deepgram');
+		});
 		const source = await chooseSttSource({
 			deepgramApiKey: 'dg-key',
 			buildDeepgram

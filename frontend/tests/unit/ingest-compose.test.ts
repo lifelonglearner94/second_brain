@@ -94,6 +94,6 @@ describe('createIngestApi — POST /braindumps then GET /graph/delta → optimis
 		await ingest.ingest('first');
 		cursor = 1_900;
 		await ingest.ingest('second');
-		expect(getGraphDelta.mock.calls[1]?.[0]).toBe(1_900);
+		expect(getGraphDelta).toHaveBeenNthCalledWith(2, 1_900);
 	});
 });
