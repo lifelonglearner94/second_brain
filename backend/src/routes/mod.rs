@@ -18,6 +18,7 @@ mod health;
 mod merge;
 mod ontology;
 mod retrieval;
+mod thematic;
 
 /// Build the full router. State is threaded in here (rather than via
 /// `.with_state` on the caller) because the auth middleware needs it at
@@ -44,11 +45,13 @@ pub fn router(state: AppState) -> Router {
     // inference, silence when unsupported); `/chat/inferences*` is the
     // governed write-back surface (ADR-0006 — structural inference proposals
     // enter the queue pending, never auto-endorsed; endorse persists the edge
-    // with `structural_inference` provenance); `/graph/delta` is the
-    // incremental read surface for pull-on-focus reconciliation (issue #28);
-    // `/admin/logs` surfaces backend logs to the hidden admin tab;
-    // `/ontology/propose*` is the governance queue (ADR-0003) —
-    // propose/approve/reject edge types and trigger the async refactor.
+    // with `structural_inference` provenance); `/thematic` is the Thematic Read
+    // Model endpoint (ADR-0008 — backend-owned Louvain partition with ephemeral
+    // session labels, layered into chat as macrostructure context);
+    // `/graph/delta` is the incremental read surface for pull-on-focus
+    // reconciliation (issue #28); `/admin/logs` surfaces backend logs to the
+    // hidden admin tab; `/ontology/propose*` is the governance queue (ADR-0003)
+    // — propose/approve/reject edge types and trigger the async refactor.
     let protected_routes: Router<AppState> = Router::new()
         .route("/me", get(auth::me))
         .route("/auth/logout", post(auth::logout))
@@ -73,6 +76,7 @@ pub fn router(state: AppState) -> Router {
             post(chat_inference::endorse),
         )
         .route("/chat/inferences/{id}/reject", post(chat_inference::reject))
+        .route("/thematic", get(thematic::thematic))
         .route("/graph/delta", get(delta::graph_delta))
         .route("/admin/logs", get(admin::logs))
         .route("/ontology/propose", post(ontology::propose))

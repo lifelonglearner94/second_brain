@@ -22,5 +22,6 @@ pub mod ontology;
 pub mod retrieval;
 pub mod routes;
 pub mod state;
+pub mod thematic;
 
 pub use db::Db;
