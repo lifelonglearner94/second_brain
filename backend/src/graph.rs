@@ -432,7 +432,10 @@ fn insert_merge_suggestion(
 /// Retract a braindump's prior extraction (idempotent over a braindump, so
 /// submit retracts nothing and edit retracts the stale extraction before
 /// re-accreting — ADR-0007). Concepts/edges that lose their last asserter
-/// vanish (ADR-0002 / ADR-0010); type-history and suggestions cascade.
+/// vanish (ADR-0002 / ADR-0010); type-history and suggestions cascade. Vanished
+/// concepts/edges are tombstoned into `graph_tombstones` before the row DELETEs
+/// so delta sync can report what disappeared (issue #28 — the cascade deletes
+/// outright, leaving no trace without a tombstone log).
 fn retract_extraction(conn: &rusqlite::Connection, braindump_id: i64) -> Result<()> {
     conn.execute(
         "DELETE FROM concept_provenance WHERE braindump_id = ?1",
@@ -450,6 +453,9 @@ fn retract_extraction(conn: &rusqlite::Connection, braindump_id: i64) -> Result<
         "DELETE FROM merge_suggestions WHERE braindump_id = ?1",
         params![braindump_id],
     )?;
+    // Tombstone orphan edges (no asserter left) before the row DELETE so delta
+    // sync can report the deletion (issue #28).
+    tombstone_orphan_edges(conn)?;
     // Orphan edges first (they reference concepts), then orphan concepts.
     conn.execute(
         "DELETE FROM edges WHERE NOT EXISTS
@@ -464,10 +470,43 @@ fn retract_extraction(conn: &rusqlite::Connection, braindump_id: i64) -> Result<
                 (SELECT 1 FROM concept_provenance WHERE concept_id = concepts.id))",
         [],
     )?;
+    // Tombstone orphan concepts (no extractor left) before the row DELETE.
+    tombstone_orphan_concepts(conn)?;
     conn.execute(
         "DELETE FROM concepts WHERE NOT EXISTS
             (SELECT 1 FROM concept_provenance WHERE concept_id = concepts.id)",
         [],
+    )?;
+    Ok(())
+}
+
+/// Append 'edge' tombstone rows for every edge about to vanish (no asserter
+/// remains) in the current transaction. A single `INSERT ... SELECT` — no Rust
+/// loop. Idempotent in the sense that it only fires when called inside the
+/// cascade; an edge with remaining provenance is not tombstoned.
+fn tombstone_orphan_edges(conn: &rusqlite::Connection) -> Result<()> {
+    let now = now_seconds();
+    conn.execute(
+        "INSERT INTO graph_tombstones (kind, entity_id, created_at)
+         SELECT 'edge', id, ?1 FROM edges
+         WHERE NOT EXISTS
+            (SELECT 1 FROM edge_provenance WHERE edge_id = edges.id)",
+        params![now],
+    )?;
+    Ok(())
+}
+
+/// Append 'concept' tombstone rows for every concept about to vanish (no
+/// extractor remains) in the current transaction. Symmetric to
+/// [`tombstone_orphan_edges`].
+fn tombstone_orphan_concepts(conn: &rusqlite::Connection) -> Result<()> {
+    let now = now_seconds();
+    conn.execute(
+        "INSERT INTO graph_tombstones (kind, entity_id, created_at)
+         SELECT 'concept', id, ?1 FROM concepts
+         WHERE NOT EXISTS
+            (SELECT 1 FROM concept_provenance WHERE concept_id = concepts.id)",
+        params![now],
     )?;
     Ok(())
 }
@@ -1522,6 +1561,127 @@ mod tests {
             !delete_braindump(&db, 9999).await.unwrap(),
             "deleting a non-existent braindump reports false"
         );
+    }
+
+    // --- issue #28: tombstone log for delta-sync deletions ---
+
+    #[tokio::test]
+    async fn delete_braindump_writes_tombstone_for_vanished_concept() {
+        // When a concept vanishes (its last extracting braindump is deleted),
+        // a 'concept' tombstone row is appended so delta sync can report the
+        // deletion (ADR-0010; the cascade deletes the row outright otherwise).
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd = seed_braindump(&db, "maria").await;
+        ingest_extraction(&db, &emb, bd, "maria", extraction(&["Maria"], &[]))
+            .await
+            .unwrap();
+        let cid = db_concept_id_for_label(&db, "Maria").await;
+        assert!(cid > 0);
+
+        delete_braindump(&db, bd).await.unwrap();
+
+        let tombstoned = tombstoned_concept_ids(&db).await;
+        assert!(
+            tombstoned.contains(&cid),
+            "vanished concept {cid} must be tombstoned: {tombstoned:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_braindump_writes_tombstone_for_vanished_edge() {
+        // When an edge vanishes (its last asserter is deleted), an 'edge'
+        // tombstone row is appended so delta sync can report the deletion.
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd = seed_braindump(&db, "maria endangers q3").await;
+        ingest_extraction(
+            &db,
+            &emb,
+            bd,
+            "maria endangers q3",
+            extraction(
+                &["Maria", "Q3 launch"],
+                &[("Maria", "endangers", "Q3 launch")],
+            ),
+        )
+        .await
+        .unwrap();
+        let maria = db_concept_id_for_label(&db, "Maria").await;
+        let q3 = db_concept_id_for_label(&db, "Q3 launch").await;
+        let edge = find_edge(&db, maria, "endangers", q3)
+            .await
+            .unwrap()
+            .expect("edge created");
+
+        delete_braindump(&db, bd).await.unwrap();
+
+        let tombstoned = tombstoned_edge_ids(&db).await;
+        assert!(
+            tombstoned.contains(&edge.id),
+            "vanished edge {} must be tombstoned: {tombstoned:?}",
+            edge.id
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_braindump_leaves_no_tombstone_when_concept_survives() {
+        // A concept that still has an extracting braindump after the cascade
+        // must NOT be tombstoned — only vanished rows are.
+        let db = test_db();
+        let emb = fake_embedding();
+        let bd1 = seed_braindump(&db, "q3 one").await;
+        let bd2 = seed_braindump(&db, "q3 two").await;
+        ingest_extraction(&db, &emb, bd1, "q3 one", extraction(&["Q3"], &[]))
+            .await
+            .unwrap();
+        ingest_extraction(&db, &emb, bd2, "q3 two", extraction(&["Q3"], &[]))
+            .await
+            .unwrap();
+        let cid = db_concept_id_for_label(&db, "Q3").await;
+
+        // Delete bd1: Q3 still extracted by bd2 → survives, no tombstone.
+        delete_braindump(&db, bd1).await.unwrap();
+        assert!(
+            !tombstoned_concept_ids(&db).await.contains(&cid),
+            "surviving concept must not be tombstoned"
+        );
+        assert!(get_concept(&db, cid).await.unwrap().is_some());
+
+        // Delete bd2: now Q3 vanishes → tombstone.
+        delete_braindump(&db, bd2).await.unwrap();
+        assert!(
+            tombstoned_concept_ids(&db).await.contains(&cid),
+            "vanished concept must be tombstoned"
+        );
+    }
+
+    async fn tombstoned_concept_ids(db: &Db) -> Vec<i64> {
+        db.run(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT entity_id FROM graph_tombstones WHERE kind = 'concept' ORDER BY entity_id",
+            )?;
+            let ids = stmt
+                .query_map([], |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok(ids)
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn tombstoned_edge_ids(db: &Db) -> Vec<i64> {
+        db.run(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT entity_id FROM graph_tombstones WHERE kind = 'edge' ORDER BY entity_id",
+            )?;
+            let ids = stmt
+                .query_map([], |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok(ids)
+        })
+        .await
+        .unwrap()
     }
 
     // --- issue #7: concept merge-suggestion queue (ADR-0001/0002/0010) ---

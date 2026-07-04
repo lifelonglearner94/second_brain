@@ -264,10 +264,34 @@ fn migrate(conn: &Connection) -> Result<()> {
             merge_of                TEXT,
             status                  TEXT NOT NULL DEFAULT 'pending',
             near_match_slug         TEXT,
-            near_match_similarity   REAL,
-            created_at              INTEGER NOT NULL,
-            resolved_at             INTEGER
-        );",
+             near_match_similarity   REAL,
+             created_at              INTEGER NOT NULL,
+             resolved_at             INTEGER
+         );",
+    )?;
+
+    // Issue #28 — delta sync (pull-on-focus reconciliation). Forward-only
+    // additive: a new `graph_tombstones` append-only log records concepts/edges
+    // that vanished via the deletion cascade (ADR-0007/0010). The cascade
+    // deletes rows outright, so without a tombstone log a delta-since-timestamp
+    // read could report additions and retags (both already carry `created_at`)
+    // but not what disappeared. Existing tables are NOT re-migrated; the
+    // tombstone log is written from the cascade in `graph::retract_extraction`
+    // and read by `delta::graph_delta`.
+    //
+    // `kind` discriminates 'concept' vs 'edge'; `entity_id` is the vanished
+    // row's surrogate id (kept as a plain integer — the row is gone, so no FK).
+    // Append-only: nothing ever DELETEs from here.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS graph_tombstones (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind        TEXT NOT NULL,
+            entity_id   INTEGER NOT NULL,
+            created_at  INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS graph_tombstones_kind_created_at_idx
+            ON graph_tombstones(kind, created_at);",
     )?;
     Ok(())
 }
@@ -435,6 +459,7 @@ mod tests {
                 "edge_type_history",
                 "merge_suggestions",
                 "type_proposals",
+                "graph_tombstones",
             ] {
                 assert!(
                     names.contains(&expected.to_string()),
