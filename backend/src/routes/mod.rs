@@ -44,9 +44,10 @@ pub fn router(state: AppState) -> Router {
     // the seed-then-expand read path (ADR-0004); `/chat` is the grounded-
     // synthesis read surface (ADR-0005 — mandatory citations, graph-constrained
     // inference, silence when unsupported); `/chat/inferences*` is the
-    // governed write-back surface (ADR-0006 — structural inference proposals
-    // enter the queue pending, never auto-endorsed; endorse persists the edge
-    // with `structural_inference` provenance); `/thematic` is the Thematic Read
+    // governed write-back surface (ADR-0006 — structural + thematic inference
+    // proposals enter the queue pending, never auto-endorsed; endorse persists
+    // the edge with `structural_inference` or `thematic_inference` provenance;
+    // thematic mode (issue #13, ADR-0009) carries a frozen Thematic Snapshot); `/thematic` is the Thematic Read
     // Model endpoint (ADR-0008 — backend-owned Louvain partition with ephemeral
     // session labels, layered into chat as macrostructure context);
     // `/graph` is the Global Topology Snapshot — the full renderable graph in
@@ -75,6 +76,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/chat/inferences",
             post(chat_inference::propose).get(chat_inference::list),
+        )
+        .route(
+            "/chat/inferences/thematic",
+            post(chat_inference::propose_thematic),
         )
         .route(
             "/chat/inferences/{id}/endorse",

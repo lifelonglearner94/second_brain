@@ -294,6 +294,34 @@ fn migrate(conn: &Connection) -> Result<()> {
             ON graph_tombstones(kind, created_at);",
     )?;
 
+    // Issue #13 — thematic-inference proposals with frozen Thematic Snapshot
+    // (ADR-0006 thematic mode + ADR-0009). Forward-only additive: one new
+    // table and two nullable columns on the #11 tables. `thematic_snapshots`
+    // is the immutable audit receipt for a thematic-origin proposal — a frozen
+    // capture of the motivating cluster's composition (the braindump ids whose
+    // edges formed the thematic density) at proposal time. The cluster that
+    // motivated the proposal is ephemeral (Louvain is non-deterministic,
+    // ADR-0008) and will not exist tomorrow; the snapshot is the historical
+    // receipt that lets the user audit, months later, exactly why they
+    // endorsed a thematic proposal. Endorsement is immutable — the snapshot is
+    // a frozen receipt, never re-evaluated as the partition evolves
+    // (ADR-0009). The braindump_ids are computed backend-side from
+    // `edge_provenance` (the braindump asserters of edges between cluster
+    // concepts) so the receipt is a verifiable computation, not an LLM claim;
+    // the concept_ids come from the LLM's cluster observation (the partition is
+    // session-scoped and non-deterministic, so the backend cannot re-derive
+    // it). No FK to braindumps/concepts: the snapshot must survive the
+    // deletion of its constituent braindumps/concepts (frozen receipt,
+    // ADR-0009).
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS thematic_snapshots (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            braindump_ids TEXT NOT NULL,
+            concept_ids   TEXT NOT NULL,
+            captured_at   INTEGER NOT NULL
+        );",
+    )?;
+
     // Issue #11 — chat write-back, structural mode (ADR-0006). Forward-only
     // additive: two new tables. `chat_inference_proposals` is the
     // human-gated queue for chat's proposed inferences — a proposal is a
@@ -305,7 +333,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     // explicit HITL endpoints. `mode` origin-tags the proposal
     // (`structural_inference` vs `thematic_inference`); structural proposals
     // carry no Thematic Snapshot (ADR-0009 — their evidence is the graph
-    // itself, captured in `evidence_path`).
+    // itself, captured in `evidence_path`). `snapshot_id` is NULL for
+    // structural proposals and points at the frozen receipt for thematic
+    // (issue #13, ADR-0009).
     //
     // `edge_inference_provenance` is the chat-inference half of edge
     // provenance, origin-typed by `mode` (ADR-0006). It sits beside the
@@ -314,7 +344,11 @@ fn migrate(conn: &Connection) -> Result<()> {
     // union of both tables. On endorse, a row is inserted linking the
     // persisted edge to the proposal id; the orphan-edge cascade must
     // consult both provenance tables so an inference-backed edge survives a
-    // braindump deletion (the inference is its own origin).
+    // braindump deletion (the inference is its own origin). `snapshot_id` is
+    // NULL for structural assertions and carries the frozen Thematic
+    // Snapshot for thematic assertions (issue #13, ADR-0009 — the snapshot
+    // attaches to the persisted edge's provenance so the user can audit the
+    // ephemeral cluster that motivated it, even after the cluster dissolves).
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS chat_inference_proposals (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -324,6 +358,7 @@ fn migrate(conn: &Connection) -> Result<()> {
             proposed_type     TEXT NOT NULL,
             evidence_path     TEXT NOT NULL,
             rationale         TEXT,
+            snapshot_id       INTEGER REFERENCES thematic_snapshots(id),
             status            TEXT NOT NULL DEFAULT 'pending',
             created_at        INTEGER NOT NULL,
             resolved_at       INTEGER
@@ -336,6 +371,7 @@ fn migrate(conn: &Connection) -> Result<()> {
             edge_id           INTEGER NOT NULL REFERENCES edges(id) ON DELETE CASCADE,
             chat_inference_id INTEGER NOT NULL REFERENCES chat_inference_proposals(id) ON DELETE CASCADE,
             mode              TEXT NOT NULL,
+            snapshot_id       INTEGER REFERENCES thematic_snapshots(id),
             created_at        INTEGER NOT NULL,
             PRIMARY KEY (edge_id, chat_inference_id)
         );",
@@ -509,6 +545,7 @@ mod tests {
                 "graph_tombstones",
                 "chat_inference_proposals",
                 "edge_inference_provenance",
+                "thematic_snapshots",
             ] {
                 assert!(
                     names.contains(&expected.to_string()),

@@ -567,3 +567,309 @@ async fn endorse_accretes_onto_pre_existing_direct_edge() {
     assert_eq!(assertions[0].chat_inference_id, id);
     assert_eq!(assertions[0].mode, "structural_inference");
 }
+
+// --- issue #13: thematic inference (ADR-0006 thematic mode + ADR-0009) ---
+
+/// Seed the canonical thematic cluster via the real submit→extract→accrete
+/// path: `Maria —[endangers]→ Q3 launch —[depends_on]→ Beta release`. Louvain
+/// sees one connected component; the braindump that asserted the edges is the
+/// snapshot evidence. No direct Maria→Beta edge — the thematic gap.
+async fn seed_thematic_cluster() -> (axum::Router, Db, http::HeaderValue, i64, i64, i64) {
+    let db = Db::open_in_memory().unwrap();
+    let extractor = Arc::new(ScriptedExtractor {
+        result: ExtractionResult {
+            concepts: concepts(&["Maria", "Q3 launch", "Beta release"]),
+            edges: vec![
+                edge("Maria", "endangers", "Q3 launch"),
+                edge("Q3 launch", "depends_on", "Beta release"),
+            ],
+        },
+    });
+    let app = app_with_extractor(db.clone(), extractor);
+    let cookie = session_cookie(&db).await;
+    let _bd = submit(&app, &cookie, "maria endangers q3 which beta depends on").await;
+    let maria = graph::concept_id_for_label(&db, "Maria")
+        .await
+        .unwrap()
+        .unwrap();
+    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+        .await
+        .unwrap()
+        .unwrap();
+    let beta = graph::concept_id_for_label(&db, "Beta release")
+        .await
+        .unwrap()
+        .unwrap();
+    (app, db, cookie, maria, q3, beta)
+}
+
+fn propose_thematic_body(source: i64, target: i64, etype: &str, cluster: &[i64]) -> Value {
+    json!({
+        "source_concept_id": source,
+        "target_concept_id": target,
+        "proposed_type": etype,
+        "cluster_concept_ids": cluster,
+        "rationale": "Louvain clustered these with no direct edge"
+    })
+}
+
+#[tokio::test]
+async fn propose_thematic_creates_pending_proposal_with_snapshot() {
+    let (app, db, cookie, maria, q3, beta) = seed_thematic_cluster().await;
+
+    let (status, body) = do_request(
+        &app,
+        "POST",
+        "/chat/inferences/thematic",
+        Some(cookie),
+        Some(propose_thematic_body(
+            maria,
+            beta,
+            "endangers",
+            &[maria, q3, beta],
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "propose thematic: {body}");
+    assert_eq!(body["mode"], "thematic_inference");
+    assert_eq!(body["status"], "pending");
+    assert_eq!(body["source_concept_id"], maria);
+    assert_eq!(body["target_concept_id"], beta);
+    assert_eq!(body["proposed_type"], "endangers");
+    assert_eq!(
+        body["rationale"],
+        "Louvain clustered these with no direct edge"
+    );
+    assert!(
+        body["evidence_path"].as_array().unwrap().is_empty(),
+        "thematic has no evidence path"
+    );
+    let snapshot = &body["snapshot"];
+    assert!(
+        snapshot.is_object(),
+        "thematic proposal carries a snapshot: {body}"
+    );
+    assert!(
+        !snapshot["braindump_ids"].as_array().unwrap().is_empty(),
+        "snapshot has braindump evidence"
+    );
+    let concept_ids = snapshot["concept_ids"].as_array().unwrap();
+    assert_eq!(
+        concept_ids.len(),
+        3,
+        "snapshot captured the cluster's 3 concepts"
+    );
+    // No edge persisted yet — no auto-endorse.
+    assert!(
+        graph::find_edge(&db, maria, "endangers", beta)
+            .await
+            .unwrap()
+            .is_none(),
+        "no edge persisted on a pending thematic proposal"
+    );
+}
+
+#[tokio::test]
+async fn endorse_thematic_persists_edge_with_snapshot_in_provenance() {
+    let (app, db, cookie, maria, q3, beta) = seed_thematic_cluster().await;
+    let (_, body) = do_request(
+        &app,
+        "POST",
+        "/chat/inferences/thematic",
+        Some(cookie.clone()),
+        Some(propose_thematic_body(
+            maria,
+            beta,
+            "endangers",
+            &[maria, q3, beta],
+        )),
+    )
+    .await;
+    let id = body["id"].as_i64().unwrap();
+    let snapshot_id = body["snapshot"]["id"].as_i64().unwrap();
+
+    let (status, body) = do_request(
+        &app,
+        "POST",
+        &format!("/chat/inferences/{id}/endorse"),
+        Some(cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "endorse thematic: {body}");
+    assert_eq!(body["status"], "endorsed");
+
+    let edge = graph::find_edge(&db, maria, "endangers", beta)
+        .await
+        .unwrap()
+        .expect("endorsed thematic edge persisted");
+    let assertions = second_brain_backend::chat_inference::edge_inference_asserted_by(&db, edge.id)
+        .await
+        .unwrap();
+    assert_eq!(assertions.len(), 1);
+    assert_eq!(assertions[0].chat_inference_id, id);
+    assert_eq!(assertions[0].mode, "thematic_inference");
+    assert_eq!(
+        assertions[0].snapshot_id,
+        Some(snapshot_id),
+        "snapshot attached to provenance"
+    );
+}
+
+#[tokio::test]
+async fn propose_thematic_rejects_endpoints_not_in_cluster() {
+    let (app, _db, cookie, maria, q3, beta) = seed_thematic_cluster().await;
+    // Cluster omits Beta — endpoints must be cluster-mates.
+    let (status, body) = do_request(
+        &app,
+        "POST",
+        "/chat/inferences/thematic",
+        Some(cookie),
+        Some(propose_thematic_body(
+            maria,
+            beta,
+            "endangers",
+            &[maria, q3],
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("cluster-mates"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn propose_thematic_rejects_unsanctioned_type() {
+    let (app, _db, cookie, maria, q3, beta) = seed_thematic_cluster().await;
+    let (status, body) = do_request(
+        &app,
+        "POST",
+        "/chat/inferences/thematic",
+        Some(cookie),
+        Some(propose_thematic_body(
+            maria,
+            beta,
+            "bamboozles",
+            &[maria, q3, beta],
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("/ontology/propose"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn reject_thematic_keeps_graph_untouched() {
+    let (app, db, cookie, maria, q3, beta) = seed_thematic_cluster().await;
+    let (_, body) = do_request(
+        &app,
+        "POST",
+        "/chat/inferences/thematic",
+        Some(cookie.clone()),
+        Some(propose_thematic_body(
+            maria,
+            beta,
+            "endangers",
+            &[maria, q3, beta],
+        )),
+    )
+    .await;
+    let id = body["id"].as_i64().unwrap();
+
+    let (status, _body) = do_request(
+        &app,
+        "POST",
+        &format!("/chat/inferences/{id}/reject"),
+        Some(cookie.clone()),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "reject thematic");
+    assert!(
+        graph::find_edge(&db, maria, "endangers", beta)
+            .await
+            .unwrap()
+            .is_none(),
+        "no edge persisted on reject"
+    );
+    let (status, body) = do_request(&app, "GET", "/chat/inferences", Some(cookie), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let proposals = body.as_array().unwrap();
+    assert_eq!(proposals[0]["status"], "rejected");
+    assert_eq!(proposals[0]["mode"], "thematic_inference");
+    assert!(
+        proposals[0]["snapshot"].is_object(),
+        "snapshot preserved on reject"
+    );
+}
+
+#[tokio::test]
+async fn list_returns_both_modes() {
+    let (app, _db, cookie, maria, q3, beta) = seed_thematic_cluster().await;
+    do_request(
+        &app,
+        "POST",
+        "/chat/inferences",
+        Some(cookie.clone()),
+        Some(propose_body(
+            maria,
+            beta,
+            "endangers",
+            &[(maria, "endangers", q3), (q3, "depends_on", beta)],
+        )),
+    )
+    .await;
+    do_request(
+        &app,
+        "POST",
+        "/chat/inferences/thematic",
+        Some(cookie.clone()),
+        Some(propose_thematic_body(
+            maria,
+            beta,
+            "helps",
+            &[maria, q3, beta],
+        )),
+    )
+    .await;
+
+    let (status, body) = do_request(&app, "GET", "/chat/inferences", Some(cookie), None).await;
+    assert_eq!(status, StatusCode::OK, "list: {body}");
+    let proposals = body.as_array().unwrap();
+    assert_eq!(proposals.len(), 2);
+    assert_eq!(proposals[0]["mode"], "structural_inference");
+    assert_eq!(proposals[1]["mode"], "thematic_inference");
+    assert!(proposals[0]["snapshot"].is_null());
+    assert!(proposals[1]["snapshot"].is_object());
+}
+
+#[tokio::test]
+async fn thematic_routes_require_a_session() {
+    let (app, _db, _cookie, maria, q3, beta) = seed_thematic_cluster().await;
+    let (status, _) = do_request(
+        &app,
+        "POST",
+        "/chat/inferences/thematic",
+        None,
+        Some(propose_thematic_body(
+            maria,
+            beta,
+            "endangers",
+            &[maria, q3, beta],
+        )),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "propose thematic without session"
+    );
+}
