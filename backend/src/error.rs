@@ -22,6 +22,9 @@ pub enum Error {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    #[error("conflict: {0}")]
+    Conflict(String),
+
     #[error("unauthorized")]
     Unauthorized,
 
@@ -46,6 +49,7 @@ impl IntoResponse for Error {
         let status = match &self {
             Error::NotFound(_) => StatusCode::NOT_FOUND,
             Error::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Error::Conflict(_) => StatusCode::CONFLICT,
             Error::WebAuthn(_) => StatusCode::BAD_REQUEST,
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
             _ => StatusCode::INTERNAL_SERVER_ERROR,

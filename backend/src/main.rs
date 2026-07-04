@@ -13,6 +13,7 @@ use second_brain_backend::{
     gemini::GeminiClient,
     llm::LlmClient,
     logs::LogBuffer,
+    ontology::RefactorRunner,
     routes,
     state::AppState,
 };
@@ -65,6 +66,16 @@ async fn main() -> anyhow::Result<()> {
     // rather than in the dim-agnostic schema migration.
     db.ensure_vec_tables(embedding.dim())?;
 
+    // Seed type-embeddings for any ontology types missing one (the day-zero
+    // vocabulary has no embeddings until the first run — ADR-0003 dedup needs
+    // them to auto-merge duplicate proposals). Idempotent: already-embedded
+    // types are skipped.
+    let seeded =
+        second_brain_backend::ontology::seed_type_embeddings(&db, embedding.as_ref()).await?;
+    if seeded > 0 {
+        tracing::info!(count = seeded, "seeded type embeddings for ontology dedup");
+    }
+
     let state = AppState {
         db,
         config: Arc::new(config.clone()),
@@ -73,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
         embedding,
         auth: auth::AuthService::new(webauthn),
         log_buffer,
+        refactor_runner: RefactorRunner::new(),
     };
     let app = routes::router(state);
 

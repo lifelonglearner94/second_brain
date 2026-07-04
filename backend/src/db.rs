@@ -244,6 +244,31 @@ fn migrate(conn: &Connection) -> Result<()> {
             created_at          INTEGER NOT NULL
         );",
     )?;
+
+    // Issue #9 — ontology governance (ADR-0003). Forward-only additive: a new
+    // `type_proposals` table for the propose/approve/reject queue + dedup
+    // metadata. The type-embeddings vec0 collection is created in
+    // `ensure_vec_tables` (it is dim-dependent, like the concept/braindump
+    // collections). The existing `ontology` table is NOT re-migrated.
+    //
+    // `merge_of` references an ontology slug (not id) the proposed type
+    // replaces; on approve, the refactor retags edges whose current type is
+    // `merge_of` to the new slug. `near_match_*` records the dedup decision
+    // for the human reviewer (auto-merged above 99.5%, else pending).
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS type_proposals (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug                    TEXT NOT NULL,
+            label                   TEXT NOT NULL,
+            description             TEXT NOT NULL,
+            merge_of                TEXT,
+            status                  TEXT NOT NULL DEFAULT 'pending',
+            near_match_slug         TEXT,
+            near_match_similarity   REAL,
+            created_at              INTEGER NOT NULL,
+            resolved_at             INTEGER
+        );",
+    )?;
     Ok(())
 }
 
@@ -252,7 +277,7 @@ fn migrate(conn: &Connection) -> Result<()> {
 /// and recreates these tables — out of scope for this slice.
 pub(crate) fn ensure_vec_tables(conn: &Connection, dim: usize) -> Result<()> {
     assert!(dim > 0, "embedding dimension must be positive");
-    conn.execute_batch(&format!(
+    let ddl = format!(
         "CREATE VIRTUAL TABLE IF NOT EXISTS concept_embeddings USING vec0(
             concept_id INTEGER PRIMARY KEY,
             embedding float[{dim}] distance_metric=cosine
@@ -260,8 +285,13 @@ pub(crate) fn ensure_vec_tables(conn: &Connection, dim: usize) -> Result<()> {
         CREATE VIRTUAL TABLE IF NOT EXISTS braindump_embeddings USING vec0(
             braindump_id INTEGER PRIMARY KEY,
             embedding float[{dim}] distance_metric=cosine
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS type_embeddings USING vec0(
+            ontology_id INTEGER PRIMARY KEY,
+            embedding float[{dim}] distance_metric=cosine
         );"
-    ))?;
+    );
+    conn.execute_batch(&ddl)?;
     Ok(())
 }
 
@@ -404,10 +434,11 @@ mod tests {
                 "edge_provenance",
                 "edge_type_history",
                 "merge_suggestions",
+                "type_proposals",
             ] {
                 assert!(
                     names.contains(&expected.to_string()),
-                    "extraction table `{expected}` must exist: {names:?}"
+                    "expected table `{expected}` must exist: {names:?}"
                 );
             }
             Ok(())
@@ -422,17 +453,28 @@ mod tests {
         db.ensure_vec_tables(8).unwrap();
         db.run(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?) ORDER BY name",
+                "SELECT name FROM sqlite_master
+                 WHERE type='table' AND name IN (?, ?, ?)
+                 ORDER BY name",
             )?;
             let names: Vec<String> = stmt
-                .query_map(["concept_embeddings", "braindump_embeddings"], |r| {
-                    r.get::<_, String>(0)
-                })?
+                .query_map(
+                    [
+                        "concept_embeddings",
+                        "braindump_embeddings",
+                        "type_embeddings",
+                    ],
+                    |r| r.get::<_, String>(0),
+                )?
                 .collect::<rusqlite::Result<_>>()?;
             assert_eq!(
                 names,
-                ["braindump_embeddings", "concept_embeddings"],
-                "both vec0 virtual tables must exist"
+                [
+                    "braindump_embeddings",
+                    "concept_embeddings",
+                    "type_embeddings"
+                ],
+                "all three vec0 virtual tables must exist"
             );
             Ok(())
         })
