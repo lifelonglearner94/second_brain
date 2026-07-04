@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ActiveCaptureStore } from '../../src/lib/capture/active-capture.svelte';
 import type { SttSource, SttSourceLabel } from '../../src/lib/capture/stt';
 import type { IngestApi, IngestResponse } from '../../src/lib/capture/ingest';
-import { mergeIntoGraph } from '../../src/lib/graph/merge';
+import { applyDelta } from '../../src/lib/graph/delta';
 import { buildGraphData } from '../../src/lib/graph/build';
 import type { GlobalTopologySnapshot } from '../../src/lib/api/client';
 
@@ -50,7 +50,14 @@ describe('Active Capture vertical slice — STT → buffer → explicit submit �
 		expect(store.text).toBe('');
 		expect(store.status).toBe('submitted');
 
-		const merged = mergeIntoGraph(SNAPSHOT, res);
+		const merged = applyDelta(SNAPSHOT, {
+			cursor: res.cursor,
+			added_concepts: res.concepts,
+			added_edges: res.edges,
+			deleted_concept_ids: [],
+			deleted_edge_ids: [],
+			retagged_edges: []
+		});
 		const data = buildGraphData(merged);
 		expect(data.nodes.map((n) => n.id).sort()).toEqual(['c1', 'c2']);
 		expect(data.links.map((l) => `${l.source}-${l.target}`)).toContain('c2-c1');

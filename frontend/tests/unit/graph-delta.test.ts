@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { applyDelta } from '../../src/lib/graph/delta';
 import { buildGraphData } from '../../src/lib/graph/build';
+import { NO_PARTITION } from '../../src/lib/graph/colors';
 import type { GlobalTopologySnapshot, GraphDelta } from '../../src/lib/api/client';
 
 const BASE: GlobalTopologySnapshot = {
@@ -214,7 +215,85 @@ describe('applyDelta — reconcile the Spatial View-Graph with a Delta Sync payl
 		});
 	});
 
-	describe('reconciliation reaches the graphology Spatial View-Graph via buildGraphData', () => {
+	describe('ingest optimistic-merge — applyDelta with empty deletes/retags (ADR-0002)', () => {
+	it('appends newly-extracted concepts and edges from a braindump ingestion response', () => {
+		const delta: GraphDelta = {
+			cursor: 1700000000,
+			added_concepts: [{ id: 'c3', label: 'caffeine', created_at: '2026-07-04T00:00:00Z' }],
+			added_edges: [
+				{
+					id: 'e2',
+					source_concept_id: 'c3',
+					target_concept_id: 'c1',
+					original_type: 'disrupts',
+					current_type: 'disrupts',
+					created_at: '2026-07-04T00:00:00Z'
+				}
+			],
+			deleted_concept_ids: [],
+			deleted_edge_ids: [],
+			retagged_edges: []
+		};
+		const merged = applyDelta(BASE, delta);
+		expect(merged.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c2', 'c3']);
+		expect(merged.edges.map((e) => e.id).sort()).toEqual(['e1', 'e2']);
+		expect(merged.edges.find((e) => e.id === 'e2')?.current_type).toBe('disrupts');
+	});
+
+	it('leaves the Louvain partitions untouched — new concepts get NO_PARTITION until the next sync (ADR-0008)', () => {
+		const delta: GraphDelta = {
+			cursor: 1700000000,
+			added_concepts: [{ id: 'c3', label: 'caffeine', created_at: '2026-07-04T00:00:00Z' }],
+			added_edges: [],
+			deleted_concept_ids: [],
+			deleted_edge_ids: [],
+			retagged_edges: []
+		};
+		const merged = applyDelta(BASE, delta);
+		expect(merged.partitions).toEqual(BASE.partitions);
+		expect(merged.partitions.find((p) => p.concept_id === 'c3')).toBeUndefined();
+	});
+
+	it('does not mutate the input snapshot (pure merge — the next Delta Sync overwrites the view)', () => {
+		const before = JSON.parse(JSON.stringify(BASE)) as GlobalTopologySnapshot;
+		applyDelta(BASE, {
+			cursor: 1700000000,
+			added_concepts: [{ id: 'c3', label: 'caffeine', created_at: 't' }],
+			added_edges: [],
+			deleted_concept_ids: [],
+			deleted_edge_ids: [],
+			retagged_edges: []
+		});
+		expect(BASE).toEqual(before);
+	});
+
+	it('a freshly-added concept falls back to NO_PARTITION in the rendered graph (no client-side Louvain)', () => {
+		const merged = applyDelta(BASE, {
+			cursor: 1700000000,
+			added_concepts: [{ id: 'c3', label: 'caffeine', created_at: 't' }],
+			added_edges: [],
+			deleted_concept_ids: [],
+			deleted_edge_ids: [],
+			retagged_edges: []
+		});
+		const data = buildGraphData(merged);
+		expect(data.nodes.find((n) => n.id === 'c3')?.group).toBe(NO_PARTITION);
+	});
+
+	it('an empty ingest is a no-op (the view is unchanged)', () => {
+		const merged = applyDelta(BASE, {
+			cursor: 1700000000,
+			added_concepts: [],
+			added_edges: [],
+			deleted_concept_ids: [],
+			deleted_edge_ids: [],
+			retagged_edges: []
+		});
+		expect(merged).toEqual(BASE);
+	});
+});
+
+describe('reconciliation reaches the graphology Spatial View-Graph via buildGraphData', () => {
 		it('added concepts and edges appear as graphology nodes and typed links', () => {
 			const delta: GraphDelta = {
 				cursor: 1700000000,

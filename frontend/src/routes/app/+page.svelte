@@ -19,7 +19,7 @@
 	import { detectRendererCapability, probeRendererCapability } from '$lib/graph/capability';
 	import { renderSpatialViewGraph2D, type Render2DHandle } from '$lib/graph/render2d';
 	import { syncDelta, onWindowFocus } from '$lib/graph/delta-sync';
-	import { mergeIntoGraph } from '$lib/graph/merge';
+	import { applyDelta } from '$lib/graph/delta';
 	import { createIngestApi, type IngestResponse } from '$lib/capture/ingest';
 	import { pendingCaptures } from '$lib/capture/pending-captures';
 	import ActiveCapture from '$lib/capture/ActiveCapture.svelte';
@@ -78,7 +78,14 @@
 
 	function onIngest(res: IngestResponse): void {
 		if (!snapshot || !fg) return;
-		const merged = mergeIntoGraph(snapshot, res);
+		const merged = applyDelta(snapshot, {
+			cursor: res.cursor,
+			added_concepts: res.concepts,
+			added_edges: res.edges,
+			deleted_concept_ids: [],
+			deleted_edge_ids: [],
+			retagged_edges: []
+		});
 		snapshot = merged;
 		deltaCursor = res.cursor;
 		fg.graphData(buildGraphData(merged));
