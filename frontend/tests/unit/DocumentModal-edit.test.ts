@@ -78,5 +78,57 @@ describe('DocumentModal — error-correction edit flow (ADR-0003, ADR-0007)', ()
 		expect(queryByTestId('document-modal-cancel')).toBeNull();
 		expect(editBraindump).toHaveBeenCalledOnce();
 	});
+
+	it('Cancel exits edit mode without calling editBraindump', async () => {
+		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(async () => BRAINDUMP);
+		const editBraindump = vi.fn<BraindumpApi['editBraindump']>();
+		const { getByTestId, queryByTestId } = render(DocumentModal, {
+			props: { braindumpId: 42, api: apiStub(getBraindump, editBraindump), onClose: vi.fn() }
+		});
+		await waitFor(() => expect(getByTestId('document-modal-cleaned')).toBeTruthy());
+		getByTestId('document-modal-edit').click();
+		await waitFor(() => expect(getByTestId('document-modal-edit-input')).toBeTruthy());
+		getByTestId('document-modal-cancel').click();
+		await waitFor(() => expect(queryByTestId('document-modal-edit-input')).toBeNull());
+		expect(getByTestId('document-modal-cleaned').textContent).toBe(BRAINDUMP.cleaned);
+		expect(editBraindump).not.toHaveBeenCalled();
+	});
+
+	it('Save failure surfaces an error and keeps the user in edit mode (error-correction only)', async () => {
+		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(async () => BRAINDUMP);
+		const editBraindump = vi
+			.fn<BraindumpApi['editBraindump']>()
+			.mockRejectedValue(new Error('PATCH /braindumps/:id failed: 400'));
+		const { getByTestId, queryByTestId } = render(DocumentModal, {
+			props: { braindumpId: 42, api: apiStub(getBraindump, editBraindump), onClose: vi.fn() }
+		});
+		await waitFor(() => expect(getByTestId('document-modal-cleaned')).toBeTruthy());
+		getByTestId('document-modal-edit').click();
+		await waitFor(() => expect(getByTestId('document-modal-edit-input')).toBeTruthy());
+		await typeInto(getByTestId, 'document-modal-edit-input', EDITED_VERBATIM);
+		getByTestId('document-modal-save').click();
+		await waitFor(() => expect(getByTestId('document-modal-edit-error')).toBeTruthy());
+		expect(getByTestId('document-modal-edit-input')).toBeTruthy();
+		expect(queryByTestId('document-modal-cleaned')).toBeNull();
+		expect(editBraindump).toHaveBeenCalledWith(42, EDITED_VERBATIM);
+	});
+
+	it('the cleaned rendering is never editable and the modal offers no new-braindump/create control (error-correction only, not thinking-evolution)', async () => {
+		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(async () => BRAINDUMP);
+		const { getByTestId, queryByTestId, container } = render(DocumentModal, {
+			props: { braindumpId: 42, api: apiStub(getBraindump), onClose: vi.fn() }
+		});
+		await waitFor(() => expect(getByTestId('document-modal-cleaned')).toBeTruthy());
+		expect(container.querySelectorAll('input, textarea')).toHaveLength(0);
+		getByTestId('document-modal-edit').click();
+		await waitFor(() => expect(getByTestId('document-modal-edit-input')).toBeTruthy());
+		const input = getByTestId('document-modal-edit-input') as HTMLTextAreaElement;
+		expect(input.value).toBe(BRAINDUMP.verbatim);
+		expect(input.value).not.toBe(BRAINDUMP.cleaned);
+		const editables = Array.from(container.querySelectorAll('input, textarea')) as HTMLInputElement[];
+		expect(editables.every((el) => el.value !== BRAINDUMP.cleaned)).toBe(true);
+		expect(queryByTestId('document-modal-create')).toBeNull();
+		expect(queryByTestId('document-modal-new-braindump')).toBeNull();
+	});
 });
 
