@@ -311,14 +311,17 @@ pub async fn propose_thematic_inference(
     }
     if source_concept_id == target_concept_id {
         return Err(Error::BadRequest(
-            "source and target must be distinct — a thematic inference bridges two cluster-mates".into(),
+            "source and target must be distinct — a thematic inference bridges two cluster-mates"
+                .into(),
         ));
     }
     let mut cluster = cluster_concept_ids;
     cluster.sort_unstable();
     cluster.dedup();
     if cluster.is_empty() {
-        return Err(Error::BadRequest("cluster_concept_ids must be non-empty".into()));
+        return Err(Error::BadRequest(
+            "cluster_concept_ids must be non-empty".into(),
+        ));
     }
     if !cluster.contains(&source_concept_id) || !cluster.contains(&target_concept_id) {
         return Err(Error::BadRequest(
@@ -555,8 +558,7 @@ fn row_to_proposal(r: &rusqlite::Row) -> rusqlite::Result<ChatInferenceProposal>
         Some(id) => {
             let braindump_json: String = r.get(11)?;
             let concept_json: String = r.get(12)?;
-            let braindump_ids: Vec<i64> =
-                serde_json::from_str(&braindump_json).unwrap_or_default();
+            let braindump_ids: Vec<i64> = serde_json::from_str(&braindump_json).unwrap_or_default();
             let concept_ids: Vec<i64> = serde_json::from_str(&concept_json).unwrap_or_default();
             Some(ThematicSnapshot {
                 id,
@@ -1374,12 +1376,17 @@ mod tests {
 
         // Structural mode writes no snapshot rows.
         let snapshot_rows: i64 = db
-            .run(|conn| Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?))
+            .run(|conn| {
+                Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?)
+            })
             .await
             .unwrap();
         assert_eq!(snapshot_rows, 0, "structural mode writes no snapshot");
         // The proposal's snapshot is None.
-        assert!(proposal.snapshot.is_none(), "structural proposal has no snapshot");
+        assert!(
+            proposal.snapshot.is_none(),
+            "structural proposal has no snapshot"
+        );
         // The provenance assertion carries the mode but no snapshot.
         let edge = crate::graph::find_edge(&db, maria, "endangers", beta)
             .await
@@ -1387,7 +1394,10 @@ mod tests {
             .unwrap();
         let assertions = edge_inference_asserted_by(&db, edge.id).await.unwrap();
         assert_eq!(assertions[0].mode, STRUCTURAL_MODE);
-        assert!(assertions[0].snapshot_id.is_none(), "structural provenance has no snapshot");
+        assert!(
+            assertions[0].snapshot_id.is_none(),
+            "structural provenance has no snapshot"
+        );
     }
 
     // --- issue #13: thematic inference (ADR-0006 thematic mode + ADR-0009) ---
@@ -1461,7 +1471,8 @@ mod tests {
             .as_ref()
             .expect("thematic proposal carries a Thematic Snapshot");
         assert_eq!(
-            snapshot.braindump_ids, vec![cluster_bd],
+            snapshot.braindump_ids,
+            vec![cluster_bd],
             "snapshot captured the cluster's braindump evidence (computed backend-side)"
         );
         assert_eq!(
@@ -1479,7 +1490,9 @@ mod tests {
         );
         // The snapshot row is in the table (frozen receipt).
         let snapshot_rows: i64 = db
-            .run(|conn| Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?))
+            .run(|conn| {
+                Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?)
+            })
             .await
             .unwrap();
         assert_eq!(snapshot_rows, 1, "one snapshot row per proposal");
@@ -1508,7 +1521,8 @@ mod tests {
         // the ephemeral cluster months later.
         let db = test_db();
         let (maria, q3, beta, _bd) = seed_cluster(&db).await;
-        let proposal = seed_pending_thematic(&db, maria, beta, "endangers", vec![maria, q3, beta]).await;
+        let proposal =
+            seed_pending_thematic(&db, maria, beta, "endangers", vec![maria, q3, beta]).await;
         let snapshot_id = proposal.snapshot.as_ref().expect("snapshot present").id;
 
         let endorsed = endorse_inference_proposal(&db, proposal.id).await.unwrap();
@@ -1532,16 +1546,23 @@ mod tests {
         assert_eq!(assertions[0].chat_inference_id, proposal.id);
         assert_eq!(assertions[0].mode, THEMATIC_MODE);
         assert_eq!(
-            assertions[0].snapshot_id, Some(snapshot_id),
+            assertions[0].snapshot_id,
+            Some(snapshot_id),
             "the frozen snapshot is attached to the persisted provenance"
         );
         // No braindump provenance — the inference is the sole origin.
         assert!(
-            crate::graph::edge_provenance(&db, edge.id).await.unwrap().is_empty(),
+            crate::graph::edge_provenance(&db, edge.id)
+                .await
+                .unwrap()
+                .is_empty(),
             "thematic inference edge has no braindump asserter"
         );
         // The snapshot row is unchanged (frozen receipt, not re-evaluated).
-        let refreshed = get_inference_proposal(&db, proposal.id).await.unwrap().unwrap();
+        let refreshed = get_inference_proposal(&db, proposal.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
             refreshed.snapshot.as_ref().unwrap().id,
             snapshot_id,
@@ -1610,7 +1631,10 @@ mod tests {
         assert_eq!(assertions.len(), 1);
         assert_eq!(assertions[0].chat_inference_id, proposal.id);
         assert_eq!(assertions[0].mode, THEMATIC_MODE);
-        assert!(assertions[0].snapshot_id.is_some(), "snapshot attached on accretion");
+        assert!(
+            assertions[0].snapshot_id.is_some(),
+            "snapshot attached on accretion"
+        );
     }
 
     #[tokio::test]
@@ -1643,7 +1667,10 @@ mod tests {
         .unwrap();
 
         // The endorsed proposal's snapshot is unchanged — frozen receipt.
-        let refreshed = get_inference_proposal(&db, proposal.id).await.unwrap().unwrap();
+        let refreshed = get_inference_proposal(&db, proposal.id)
+            .await
+            .unwrap()
+            .unwrap();
         let snapshot_after = refreshed.snapshot.as_ref().unwrap();
         assert_eq!(snapshot_after.id, snapshot_before.id, "snapshot id stable");
         assert_eq!(
@@ -1695,7 +1722,9 @@ mod tests {
 
         // Endorse both — they persist as different typed edges (endangers vs
         // helps) with distinguishable provenance origins.
-        endorse_inference_proposal(&db, structural.id).await.unwrap();
+        endorse_inference_proposal(&db, structural.id)
+            .await
+            .unwrap();
         endorse_inference_proposal(&db, thematic.id).await.unwrap();
 
         let endanger_edge = crate::graph::find_edge(&db, maria, "endangers", beta)
@@ -1706,8 +1735,12 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let endanger_assertions = edge_inference_asserted_by(&db, endanger_edge.id).await.unwrap();
-        let helps_assertions = edge_inference_asserted_by(&db, helps_edge.id).await.unwrap();
+        let endanger_assertions = edge_inference_asserted_by(&db, endanger_edge.id)
+            .await
+            .unwrap();
+        let helps_assertions = edge_inference_asserted_by(&db, helps_edge.id)
+            .await
+            .unwrap();
         assert_eq!(endanger_assertions[0].mode, STRUCTURAL_MODE);
         assert!(endanger_assertions[0].snapshot_id.is_none());
         assert_eq!(helps_assertions[0].mode, THEMATIC_MODE);
@@ -1742,9 +1775,10 @@ mod tests {
     async fn propose_thematic_rejects_unsanctioned_type() {
         let db = test_db();
         let (maria, q3, beta, _bd) = seed_cluster(&db).await;
-        let err = propose_thematic_inference(&db, maria, beta, "bamboozles", vec![maria, q3, beta], None)
-            .await
-            .unwrap_err();
+        let err =
+            propose_thematic_inference(&db, maria, beta, "bamboozles", vec![maria, q3, beta], None)
+                .await
+                .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
         assert!(err.to_string().contains("/ontology/propose"), "{err:?}");
     }
@@ -1777,26 +1811,32 @@ mod tests {
         let emb = fake_embedding();
         // Two concepts extracted from separate braindumps, no edges between them.
         let bd1 = seed_braindump(&db, "thinking about alpha").await;
-        ingest_extraction(&db, &emb, bd1, "thinking about alpha", extraction(&["Alpha"], &[]))
-            .await
-            .unwrap();
+        ingest_extraction(
+            &db,
+            &emb,
+            bd1,
+            "thinking about alpha",
+            extraction(&["Alpha"], &[]),
+        )
+        .await
+        .unwrap();
         let bd2 = seed_braindump(&db, "thinking about beta").await;
-        ingest_extraction(&db, &emb, bd2, "thinking about beta", extraction(&["Beta"], &[]))
-            .await
-            .unwrap();
+        ingest_extraction(
+            &db,
+            &emb,
+            bd2,
+            "thinking about beta",
+            extraction(&["Beta"], &[]),
+        )
+        .await
+        .unwrap();
         let alpha = concept_id(&db, "Alpha").await;
         let beta = concept_id(&db, "Beta").await;
 
-        let err = propose_thematic_inference(
-            &db,
-            alpha,
-            beta,
-            "endangers",
-            vec![alpha, beta],
-            None,
-        )
-        .await
-        .unwrap_err();
+        let err =
+            propose_thematic_inference(&db, alpha, beta, "endangers", vec![alpha, beta], None)
+                .await
+                .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
         assert!(
             err.to_string().contains("no braindump-backed edges"),
@@ -1804,7 +1844,9 @@ mod tests {
         );
         // No snapshot or proposal created.
         let snapshot_rows: i64 = db
-            .run(|conn| Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?))
+            .run(|conn| {
+                Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?)
+            })
             .await
             .unwrap();
         assert_eq!(snapshot_rows, 0, "no snapshot written on rejection");
@@ -1873,7 +1915,10 @@ mod tests {
         );
         // The snapshot row remains (audit trail of what was proposed) but the
         // proposal is no longer pending.
-        let refreshed = get_inference_proposal(&db, proposal.id).await.unwrap().unwrap();
+        let refreshed = get_inference_proposal(&db, proposal.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(refreshed.status, STATUS_REJECTED);
         assert!(refreshed.snapshot.is_some(), "snapshot preserved on reject");
     }
