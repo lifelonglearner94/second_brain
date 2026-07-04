@@ -125,11 +125,7 @@ pub async fn overwrite_verbatim(
 /// is the spec — the sequence the `submit` HTTP handler delegates to, so the
 /// pipeline is exercisable without an HTTP roundtrip. The edit path differs
 /// only in its persist step; see [`ingest_edit`].
-pub async fn ingest(
-    db: &Db,
-    llm: &dyn Llm,
-    verbatim: &str,
-) -> Result<(Braindump, IngestOutcome)> {
+pub async fn ingest(db: &Db, llm: &dyn Llm, verbatim: &str) -> Result<(Braindump, IngestOutcome)> {
     let cleaned = llm.clean(verbatim).await?;
     let braindump = insert_braindump(db, verbatim, &cleaned).await?;
     let outcome = accrete(db, llm, &braindump).await?;
@@ -365,8 +361,7 @@ mod tests {
                 .expect("row exists");
         assert_eq!(edited.id, first.id, "id stable across edit (ADR-0007)");
         assert_eq!(
-            edited.created_at,
-            first.created_at,
+            edited.created_at, first.created_at,
             "timestamp stable across edit (ADR-0007)"
         );
         assert_eq!(edited.verbatim, "  maria endangers q3 launch again  ");

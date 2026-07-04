@@ -185,14 +185,13 @@ fn retagged_edges_since(conn: &rusqlite::Connection, since: i64) -> Result<Vec<R
 mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
-    use crate::llm::{FakeLlm, Llm};
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::{concept_id_for_label, delete_braindump, find_edge, ingest_extraction};
+    use crate::llm::{FakeLlm, Llm};
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_vec_tables(FakeLlm::default().dim())
-            .unwrap();
+        db.ensure_vec_tables(FakeLlm::default().dim()).unwrap();
         db
     }
 

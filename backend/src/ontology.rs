@@ -219,11 +219,7 @@ pub async fn get_proposal(db: &Db, id: i64) -> Result<Option<TypeProposal>> {
 /// enqueue an async refactor to retag existing edges of the merged type.
 /// Returns the updated proposal. Errors with `Conflict` if the proposal is
 /// not pending (already resolved or auto-merged).
-pub async fn approve_proposal(
-    db: &Db,
-    llm: &dyn Llm,
-    id: i64,
-) -> Result<TypeProposal> {
+pub async fn approve_proposal(db: &Db, llm: &dyn Llm, id: i64) -> Result<TypeProposal> {
     // Load first so we can validate status and compute the embedding text
     // outside the transaction (the network call cannot live in a sync SQLite
     // transaction — same shape as `ingest_extraction`).
@@ -390,10 +386,7 @@ pub async fn knn_type(db: &Db, query_vec: &[f32]) -> Result<Option<(String, f32)
 
 /// Whether a slug already exists in the ontology (connection-scoped helper
 /// for use inside `db.run` closures).
-pub(crate) fn ontology_slug_exists_conn(
-    conn: &rusqlite::Connection,
-    slug: &str,
-) -> Result<bool> {
+pub(crate) fn ontology_slug_exists_conn(conn: &rusqlite::Connection, slug: &str) -> Result<bool> {
     let n: i64 = conn.query_row(
         "SELECT COUNT(*) FROM ontology WHERE slug = ?1",
         params![slug],
@@ -405,7 +398,8 @@ pub(crate) fn ontology_slug_exists_conn(
 /// Whether a slug already exists in the ontology.
 pub async fn ontology_slug_exists(db: &Db, slug: &str) -> Result<bool> {
     let slug = slug.to_string();
-    db.run(move |conn| ontology_slug_exists_conn(conn, &slug)).await
+    db.run(move |conn| ontology_slug_exists_conn(conn, &slug))
+        .await
 }
 
 /// All ontology types as `(slug, label, description)`, ordered by `id`. Used
@@ -425,10 +419,7 @@ pub async fn ontology_types(db: &Db) -> Result<Vec<(String, String, String)>> {
 /// store the result. Idempotent: types already embedded are skipped. Called at
 /// startup so the seeded day-zero vocabulary has embeddings for dedup before
 /// the first proposal arrives.
-pub async fn seed_type_embeddings(
-    db: &Db,
-    llm: &dyn Llm,
-) -> Result<usize> {
+pub async fn seed_type_embeddings(db: &Db, llm: &dyn Llm) -> Result<usize> {
     // Load all (id, slug, label, description) for types missing an embedding.
     let missing: Vec<(i64, String, String, String)> = db
         .run(|conn| {
@@ -675,8 +666,7 @@ mod tests {
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_vec_tables(FakeLlm::default().dim())
-            .unwrap();
+        db.ensure_vec_tables(FakeLlm::default().dim()).unwrap();
         db
     }
 

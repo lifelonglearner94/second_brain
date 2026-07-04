@@ -35,11 +35,6 @@ pub async fn chat(
     if query.trim().is_empty() {
         return Err(Error::BadRequest("query must be non-empty".into()));
     }
-    let response = chat::chat(
-        &state.db,
-        state.llm.as_ref(),
-        &query,
-    )
-    .await?;
+    let response = chat::chat(&state.db, state.llm.as_ref(), &query).await?;
     Ok(Json(response))
 }

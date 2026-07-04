@@ -98,11 +98,7 @@ pub struct ChatResponse {
 /// (`[cluster:...]`) — violating ADR-0008's "clusters are a magnifying glass,
 /// never a source" — the response is silent with no citations, so the frontend
 /// never shows sources for an answer resting on an ephemeral projection.
-pub async fn chat(
-    db: &Db,
-    llm: &dyn Llm,
-    query: &str,
-) -> Result<ChatResponse> {
+pub async fn chat(db: &Db, llm: &dyn Llm, query: &str) -> Result<ChatResponse> {
     let retrieved = retrieval::retrieve(db, llm, query).await?;
     if retrieved.braindumps.is_empty() {
         return Ok(silence(retrieved.mode));

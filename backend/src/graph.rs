@@ -984,9 +984,9 @@ fn merge_concepts_conn(conn: &rusqlite::Connection, keep_id: i64, fold_id: i64) 
 mod tests {
     use super::*;
     use crate::braindump::{get_braindump, insert_braindump};
-    use crate::llm::{FakeLlm, Llm};
     use crate::error::Error;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
+    use crate::llm::{FakeLlm, Llm};
 
     /// In-memory Db with vec tables at the fake embedding dim.
     fn test_db() -> Db {

@@ -97,11 +97,7 @@ pub struct RetrievalResult {
 /// braindump-embedding KNN, and returns ranked braindumps plus the traversed
 /// edge paths. When no concept seed clears [`SEED_SIMILARITY_FLOOR`], retrieval
 /// falls back to braindump-vector-direct (ADR-0004 no-seed fallback).
-pub async fn retrieve(
-    db: &Db,
-    llm: &dyn Llm,
-    query: &str,
-) -> Result<RetrievalResult> {
+pub async fn retrieve(db: &Db, llm: &dyn Llm, query: &str) -> Result<RetrievalResult> {
     let query_vec = llm.embed_query(query).await?;
     let dim = llm.dim();
     db.run(move |conn| {
@@ -409,14 +405,13 @@ fn knn_braindumps(
 mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
-    use crate::llm::{FakeLlm, Llm};
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::ingest_extraction;
+    use crate::llm::{FakeLlm, Llm};
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_vec_tables(FakeLlm::default().dim())
-            .unwrap();
+        db.ensure_vec_tables(FakeLlm::default().dim()).unwrap();
         db
     }
 

@@ -101,10 +101,14 @@ impl Llm for CountingLlm {
         Ok(ExtractionResult::default())
     }
     async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+        Ok(second_brain_backend::embedding::deterministic_vector(
+            text, 64,
+        ))
     }
     async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+        Ok(second_brain_backend::embedding::deterministic_vector(
+            text, 64,
+        ))
     }
     fn dim(&self) -> usize {
         64

@@ -17,9 +17,7 @@ use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
 use second_brain_backend::error::Result;
-use second_brain_backend::extractor::{
-    ExtractedConcept, ExtractedEdge, ExtractionResult,
-};
+use second_brain_backend::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
 use second_brain_backend::graph;
 use second_brain_backend::llm::Llm;
 use second_brain_backend::routes;
@@ -54,10 +52,14 @@ impl Llm for ScriptedLlm {
         Ok(self.result.clone())
     }
     async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+        Ok(second_brain_backend::embedding::deterministic_vector(
+            text, 64,
+        ))
     }
     async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+        Ok(second_brain_backend::embedding::deterministic_vector(
+            text, 64,
+        ))
     }
     fn dim(&self) -> usize {
         64
@@ -93,10 +95,14 @@ impl Llm for SequencedLlm {
         Ok(self.results.get(idx).cloned().unwrap_or_default())
     }
     async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+        Ok(second_brain_backend::embedding::deterministic_vector(
+            text, 64,
+        ))
     }
     async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+        Ok(second_brain_backend::embedding::deterministic_vector(
+            text, 64,
+        ))
     }
     fn dim(&self) -> usize {
         64

@@ -44,11 +44,7 @@ pub trait Llm: Send + Sync {
     /// invents a type. Identity resolution, accretion, provenance, and
     /// type-history are NOT the extractor's job; they live in
     /// [`crate::graph`].
-    async fn extract(
-        &self,
-        verbatim: &str,
-        ontology_slugs: &[String],
-    ) -> Result<ExtractionResult>;
+    async fn extract(&self, verbatim: &str, ontology_slugs: &[String]) -> Result<ExtractionResult>;
 
     /// Embed text for storage (braindump / concept / type) — the *document*
     /// task type (ADR-0001 / ADR-0004).
@@ -144,7 +140,10 @@ mod characterization {
     #[tokio::test]
     async fn extract_returns_no_concepts_or_edges() {
         let llm: &dyn Llm = &FakeLlm::default();
-        let result = llm.extract("the q3 review went off the rails", &[]).await.unwrap();
+        let result = llm
+            .extract("the q3 review went off the rails", &[])
+            .await
+            .unwrap();
         assert!(result.concepts.is_empty(), "{result:?}");
         assert!(result.edges.is_empty(), "{result:?}");
     }

@@ -670,15 +670,14 @@ fn compute_cluster_braindump_ids_conn(
 mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
-    use crate::llm::{FakeLlm, Llm};
     use crate::error::Error;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::ingest_extraction;
+    use crate::llm::{FakeLlm, Llm};
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_vec_tables(FakeLlm::default().dim())
-            .unwrap();
+        db.ensure_vec_tables(FakeLlm::default().dim()).unwrap();
         db
     }
 

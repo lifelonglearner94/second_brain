@@ -90,10 +90,7 @@ impl ScriptedLlm {
         *self.slug.lock().unwrap() = slug.to_string();
     }
     fn set_vector(&self, text: &str, vec: Vec<f32>) {
-        self.vectors
-            .lock()
-            .unwrap()
-            .insert(text.to_string(), vec);
+        self.vectors.lock().unwrap().insert(text.to_string(), vec);
     }
 }
 
@@ -157,10 +154,7 @@ where
 /// the scripted LLM so dedup can match proposals against them (in production
 /// `main.rs` does this at startup; tests must do it explicitly after wiring
 /// the scripted LLM).
-async fn app_with_state(
-    db: Db,
-    llm: ScriptedLlm,
-) -> (axum::Router, AppState) {
+async fn app_with_state(db: Db, llm: ScriptedLlm) -> (axum::Router, AppState) {
     db.ensure_vec_tables(llm.dim()).unwrap();
     let mut state = AppState::for_tests(db.clone());
     state.llm = Arc::new(llm);
@@ -216,15 +210,9 @@ async fn seed_edge(
             to_label: target_label.to_string(),
         }],
     };
-    ingest_extraction(
-        &state.db,
-        state.llm.as_ref(),
-        bd.id,
-        verbatim,
-        extraction,
-    )
-    .await
-    .unwrap();
+    ingest_extraction(&state.db, state.llm.as_ref(), bd.id, verbatim, extraction)
+        .await
+        .unwrap();
 
     let source = graph::concept_id_for_label(&state.db, source_label)
         .await
