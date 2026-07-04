@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { apiClient, type Health } from '$lib/api';
+	import { session } from '$lib/auth/session';
 
 	let health: Health | null = $state(null);
 	let error: string | null = $state(null);
@@ -22,6 +23,14 @@
 		<h1>Second Brain</h1>
 		<p class="tagline">Voice capture, a 3D knowledge graph, and grounded chat.</p>
 	</header>
+
+	<nav data-testid="auth-nav" aria-live="polite">
+		{#if session.status === 'authenticated'}
+			<a href="/app" data-testid="goto-app">Open the app</a>
+		{:else if session.status === 'unauthenticated'}
+			<a href="/login" data-testid="goto-login">Sign in with a passkey</a>
+		{/if}
+	</nav>
 
 	<section data-testid="health" aria-live="polite">
 		<h2>Backend</h2>
@@ -69,6 +78,14 @@
 		letter-spacing: 0.08em;
 		color: #9aa3b2;
 		margin: 0 0 0.5rem;
+	}
+	nav {
+		margin: 0 0 2rem;
+	}
+	nav a {
+		color: #7ab7ff;
+		text-decoration: underline;
+		font-size: 1.05rem;
 	}
 	ul {
 		list-style: none;

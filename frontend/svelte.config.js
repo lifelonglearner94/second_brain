@@ -10,6 +10,9 @@ const config = {
 			precompress: false,
 			strict: false
 		}),
+		prerender: {
+			entries: ['*', '/login', '/app']
+		},
 		serviceWorker: {
 			register: true
 		}
