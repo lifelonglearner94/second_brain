@@ -47,9 +47,17 @@ if ! docker compose version >/dev/null 2>&1; then
   echo "FAIL: docker compose plugin missing"; exit 1
 fi
 
-# --- 3. Firewall (nftables: lo + established + 22/80/443, drop rest) ---------
+# --- 3. Firewall (nftables INPUT-only — Docker owns FORWARD) ----------------
+# Docker (via iptables-nft) creates and manages its own FORWARD + DOCKER* chains
+# in the `ip filter` table for bridge networking. A `flush ruleset` + our own
+# FORWARD policy would wipe those chains and break `docker compose up` ("No
+# chain/target/match by that name" on DOCKER-FORWARD). So we manage INPUT only
+# — container-published ports traverse FORWARD (after DNAT), not INPUT, so a
+# drop-INPUT firewall does not block the Edge's :80. Docker is restarted after
+# the flush so it recreates its chains over the clean base, and docker.service
+# is ordered After nftables so a reboot flushes before Docker starts.
 if command -v nft >/dev/null 2>&1; then
-  echo ">>> configuring nftables firewall (22/80/443 open, input drop)"
+  echo ">>> configuring nftables firewall (INPUT-only: 22/80/443 open, rest drop)"
   cat > /etc/nftables.conf <<'NFT'
 #!/usr/sbin/nft -f
 flush ruleset
@@ -64,14 +72,25 @@ table inet filter {
         icmp type echo-request accept
         iif != "lo" counter drop
     }
-    chain forward { type filter hook forward priority 0; policy drop; }
-    chain output  { type filter hook output  priority 0; policy accept; }
 }
 NFT
   if nft -c -f /etc/nftables.conf 2>/dev/null; then
     nft -f /etc/nftables.conf
     systemctl enable --now nftables 2>/dev/null || true
-    echo ">>> firewall active"
+    # On boot, nftables must apply its flush BEFORE docker.service recreates
+    # the DOCKER chains, otherwise the flush wipes chains Docker already made.
+    mkdir -p /etc/systemd/system/docker.service.d
+    cat > /etc/systemd/system/docker.service.d/10-after-nftables.conf <<'UNIT'
+[Unit]
+After=nftables.service
+Wants=nftables.service
+UNIT
+    systemctl daemon-reload
+    # Recreate Docker's chains over the freshly-flushed base (no-op if absent).
+    if systemctl is-active --quiet docker; then
+      systemctl restart docker
+    fi
+    echo ">>> firewall active (INPUT-only); docker restarted to rebuild its chains"
   else
     echo ">>> WARNING: nftables config failed syntax check; firewall NOT applied (host left open)"
   fi
