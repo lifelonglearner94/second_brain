@@ -1,0 +1,20 @@
+# Minimize the Edge build context and keep secrets out (ADR-0004 Zero-Trust
+# Image). Applies to the Edge build (context = repo root); the Backend build
+# uses its own context (backend/) and its own backend/.dockerignore.
+.git
+.github
+docs
+backend
+**/node_modules
+**/.svelte-kit
+frontend/build
+**/target
+**/*.db
+**/*.db-shm
+**/*.db-wal
+.env
+**/.env
+infrastructure/.env
+*.log
+.DS_Store
+Thumbs.db

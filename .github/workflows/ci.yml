@@ -56,3 +56,17 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: e2e smoke (playwright)
         run: npm run test:e2e
+
+  compose:
+    name: compose (topology validation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # infrastructure/.env is gitignored (runtime secrets, ADR-0004) and is
+      # never present in CI. Stub an empty file so `docker compose config`
+      # resolves the env_file path without leaking or needing secrets.
+      - name: validate topology (docker compose config + structural tests)
+        run: |
+          touch infrastructure/.env
+          docker compose config >/dev/null
+          bash infrastructure/test/topology.sh
