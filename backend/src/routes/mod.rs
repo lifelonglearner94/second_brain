@@ -12,6 +12,7 @@ mod admin;
 mod auth;
 mod braindump;
 mod health;
+mod merge;
 mod ontology;
 
 /// Build the full router. State is threaded in here (rather than via
@@ -31,7 +32,9 @@ pub fn router(state: AppState) -> Router {
     // Protected routes — every handler behind this layer requires a valid
     // session cookie. `/me` is the demonstrator; `/auth/logout` needs the
     // validated session to invalidate it; `/braindumps` is the ingest write
-    // path (ADR-0007) — submit, read, and error-correction edit; `/admin/logs`
+    // path (ADR-0007) — submit, read, error-correction edit, and deletion with
+    // provenance cascade (issue #7); `/merge-suggestions` is the borderline
+    // concept-pair queue (ADR-0001 — list, approve, reject); `/admin/logs`
     // surfaces backend logs to the hidden admin tab.
     let protected_routes: Router<AppState> = Router::new()
         .route("/me", get(auth::me))
@@ -39,8 +42,13 @@ pub fn router(state: AppState) -> Router {
         .route("/braindumps", post(braindump::submit))
         .route(
             "/braindumps/{id}",
-            get(braindump::read).patch(braindump::edit),
+            get(braindump::read)
+                .patch(braindump::edit)
+                .delete(braindump::delete),
         )
+        .route("/merge-suggestions", get(merge::list))
+        .route("/merge-suggestions/{id}/approve", post(merge::approve))
+        .route("/merge-suggestions/{id}/reject", post(merge::reject))
         .route("/admin/logs", get(admin::logs))
         .route_layer(from_fn_with_state(state.clone(), require_session));
 
