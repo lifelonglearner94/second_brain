@@ -18,6 +18,9 @@
 	import { detectRendererCapability, probeRendererCapability } from '$lib/graph/capability';
 	import { renderSpatialViewGraph2D, type Render2DHandle } from '$lib/graph/render2d';
 	import { syncDelta, onWindowFocus } from '$lib/graph/delta-sync';
+	import { mergeIntoGraph } from '$lib/graph/merge';
+	import { createIngestApi, type IngestResponse } from '$lib/capture/ingest';
+	import ActiveCapture from '$lib/capture/ActiveCapture.svelte';
 
 	const HIGHLIGHT = '#ffffff';
 
@@ -65,6 +68,19 @@
 	let fg: FgInstance | null = null;
 	let handle2d: Render2DHandle | null = null;
 	let rendererChoice: '3d' | '2d' = '3d';
+	let snapshot = $state<GlobalTopologySnapshot | null>(null);
+	let deltaCursor = $state(0);
+
+	const deepgramApiKey = import.meta.env.VITE_DEEPGRAM_API_KEY as string | undefined;
+	const ingestApi = createIngestApi(apiClient, () => deltaCursor);
+
+	function onIngest(res: IngestResponse): void {
+		if (!snapshot || !fg) return;
+		const merged = mergeIntoGraph(snapshot, res);
+		snapshot = merged;
+		deltaCursor = res.cursor;
+		fg.graphData(buildGraphData(merged));
+	}
 	async function onLogout() {
 		busy = true;
 		logoutError = null;
@@ -105,16 +121,13 @@
 		const idb = createIdb();
 		const savedViewport = loadViewport();
 
-		let currentSnapshot: GlobalTopologySnapshot | null = null;
-		let cursor = 0;
-
 		(async () => {
 			try {
 				const loaded = await loadSpatialViewGraph(apiClient, idb);
 				if (destroyed) return;
 				fetchedAtLabel = loaded.source === 'cache' ? loaded.snapshot.fetchedAt : null;
-				currentSnapshot = loaded.snapshot;
-				cursor = Math.floor(new Date(loaded.snapshot.fetchedAt).getTime() / 1000);
+				snapshot = loaded.snapshot;
+				deltaCursor = Math.floor(new Date(loaded.snapshot.fetchedAt).getTime() / 1000);
 				const svg = buildSpatialViewGraph(loaded.snapshot);
 				const graphData = projectToGraphData(svg);
 				rendererChoice = detectRendererCapability(probeRendererCapability());
@@ -135,13 +148,13 @@
 		});
 
 		async function reconcileOnFocus(): Promise<void> {
-			if (destroyed || !currentSnapshot) return;
-			const outcome = await syncDelta({ snapshot: currentSnapshot, cursor }, apiClient);
+			if (destroyed || !snapshot) return;
+			const outcome = await syncDelta({ snapshot, cursor: deltaCursor }, apiClient);
 			if (destroyed || !outcome.applied) return;
-			currentSnapshot = outcome.state.snapshot;
-			cursor = outcome.state.cursor;
+			snapshot = outcome.state.snapshot;
+			deltaCursor = outcome.state.cursor;
 			if (fg && hasDeltaChanges(outcome.delta)) {
-				fg.graphData(buildGraphData(currentSnapshot));
+				fg.graphData(buildGraphData(snapshot));
 			}
 		}
 
@@ -274,6 +287,10 @@
 		{/if}
 	</header>
 
+	<section class="capture-section" data-testid="capture-section">
+		<ActiveCapture ingest={ingestApi} {deepgramApiKey} oningest={onIngest} />
+	</section>
+
 	<section class="graph-section" data-testid="graph-view" aria-live="polite">
 		<div class="graph-canvas" bind:this={graphContainer}></div>
 
@@ -369,9 +386,12 @@
 		border: 1px solid #2a2f3a;
 		border-radius: 0.5rem;
 		overflow: hidden;
-		block-size: calc(100vh - 7rem);
-		min-block-size: 24rem;
+		block-size: calc(100vh - 13rem);
+		min-block-size: 20rem;
 		background: #0b0d12;
+	}
+	.capture-section {
+		margin-block-end: 1rem;
 	}
 	.graph-canvas {
 		position: absolute;

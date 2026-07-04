@@ -107,6 +107,13 @@ export type LogsResponse = {
 	capacity: number;
 };
 
+export type BraindumpDto = {
+	id: string;
+	verbatim: string;
+	cleaned: string;
+	created_at: string;
+};
+
 export interface ApiClient {
 	getHealth(): Promise<Health>;
 	registerBegin(): Promise<RegistrationBegin>;
@@ -117,8 +124,9 @@ export interface ApiClient {
 	getMe(): Promise<Me>;
 	recover(): Promise<RecoverResponse>;
 	getGraph(): Promise<GlobalTopologySnapshot>;
-	getGraphDelta(since: number): Promise<GraphDelta>;
 	getAdminLogs(limit?: number): Promise<LogsResponse>;
+	submitBraindump(verbatim: string): Promise<BraindumpDto>;
+	getGraphDelta(since?: number): Promise<GraphDelta>;
 }
 
 function ok(res: Response): boolean {
@@ -181,12 +189,16 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		async getGraph(): Promise<GlobalTopologySnapshot> {
 			return getJson<GlobalTopologySnapshot>('/graph', 'GET /graph');
 		},
-		async getGraphDelta(since: number): Promise<GraphDelta> {
-			return getJson<GraphDelta>(`/graph/delta?since=${since}`, 'GET /graph/delta');
-		},
 		async getAdminLogs(limit?: number): Promise<LogsResponse> {
 			const path = limit !== undefined ? `/admin/logs?limit=${limit}` : '/admin/logs';
 			return getJson<LogsResponse>(path, 'GET /admin/logs');
+		},
+		async submitBraindump(verbatim: string): Promise<BraindumpDto> {
+			return postJson<BraindumpDto>('/braindumps', { verbatim }, 'POST /braindumps');
+		},
+		async getGraphDelta(since?: number): Promise<GraphDelta> {
+			const path = since !== undefined ? `/graph/delta?since=${since}` : '/graph/delta';
+			return getJson<GraphDelta>(path, 'GET /graph/delta');
 		}
 	};
 }
