@@ -89,4 +89,60 @@ describe('applyDelta — reconcile the Spatial View-Graph with a Delta Sync payl
 			expect(reconciled.edges.filter((e) => e.id === 'e1')).toHaveLength(1);
 		});
 	});
+
+	describe('apply-deletions', () => {
+		it('removes tombstoned concepts and edges (vanished via the deletion cascade, ADR-0007/0010)', () => {
+			const delta: GraphDelta = {
+				cursor: 1700000000,
+				added_concepts: [],
+				added_edges: [],
+				deleted_concept_ids: ['c2'],
+				deleted_edge_ids: ['e1'],
+				retagged_edges: []
+			};
+			const reconciled = applyDelta(BASE, delta);
+			expect(reconciled.concepts.map((c) => c.id)).toEqual(['c1']);
+			expect(reconciled.edges).toEqual([]);
+		});
+
+		it('drops a deleted concept partition assignment so the Louvain view stays consistent', () => {
+			const delta: GraphDelta = {
+				cursor: 1700000000,
+				added_concepts: [],
+				added_edges: [],
+				deleted_concept_ids: ['c1'],
+				deleted_edge_ids: [],
+				retagged_edges: []
+			};
+			const reconciled = applyDelta(BASE, delta);
+			expect(reconciled.partitions.map((p) => p.concept_id)).toEqual(['c2']);
+		});
+
+		it('also drops edges whose endpoint concept vanished, even if the backend did not list them (defensive against a partial tombstone)', () => {
+			const delta: GraphDelta = {
+				cursor: 1700000000,
+				added_concepts: [],
+				added_edges: [],
+				deleted_concept_ids: ['c1'],
+				deleted_edge_ids: [],
+				retagged_edges: []
+			};
+			const reconciled = applyDelta(BASE, delta);
+			expect(reconciled.edges).toEqual([]);
+		});
+
+		it('ignores deletion ids that are not in the snapshot (no error on a stale cursor)', () => {
+			const delta: GraphDelta = {
+				cursor: 1700000000,
+				added_concepts: [],
+				added_edges: [],
+				deleted_concept_ids: ['ghost'],
+				deleted_edge_ids: ['phantom'],
+				retagged_edges: []
+			};
+			const reconciled = applyDelta(BASE, delta);
+			expect(reconciled.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c2']);
+			expect(reconciled.edges.map((e) => e.id)).toEqual(['e1']);
+		});
+	});
 });
