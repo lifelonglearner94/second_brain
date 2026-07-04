@@ -9,7 +9,7 @@
 		editBraindump(id: number, verbatim: string): Promise<Braindump>;
 	};
 
-	let { api }: { api: ChatApi } = $props();
+	let { api, online = true }: { api: ChatApi; online?: boolean } = $props();
 
 	type Status = 'idle' | 'loading' | 'error';
 
@@ -23,6 +23,7 @@
 	const EXPLICIT_SILENCE = 'I cannot find graph-supported evidence to answer this.';
 
 	async function onSubmit() {
+		if (!online) return;
 		if (query.trim().length === 0) return;
 		status = 'loading';
 		response = null;
@@ -50,6 +51,11 @@
 </script>
 
 <section class="chat-surface" data-testid="chat-surface">
+	{#if !online}
+		<p class="chat-offline" data-testid="chat-offline">
+			Chat unavailable offline — connect to use the backend LLM.
+		</p>
+	{/if}
 	<form
 		class="chat-form"
 		onsubmit={(e) => {
@@ -66,8 +72,9 @@
 			bind:value={query}
 			placeholder="What is on your mind?"
 			autocomplete="off"
+			disabled={!online}
 		/>
-		<button type="submit" class="chat-submit" data-testid="chat-submit">Ask</button>
+		<button type="submit" class="chat-submit" data-testid="chat-submit" disabled={!online}>Ask</button>
 	</form>
 
 	{#if status === 'loading'}
@@ -153,6 +160,18 @@
 	}
 	.chat-error {
 		color: #ff7a7a;
+	}
+	.chat-offline {
+		padding: 0.75rem 1rem;
+		color: #f0c674;
+		background: rgba(240, 198, 116, 0.08);
+		border: 1px solid rgba(240, 198, 116, 0.3);
+		border-radius: 0.4rem;
+	}
+	.chat-submit:disabled,
+	.chat-input:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
 	}
 	.chat-silence {
 		padding: 0.75rem 1rem;
