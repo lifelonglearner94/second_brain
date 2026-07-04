@@ -3,8 +3,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/svelte';
 import EndorsementQueue from '../../src/lib/endorsement/EndorsementQueue.svelte';
-import { mergeEndorsedEdge, type GraphData } from '../../src/lib/endorsement/merge';
-import { EDGE_COLOR } from '../../src/lib/graph/build';
+import { mergeEndorsedEdge } from '../../src/lib/endorsement/merge';
+import { EDGE_COLOR, type GraphData } from '../../src/lib/graph/build';
 import type { ChatInferenceProposal } from '../../src/lib/api/client';
 
 const LABELS = new Map<number, string>([
