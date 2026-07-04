@@ -17,6 +17,7 @@ mod health;
 mod merge;
 mod ontology;
 mod retrieval;
+mod thematic;
 
 /// Build the full router. State is threaded in here (rather than via
 /// `.with_state` on the caller) because the auth middleware needs it at
@@ -40,7 +41,10 @@ pub fn router(state: AppState) -> Router {
     // concept-pair queue (ADR-0001 — list, approve, reject); `/retrieve` is
     // the seed-then-expand read path (ADR-0004); `/chat` is the grounded-
     // synthesis read surface (ADR-0005 — mandatory citations, graph-constrained
-    // inference, silence when unsupported); `/graph/delta` is the incremental
+    // inference, silence when unsupported); `/thematic` is the Thematic Read
+    // Model endpoint (ADR-0008 — backend-owned Louvain partition with ephemeral
+    // session labels, layered into chat as macrostructure context);
+    // `/graph/delta` is the incremental
     // read surface for pull-on-focus reconciliation (issue #28); `/admin/logs`
     // surfaces backend logs to the hidden admin tab; `/ontology/propose*` is
     // the governance queue (ADR-0003) — propose/approve/reject edge types and
@@ -60,6 +64,7 @@ pub fn router(state: AppState) -> Router {
         .route("/merge-suggestions/{id}/reject", post(merge::reject))
         .route("/retrieve", post(retrieval::retrieve))
         .route("/chat", post(chat::chat))
+        .route("/thematic", get(thematic::thematic))
         .route("/graph/delta", get(delta::graph_delta))
         .route("/admin/logs", get(admin::logs))
         .route("/ontology/propose", post(ontology::propose))
