@@ -1,0 +1,14 @@
+:root {
+	color-scheme: light dark;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	min-block-size: 100vh;
+}
+
+* {
+	box-sizing: border-box;
+}
