@@ -8,6 +8,7 @@ use second_brain_backend::{
     config::{Config, LogFormat},
     db::Db,
     embedding::FakeEmbedding,
+    extractor::FakeExtractor,
     llm::FakeLlm,
     routes,
     state::AppState,
@@ -31,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config.clone()),
         llm: Arc::new(FakeLlm),
         embedding: Arc::new(FakeEmbedding { dim: 1024 }),
+        extractor: Arc::new(FakeExtractor),
         auth: auth::AuthService::new(webauthn),
     };
     let app = routes::router(state);

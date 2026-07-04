@@ -9,6 +9,7 @@ use crate::auth::middleware::require_session;
 use crate::state::AppState;
 
 mod auth;
+mod braindump;
 mod health;
 
 /// Build the full router. State is threaded in here (rather than via
@@ -27,10 +28,16 @@ pub fn router(state: AppState) -> Router {
 
     // Protected routes — every handler behind this layer requires a valid
     // session cookie. `/me` is the demonstrator; `/auth/logout` needs the
-    // validated session to invalidate it.
+    // validated session to invalidate it; `/braindumps` is the ingest write
+    // path (ADR-0007) — submit, read, and error-correction edit.
     let protected_routes: Router<AppState> = Router::new()
         .route("/me", get(auth::me))
         .route("/auth/logout", post(auth::logout))
+        .route("/braindumps", post(braindump::submit))
+        .route(
+            "/braindumps/{id}",
+            get(braindump::read).patch(braindump::edit),
+        )
         .route_layer(from_fn_with_state(state.clone(), require_session));
 
     Router::new()

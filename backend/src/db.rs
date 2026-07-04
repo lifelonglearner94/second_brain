@@ -111,6 +111,21 @@ fn migrate(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);",
     )?;
+
+    // Issue #5 — braindump ingest skeleton (ADR-0007). A braindump is an
+    // immutable thought-snapshot: verbatim (user-confirmed text at submit,
+    // overwritable only for error-correction), cleaned (LLM-produced rendering
+    // shown by default), and created_at (the original submit instant — edits
+    // overwrite in place but never bump the timestamp). Extraction is stubbed
+    // in this slice; concepts/edges tables land with the real extraction slice.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS braindumps (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            verbatim    TEXT NOT NULL,
+            cleaned     TEXT NOT NULL,
+            created_at  INTEGER NOT NULL
+        );",
+    )?;
     Ok(())
 }
 
