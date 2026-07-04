@@ -145,4 +145,72 @@ describe('applyDelta — reconcile the Spatial View-Graph with a Delta Sync payl
 			expect(reconciled.edges.map((e) => e.id)).toEqual(['e1']);
 		});
 	});
+
+	describe('apply-retags', () => {
+		it('updates an existing edge current_type to the projected retag (async ontology refactor, ADR-0003)', () => {
+			const delta: GraphDelta = {
+				cursor: 1700000000,
+				added_concepts: [],
+				added_edges: [],
+				deleted_concept_ids: [],
+				deleted_edge_ids: [],
+				retagged_edges: [
+					{
+						id: 'e1',
+						source_concept_id: 'c1',
+						target_concept_id: 'c2',
+						original_type: 'affects',
+						current_type: 'endangers'
+					}
+				]
+			};
+			const reconciled = applyDelta(BASE, delta);
+			const edge = reconciled.edges.find((e) => e.id === 'e1');
+			expect(edge?.current_type).toBe('endangers');
+			expect(edge?.original_type).toBe('affects');
+		});
+
+		it('leaves the original_type immutable so the assertion history is preserved', () => {
+			const delta: GraphDelta = {
+				cursor: 1700000000,
+				added_concepts: [],
+				added_edges: [],
+				deleted_concept_ids: [],
+				deleted_edge_ids: [],
+				retagged_edges: [
+					{
+						id: 'e1',
+						source_concept_id: 'c1',
+						target_concept_id: 'c2',
+						original_type: 'affects',
+						current_type: 'endangers'
+					}
+				]
+			};
+			const reconciled = applyDelta(BASE, delta);
+			expect(reconciled.edges.find((e) => e.id === 'e1')?.original_type).toBe('affects');
+		});
+
+		it('ignores a retag for an edge the snapshot does not hold (already deleted / not yet fetched)', () => {
+			const delta: GraphDelta = {
+				cursor: 1700000000,
+				added_concepts: [],
+				added_edges: [],
+				deleted_concept_ids: [],
+				deleted_edge_ids: [],
+				retagged_edges: [
+					{
+						id: 'ghost',
+						source_concept_id: 'c1',
+						target_concept_id: 'c2',
+						original_type: 'affects',
+						current_type: 'endangers'
+					}
+				]
+			};
+			const reconciled = applyDelta(BASE, delta);
+			expect(reconciled.edges).toHaveLength(1);
+			expect(reconciled.edges[0]?.current_type).toBe('affects');
+		});
+	});
 });

@@ -16,9 +16,15 @@ export function applyDelta(
 	);
 	const keptPartitions = snapshot.partitions.filter((p) => !deletedConcepts.has(p.concept_id));
 
+	const retagById = new Map(delta.retagged_edges.map((r) => [r.id, r]));
+	const retaggedEdges = keptEdges.map((e) => {
+		const retag = retagById.get(e.id);
+		return retag ? { ...e, current_type: retag.current_type } : e;
+	});
+
 	return {
 		concepts: keptConcepts,
-		edges: keptEdges,
+		edges: retaggedEdges,
 		partitions: keptPartitions
 	};
 }
