@@ -20,6 +20,7 @@
 	import { syncDelta, onWindowFocus } from '$lib/graph/delta-sync';
 	import { mergeIntoGraph } from '$lib/graph/merge';
 	import { createIngestApi, type IngestResponse } from '$lib/capture/ingest';
+	import { pendingCaptures } from '$lib/capture/pending-captures';
 	import ActiveCapture from '$lib/capture/ActiveCapture.svelte';
 
 	const HIGHLIGHT = '#ffffff';
@@ -70,6 +71,7 @@
 	let rendererChoice: '3d' | '2d' = '3d';
 	let snapshot = $state<GlobalTopologySnapshot | null>(null);
 	let deltaCursor = $state(0);
+	let online = $state(typeof navigator !== 'undefined' ? navigator.onLine : true);
 
 	const deepgramApiKey = import.meta.env.VITE_DEEPGRAM_API_KEY as string | undefined;
 	const ingestApi = createIngestApi(apiClient, () => deltaCursor);
@@ -146,6 +148,16 @@
 		const stopFocusSync = onWindowFocus(globalThis, () => {
 			void reconcileOnFocus();
 		});
+
+		function handleConnectivity(): void {
+			online = typeof navigator !== 'undefined' ? navigator.onLine : true;
+			if (online) {
+				void pendingCaptures.load();
+			}
+		}
+		globalThis.addEventListener('online', handleConnectivity);
+		globalThis.addEventListener('offline', handleConnectivity);
+		void pendingCaptures.load();
 
 		async function reconcileOnFocus(): Promise<void> {
 			if (destroyed || !snapshot) return;
@@ -249,6 +261,8 @@
 		return () => {
 			destroyed = true;
 			stopFocusSync();
+			globalThis.removeEventListener('online', handleConnectivity);
+			globalThis.removeEventListener('offline', handleConnectivity);
 			try {
 				fg?._destructor();
 			} catch {
@@ -270,6 +284,11 @@
 		<h1><button type="button" data-testid="app-title" class="title-button" onclick={onHeaderTap}>Second Brain</button></h1>
 		<p class="tagline">Signed in as <code data-testid="user-id">{session.userId}</code></p>
 		<a href="/app/chat" class="chat-link" data-testid="chat-link">Chat</a>
+		{#if pendingCaptures.count > 0}
+			<a href="/app/pending" class="pending-link" data-testid="pending-captures-link">
+				Pending Captures ({pendingCaptures.count})
+			</a>
+		{/if}
 		<button
 			type="button"
 			data-testid="logout-button"
@@ -289,7 +308,7 @@
 	</header>
 
 	<section class="capture-section" data-testid="capture-section">
-		<ActiveCapture ingest={ingestApi} {deepgramApiKey} oningest={onIngest} />
+		<ActiveCapture ingest={ingestApi} {deepgramApiKey} oningest={onIngest} pending={pendingCaptures} {online} />
 	</section>
 
 	<section class="graph-section" data-testid="graph-view" aria-live="polite">
@@ -370,6 +389,18 @@
 		background: #1a1f2b;
 	}
 	.chat-link:hover {
+		text-decoration: underline;
+	}
+	.pending-link {
+		color: #f0c674;
+		text-decoration: none;
+		font-size: 0.95rem;
+		padding: 0.4rem 0.8rem;
+		border: 1px solid #2a2f3a;
+		border-radius: 0.5rem;
+		background: #1a1f2b;
+	}
+	.pending-link:hover {
 		text-decoration: underline;
 	}
 	.admin-entry {
