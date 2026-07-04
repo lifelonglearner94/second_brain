@@ -1,53 +1,11 @@
-//! Embedding client seam (ADR-0001 / ADR-0004). Gemini is the provider
+//! Embedding utilities (ADR-0001 / ADR-0004). Gemini is the provider
 //! (supersedes the Cohere choice in `first_draft.md` §C — recorded at close-out
 //! of the extraction slice). The seam distinguishes a *document* task type
 //! (storage: braindump/concept/type embeddings) from a *query* task type
-//! (retrieval seeds).
-
-use async_trait::async_trait;
-
-use crate::error::Result;
-
-#[async_trait]
-pub trait EmbeddingClient: Send + Sync {
-    /// Embed text for storage (braindump / concept / type).
-    async fn embed_document(&self, text: &str) -> Result<Vec<f32>>;
-
-    /// Embed a query used to seed retrieval.
-    async fn embed_query(&self, text: &str) -> Result<Vec<f32>>;
-
-    /// Dimensionality of every emitted vector.
-    fn dim(&self) -> usize;
-}
-
-/// A deterministic, dependency-free embedding for tests and offline runs.
-///
-/// Tokens are hashed into fixed buckets; texts that share tokens land in the
-/// same buckets and so have non-trivial cosine similarity. Identical texts map
-/// to identical vectors. Not a real semantic model — only a stable stand-in.
-#[derive(Clone, Copy, Debug)]
-pub struct FakeEmbedding {
-    pub dim: usize,
-}
-
-impl Default for FakeEmbedding {
-    fn default() -> Self {
-        Self { dim: 64 }
-    }
-}
-
-#[async_trait]
-impl EmbeddingClient for FakeEmbedding {
-    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(deterministic_vector(text, self.dim))
-    }
-    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(deterministic_vector(text, self.dim))
-    }
-    fn dim(&self) -> usize {
-        self.dim
-    }
-}
+//! (retrieval seeds); both are methods on the single [`crate::llm::Llm`] trait
+//! (issue #39 collapsed the former standalone `EmbeddingClient` trait into it).
+//! This module now holds only the shared deterministic-vector utilities the
+//! [`crate::llm::FakeLlm`] and scripted test stand-ins delegate to.
 
 /// Token-bucket embedding: each whitespace/alphanumeric token contributes +1 to
 /// the bucket its hash falls in. The result is L2-normalised.

@@ -35,6 +35,6 @@ pub async fn retrieve(
     if query.trim().is_empty() {
         return Err(Error::BadRequest("query must be non-empty".into()));
     }
-    let result = retrieval::retrieve(&state.db, state.embedding.as_ref(), &query).await?;
+    let result = retrieval::retrieve(&state.db, state.llm.as_ref(), &query).await?;
     Ok(Json(result))
 }

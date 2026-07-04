@@ -17,10 +17,9 @@ use http_body_util::BodyExt;
 use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
-use second_brain_backend::embedding::EmbeddingClient;
 use second_brain_backend::error::Result;
 use second_brain_backend::graph;
-use second_brain_backend::llm::LlmClient;
+use second_brain_backend::llm::Llm;
 use second_brain_backend::routes;
 use second_brain_backend::state::AppState;
 use serde_json::{json, Value};
@@ -64,31 +63,59 @@ async fn do_request(
     (status, value)
 }
 
-/// A scripted embedding client: per-text vectors so dedup thresholds land
-/// deterministically. `set` a vector for a text; unknown texts fall back to a
-/// deterministic non-zero vector (via `deterministic_vector`) so the
-/// accretion pipeline's concept KNN never sees a NULL cosine distance on a
-/// zero vector.
+/// The scripted LLM for the ontology-governance tests (issue #39 collapsed the
+/// former separate `ScriptedEmbedding` + `ScriptedLlm` into one struct):
+/// `embed_document`/`embed_query` return per-text vectors so dedup thresholds
+/// land deterministically (unknown texts fall back to a deterministic non-zero
+/// vector so concept-embedding KNN never divides by zero), and
+/// `generate_pinned` returns a canned slug so the refactor's re-classification
+/// is hermetic. `set_vector` / `set_slug` mutate the shared interior so a test
+/// can re-tune the same client between refactor phases.
 #[derive(Clone)]
-struct ScriptedEmbedding {
+struct ScriptedLlm {
     dim: usize,
+    slug: Arc<Mutex<String>>,
     vectors: Arc<Mutex<std::collections::HashMap<String, Vec<f32>>>>,
 }
 
-impl ScriptedEmbedding {
-    fn new(dim: usize) -> Self {
+impl ScriptedLlm {
+    fn new(dim: usize, slug: &str) -> Self {
         Self {
             dim,
+            slug: Arc::new(Mutex::new(slug.to_string())),
             vectors: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
-    fn set(&self, text: &str, vec: Vec<f32>) {
-        self.vectors.lock().unwrap().insert(text.to_string(), vec);
+    fn set_slug(&self, slug: &str) {
+        *self.slug.lock().unwrap() = slug.to_string();
+    }
+    fn set_vector(&self, text: &str, vec: Vec<f32>) {
+        self.vectors
+            .lock()
+            .unwrap()
+            .insert(text.to_string(), vec);
     }
 }
 
 #[async_trait]
-impl EmbeddingClient for ScriptedEmbedding {
+impl Llm for ScriptedLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok(self.slug.lock().unwrap().clone())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        // The ontology refactor tests never exercise chat synthesis.
+        Ok("ScriptedLlm::synthesize (unused by ontology tests)".to_string())
+    }
+    async fn extract(
+        &self,
+        _verbatim: &str,
+        _ontology_slugs: &[String],
+    ) -> Result<second_brain_backend::extractor::ExtractionResult> {
+        Ok(second_brain_backend::extractor::ExtractionResult::default())
+    }
     async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
         if let Some(v) = self.vectors.lock().unwrap().get(text).cloned() {
             return Ok(v);
@@ -107,44 +134,11 @@ impl EmbeddingClient for ScriptedEmbedding {
     }
 }
 
-/// A scripted LLM: returns the canned slug for every `generate_pinned` call so
-/// the refactor's re-classification is hermetic and deterministic. The slug is
-/// set per-test via the `set` API; the default is `"causes"` (sanctioned).
-#[derive(Clone)]
-struct ScriptedLlm {
-    slug: Arc<Mutex<String>>,
-}
-
-impl ScriptedLlm {
-    fn new(slug: &str) -> Self {
-        Self {
-            slug: Arc::new(Mutex::new(slug.to_string())),
-        }
-    }
-    fn set(&self, slug: &str) {
-        *self.slug.lock().unwrap() = slug.to_string();
-    }
-}
-
-#[async_trait]
-impl LlmClient for ScriptedLlm {
-    async fn clean(&self, verbatim: &str) -> Result<String> {
-        Ok(verbatim.trim().to_string())
-    }
-    async fn generate_pinned(&self, _system: &str, _user: &str) -> Result<String> {
-        Ok(self.slug.lock().unwrap().clone())
-    }
-    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
-        // The ontology refactor tests never exercise chat synthesis.
-        Ok("ScriptedLlm::synthesize (unused by ontology tests)".to_string())
-    }
-}
-
 /// Set scripted embedding vectors for every ontology type's full `type_text`
 /// (slug + label + description), using `mapper` to pick a vector per slug.
 /// This is what `seed_type_embeddings` will embed when it runs — so the test
 /// controls the exact cosine between proposed and existing types.
-async fn set_ontology_vectors<F>(emb: &ScriptedEmbedding, db: &Db, mapper: F)
+async fn set_ontology_vectors<F>(llm: &ScriptedLlm, db: &Db, mapper: F)
 where
     F: Fn(&str) -> Vec<f32>,
 {
@@ -153,25 +147,24 @@ where
         .unwrap();
     for (slug, label, desc) in types {
         let text = second_brain_backend::ontology::type_text(&slug, &label, &desc);
-        emb.set(&text, mapper(&slug));
+        llm.set_vector(&text, mapper(&slug));
     }
 }
 
-/// Build an AppState wired for governance tests: scripted embedding (for dedup)
-/// and scripted LLM (for refactor), with vec0 tables at the scripted dim. The
-/// ontology's day-zero types are embedded with the scripted embedding so dedup
-/// can match proposals against them (in production `main.rs` does this at
-/// startup; tests must do it explicitly after wiring the scripted embedding).
+/// Build an AppState wired for governance tests: a single scripted LLM
+/// (per-text embeddings for dedup + a canned slug for the refactor), with vec0
+/// tables at the scripted dim. The ontology's day-zero types are embedded with
+/// the scripted LLM so dedup can match proposals against them (in production
+/// `main.rs` does this at startup; tests must do it explicitly after wiring
+/// the scripted LLM).
 async fn app_with_state(
     db: Db,
-    emb: ScriptedEmbedding,
     llm: ScriptedLlm,
 ) -> (axum::Router, AppState) {
-    db.ensure_vec_tables(emb.dim()).unwrap();
+    db.ensure_vec_tables(llm.dim()).unwrap();
     let mut state = AppState::for_tests(db.clone());
-    state.embedding = Arc::new(emb.clone());
     state.llm = Arc::new(llm);
-    second_brain_backend::ontology::seed_type_embeddings(&state.db, state.embedding.as_ref())
+    second_brain_backend::ontology::seed_type_embeddings(&state.db, state.llm.as_ref())
         .await
         .unwrap();
     let app = routes::router(state.clone());
@@ -182,12 +175,12 @@ async fn app_with_state(
 /// the accretion pipeline creates distinct concepts (the `deterministic_vector`
 /// fallback with dim=2 is too collision-prone for concept identity). "Maria",
 /// "Q3 launch", and "Q3 review" are the labels used in `seed_edge`.
-fn set_refactor_concept_vectors(emb: &ScriptedEmbedding) {
-    emb.set("Maria", vec![1.0, 0.0]);
-    emb.set("Q3 launch", vec![0.0, 1.0]);
+fn set_refactor_concept_vectors(llm: &ScriptedLlm) {
+    llm.set_vector("Maria", vec![1.0, 0.0]);
+    llm.set_vector("Q3 launch", vec![0.0, 1.0]);
     // cosine([1,0], [1,1]) = cosine([0,1], [1,1]) = 1/sqrt(2) ≈ 0.707 < 0.80
     // (the suggestion floor) → stays a separate concept.
-    emb.set("Q3 review", vec![1.0, 1.0]);
+    llm.set_vector("Q3 review", vec![1.0, 1.0]);
 }
 
 /// Ingest one braindump + edge through the accretion pipeline so the refactor
@@ -225,7 +218,7 @@ async fn seed_edge(
     };
     ingest_extraction(
         &state.db,
-        state.embedding.as_ref(),
+        state.llm.as_ref(),
         bd.id,
         verbatim,
         extraction,
@@ -254,17 +247,16 @@ async fn seed_edge(
 async fn propose_new_type_with_no_near_match_is_queued_pending() {
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
-    let emb = ScriptedEmbedding::new(dim);
+    let llm = ScriptedLlm::new(dim, "nurtures");
     // The proposed type's embedding is orthogonal to every existing type's
     // embedding → cosine 0 < threshold → queued.
-    emb.set(
+    llm.set_vector(
         "nurtures Nurtures A nurtures or cares for B.",
         vec![1.0, 0.0],
     );
     // Every seeded ontology type gets the orthogonal vector → 0 similarity.
-    set_ontology_vectors(&emb, &db, |_| vec![0.0, 1.0]).await;
-    let llm = ScriptedLlm::new("nurtures");
-    let (app, _state) = app_with_state(db.clone(), emb, llm).await;
+    set_ontology_vectors(&llm, &db, |_| vec![0.0, 1.0]).await;
+    let (app, _state) = app_with_state(db.clone(), llm).await;
     let cookie = session_cookie(&db).await;
 
     let (status, body) = do_request(
@@ -294,15 +286,15 @@ async fn propose_new_type_with_no_near_match_is_queued_pending() {
 async fn propose_duplicate_type_above_threshold_auto_merges() {
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
-    let emb = ScriptedEmbedding::new(dim);
+    let llm = ScriptedLlm::new(dim, "causes");
     // The proposed "causes" duplicate lands at cosine 1.0 to the existing
     // "causes" type embedding — well above the 0.995 threshold → auto-merged.
-    emb.set(
+    llm.set_vector(
         "brings_about Brings about A is the reason B happens.",
         vec![1.0, 0.0],
     );
     // Existing types: "causes" shares the vector, others are orthogonal.
-    set_ontology_vectors(&emb, &db, |slug| {
+    set_ontology_vectors(&llm, &db, |slug| {
         if slug == "causes" {
             vec![1.0, 0.0]
         } else {
@@ -310,8 +302,7 @@ async fn propose_duplicate_type_above_threshold_auto_merges() {
         }
     })
     .await;
-    let llm = ScriptedLlm::new("causes");
-    let (app, _state) = app_with_state(db.clone(), emb, llm).await;
+    let (app, _state) = app_with_state(db.clone(), llm).await;
     let cookie = session_cookie(&db).await;
 
     let (status, body) = do_request(
@@ -347,9 +338,9 @@ async fn propose_borderline_duplicate_below_threshold_is_queued() {
     // threshold 0.995 → queued for human confirm/reject, NOT auto-merged.
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
-    let emb = ScriptedEmbedding::new(dim);
+    let llm = ScriptedLlm::new(dim, "causes");
     // Existing "causes" type gets [1, 0]; others orthogonal.
-    set_ontology_vectors(&emb, &db, |slug| {
+    set_ontology_vectors(&llm, &db, |slug| {
         if slug == "causes" {
             vec![1.0, 0.0]
         } else {
@@ -359,12 +350,11 @@ async fn propose_borderline_duplicate_below_threshold_is_queued() {
     .await;
     // Proposed "brings_about" at cosine 0.99 to causes.
     let y = (1.0_f32 - 0.99 * 0.99).sqrt();
-    emb.set(
+    llm.set_vector(
         "brings_about Brings about A is the reason B happens.",
         vec![0.99, y],
     );
-    let llm = ScriptedLlm::new("causes");
-    let (app, _state) = app_with_state(db.clone(), emb, llm).await;
+    let (app, _state) = app_with_state(db.clone(), llm).await;
     let cookie = session_cookie(&db).await;
 
     let (status, body) = do_request(
@@ -398,19 +388,19 @@ async fn propose_borderline_duplicate_below_threshold_is_queued() {
 async fn list_proposals_returns_pending_and_auto_merged() {
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
-    let emb = ScriptedEmbedding::new(dim);
+    let llm = ScriptedLlm::new(dim, "causes");
     // "nurtures" at 45° → cosine 0.707 to both [1,0] and [0,1], below the
     // 0.995 threshold → pending (no auto-merge with causes or anything else).
     let diag = (0.5f32).sqrt();
-    emb.set(
+    llm.set_vector(
         "nurtures Nurtures A nurtures or cares for B.",
         vec![diag, diag],
     );
-    emb.set(
+    llm.set_vector(
         "brings_about Brings about A is the reason B happens.",
         vec![1.0, 0.0],
     );
-    set_ontology_vectors(&emb, &db, |slug| {
+    set_ontology_vectors(&llm, &db, |slug| {
         if slug == "causes" {
             vec![1.0, 0.0]
         } else {
@@ -418,8 +408,7 @@ async fn list_proposals_returns_pending_and_auto_merged() {
         }
     })
     .await;
-    let llm = ScriptedLlm::new("causes");
-    let (app, _state) = app_with_state(db.clone(), emb, llm).await;
+    let (app, _state) = app_with_state(db.clone(), llm).await;
     let cookie = session_cookie(&db).await;
 
     do_request(
@@ -469,14 +458,13 @@ async fn list_proposals_returns_pending_and_auto_merged() {
 async fn approve_pending_type_adds_it_to_ontology_and_stores_embedding() {
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
-    let emb = ScriptedEmbedding::new(dim);
-    emb.set(
+    let llm = ScriptedLlm::new(dim, "nurtures");
+    llm.set_vector(
         "nurtures Nurtures A nurtures or cares for B.",
         vec![1.0, 0.0],
     );
-    set_ontology_vectors(&emb, &db, |_| vec![0.0, 1.0]).await;
-    let llm = ScriptedLlm::new("nurtures");
-    let (app, _state) = app_with_state(db.clone(), emb.clone(), llm).await;
+    set_ontology_vectors(&llm, &db, |_| vec![0.0, 1.0]).await;
+    let (app, _state) = app_with_state(db.clone(), llm.clone()).await;
     let cookie = session_cookie(&db).await;
 
     let (_, propose_body) = do_request(
@@ -514,7 +502,7 @@ async fn approve_pending_type_adds_it_to_ontology_and_stores_embedding() {
     // (Tests that the type-embedding collection was populated on approve.)
     let near = second_brain_backend::ontology::knn_type(
         &db,
-        &emb.embed_document("nurtures Nurtures A nurtures or cares for B.")
+        &llm.embed_document("nurtures Nurtures A nurtures or cares for B.")
             .await
             .unwrap(),
     )
@@ -529,14 +517,13 @@ async fn approve_pending_type_adds_it_to_ontology_and_stores_embedding() {
 async fn reject_pending_type_does_not_add_it() {
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
-    let emb = ScriptedEmbedding::new(dim);
-    emb.set(
+    let llm = ScriptedLlm::new(dim, "nurtures");
+    llm.set_vector(
         "nurtures Nurtures A nurtures or cares for B.",
         vec![1.0, 0.0],
     );
-    set_ontology_vectors(&emb, &db, |_| vec![0.0, 1.0]).await;
-    let llm = ScriptedLlm::new("nurtures");
-    let (app, _state) = app_with_state(db.clone(), emb, llm).await;
+    set_ontology_vectors(&llm, &db, |_| vec![0.0, 1.0]).await;
+    let (app, _state) = app_with_state(db.clone(), llm).await;
     let cookie = session_cookie(&db).await;
 
     let (_, propose_body) = do_request(
@@ -575,14 +562,13 @@ async fn reject_pending_type_does_not_add_it() {
 async fn approve_already_resolved_proposal_is_409() {
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
-    let emb = ScriptedEmbedding::new(dim);
-    emb.set(
+    let llm = ScriptedLlm::new(dim, "nurtures");
+    llm.set_vector(
         "nurtures Nurtures A nurtures or cares for B.",
         vec![1.0, 0.0],
     );
-    set_ontology_vectors(&emb, &db, |_| vec![0.0, 1.0]).await;
-    let llm = ScriptedLlm::new("nurtures");
-    let (app, _state) = app_with_state(db.clone(), emb, llm).await;
+    set_ontology_vectors(&llm, &db, |_| vec![0.0, 1.0]).await;
+    let (app, _state) = app_with_state(db.clone(), llm).await;
     let cookie = session_cookie(&db).await;
 
     let (_, propose_body) = do_request(
@@ -628,9 +614,8 @@ async fn approve_already_resolved_proposal_is_409() {
 #[tokio::test]
 async fn governance_routes_require_a_session() {
     let db = Db::open_in_memory().unwrap();
-    let emb = ScriptedEmbedding::new(2);
-    let llm = ScriptedLlm::new("causes");
-    let (app, _state) = app_with_state(db, emb, llm).await;
+    let llm = ScriptedLlm::new(2, "causes");
+    let (app, _state) = app_with_state(db, llm).await;
 
     let (status, _) = do_request(
         &app,
@@ -660,17 +645,16 @@ async fn approve_merge_refactor_retags_existing_edges_appending_to_history() {
     // the re-classification.
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
-    let emb = ScriptedEmbedding::new(dim);
-    emb.set(
+    let llm = ScriptedLlm::new(dim, "nurtures");
+    llm.set_vector(
         "nurtures Nurtures A nurtures or cares for B.",
         vec![1.0, 0.0],
     );
     // The "helps" type's embedding is what the accretion pipeline stores for
     // the seeded concept — we set it to a distinct vector so accretion works.
-    set_ontology_vectors(&emb, &db, |_| vec![0.0, 1.0]).await;
-    set_refactor_concept_vectors(&emb);
-    let llm = ScriptedLlm::new("nurtures");
-    let (app, state) = app_with_state(db.clone(), emb, llm).await;
+    set_ontology_vectors(&llm, &db, |_| vec![0.0, 1.0]).await;
+    set_refactor_concept_vectors(&llm);
+    let (app, state) = app_with_state(db.clone(), llm).await;
     let cookie = session_cookie(&db).await;
 
     // Seed an edge of type "helps" so the refactor has something to retag.
@@ -750,8 +734,8 @@ async fn second_refactor_over_already_retagged_edge_appends_a_third_entry() {
     // original, and appends rather than overwriting.
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
-    let emb = ScriptedEmbedding::new(dim);
-    emb.set(
+    let llm = ScriptedLlm::new(dim, "nurtures");
+    llm.set_vector(
         "nurtures Nurtures A nurtures or cares for B.",
         vec![1.0, 0.0],
     );
@@ -759,14 +743,13 @@ async fn second_refactor_over_already_retagged_edge_appends_a_third_entry() {
     // and to existing types [0,1], both below 0.995 → pending (not auto-merged
     // with nurtures, so it can be approved and trigger the second refactor).
     let diag = (0.5f32).sqrt();
-    emb.set(
+    llm.set_vector(
         "sustains Sustains A sustains B over time.",
         vec![diag, diag],
     );
-    set_ontology_vectors(&emb, &db, |_| vec![0.0, 1.0]).await;
-    set_refactor_concept_vectors(&emb);
-    let llm = ScriptedLlm::new("nurtures");
-    let (app, state) = app_with_state(db.clone(), emb, llm.clone()).await;
+    set_ontology_vectors(&llm, &db, |_| vec![0.0, 1.0]).await;
+    set_refactor_concept_vectors(&llm);
+    let (app, state) = app_with_state(db.clone(), llm.clone()).await;
     let cookie = session_cookie(&db).await;
 
     let edge_id = seed_edge(
@@ -808,7 +791,7 @@ async fn second_refactor_over_already_retagged_edge_appends_a_third_entry() {
 
     // Second merge: nurtures → sustains. The refactor must find the edge by its
     // *current* type (nurtures, the projection) and append a third entry.
-    llm.set("sustains");
+    llm.set_slug("sustains");
     let (_, p2) = do_request(
         &app,
         "POST",
@@ -861,15 +844,14 @@ async fn refactor_only_retags_edges_of_the_merged_type() {
     // the merge source.
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
-    let emb = ScriptedEmbedding::new(dim);
-    emb.set(
+    let llm = ScriptedLlm::new(dim, "nurtures");
+    llm.set_vector(
         "nurtures Nurtures A nurtures or cares for B.",
         vec![1.0, 0.0],
     );
-    set_ontology_vectors(&emb, &db, |_| vec![0.0, 1.0]).await;
-    set_refactor_concept_vectors(&emb);
-    let llm = ScriptedLlm::new("nurtures");
-    let (app, state) = app_with_state(db.clone(), emb, llm).await;
+    set_ontology_vectors(&llm, &db, |_| vec![0.0, 1.0]).await;
+    set_refactor_concept_vectors(&llm);
+    let (app, state) = app_with_state(db.clone(), llm).await;
     let cookie = session_cookie(&db).await;
 
     let helps_edge = seed_edge(
@@ -937,15 +919,14 @@ async fn approve_new_type_with_no_merge_of_does_not_retag_anything() {
     // triggers no refactor — there is no source type to retag from.
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
-    let emb = ScriptedEmbedding::new(dim);
-    emb.set(
+    let llm = ScriptedLlm::new(dim, "nurtures");
+    llm.set_vector(
         "nurtures Nurtures A nurtures or cares for B.",
         vec![1.0, 0.0],
     );
-    set_ontology_vectors(&emb, &db, |_| vec![0.0, 1.0]).await;
-    set_refactor_concept_vectors(&emb);
-    let llm = ScriptedLlm::new("nurtures");
-    let (app, state) = app_with_state(db.clone(), emb, llm).await;
+    set_ontology_vectors(&llm, &db, |_| vec![0.0, 1.0]).await;
+    set_refactor_concept_vectors(&llm);
+    let (app, state) = app_with_state(db.clone(), llm).await;
     let cookie = session_cookie(&db).await;
 
     let edge_id = seed_edge(

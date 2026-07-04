@@ -20,26 +20,45 @@ use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{
-    ExtractedConcept, ExtractedEdge, ExtractionResult, Extractor,
+    ExtractedConcept, ExtractedEdge, ExtractionResult,
 };
+use second_brain_backend::llm::Llm;
 use second_brain_backend::routes;
 use second_brain_backend::state::AppState;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
 #[derive(Clone)]
-struct ScriptedExtractor {
+struct ScriptedLlm {
     result: ExtractionResult,
 }
 
 #[async_trait]
-impl Extractor for ScriptedExtractor {
+impl Llm for ScriptedLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("ScriptedLlm::synthesize (unused by thematic tests)".to_string())
+    }
     async fn extract(
         &self,
         _verbatim: &str,
         _ontology_slugs: &[String],
     ) -> Result<ExtractionResult> {
         Ok(self.result.clone())
+    }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
     }
 }
 
@@ -98,9 +117,9 @@ async fn thematic(app: &axum::Router, cookie: &http::HeaderValue) -> (StatusCode
     (status, value)
 }
 
-fn app_with_extractor(db: Db, extractor: Arc<dyn Extractor>) -> axum::Router {
+fn app_with_llm(db: Db, llm: Arc<dyn Llm>) -> axum::Router {
     let mut state = AppState::for_tests(db);
-    state.extractor = extractor;
+    state.llm = llm;
     routes::router(state)
 }
 
@@ -110,9 +129,9 @@ async fn get_thematic_returns_the_current_partition_with_session_labels() {
     // with ADR-0008 ephemeral "Group N for this session" labels and the full
     // concept coverage, for the frontend to render.
     let db = Db::open_in_memory().unwrap();
-    let app = app_with_extractor(
+    let app = app_with_llm(
         db.clone(),
-        Arc::new(ScriptedExtractor {
+        Arc::new(ScriptedLlm {
             result: ExtractionResult {
                 concepts: concepts(&["Maria", "Q3 launch", "Alpha", "Beta"]),
                 edges: vec![
@@ -182,9 +201,9 @@ async fn get_thematic_requires_a_session() {
 #[tokio::test]
 async fn get_thematic_on_an_empty_graph_returns_an_empty_partition() {
     let db = Db::open_in_memory().unwrap();
-    let app = app_with_extractor(
+    let app = app_with_llm(
         db.clone(),
-        Arc::new(ScriptedExtractor {
+        Arc::new(ScriptedLlm {
             result: ExtractionResult::default(),
         }),
     );

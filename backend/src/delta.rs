@@ -190,19 +190,19 @@ fn retagged_edges_since(conn: &rusqlite::Connection, since: i64) -> Result<Vec<R
 mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
-    use crate::embedding::{EmbeddingClient, FakeEmbedding};
+    use crate::llm::{FakeLlm, Llm};
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::{concept_id_for_label, delete_braindump, find_edge, ingest_extraction};
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_vec_tables(FakeEmbedding::default().dim())
+        db.ensure_vec_tables(FakeLlm::default().dim())
             .unwrap();
         db
     }
 
-    fn fake_embedding() -> FakeEmbedding {
-        FakeEmbedding::default()
+    fn fake_llm() -> FakeLlm {
+        FakeLlm::default()
     }
 
     fn extraction(concepts: &[&str], edges: &[(&str, &str, &str)]) -> ExtractionResult {
@@ -275,11 +275,11 @@ mod tests {
         // First-sync cursor (since=0): every existing concept/edge is an
         // addition (all real timestamps > 0). No deletions, no retags.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria endangers q3 launch").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "maria endangers q3 launch",
             extraction(
@@ -315,11 +315,11 @@ mod tests {
         // Ingest then delete a braindump: the vanished concept and edge are
         // tombstoned and reported as deletions (ADR-0007/0010 cascade).
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria endangers q3 launch").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "maria endangers q3 launch",
             extraction(
@@ -357,11 +357,11 @@ mod tests {
         // a retag with the projected current type (ADR-0003). Controlled
         // timestamps so the boundary is deterministic.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria helps q3 launch").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "maria helps q3 launch",
             extraction(&["Maria", "Q3 launch"], &[("Maria", "helps", "Q3 launch")]),
@@ -407,9 +407,9 @@ mod tests {
         // Cursor captured after ingest is >= every created_at, so the delta is
         // empty (strict `>` filtering). The cursor still advances forward.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria").await;
-        ingest_extraction(&db, &emb, bd, "maria", extraction(&["Maria"], &[]))
+        ingest_extraction(&db, &llm, bd, "maria", extraction(&["Maria"], &[]))
             .await
             .unwrap();
 
@@ -431,11 +431,11 @@ mod tests {
         // An edge created AND retagged after the cursor arrives once — as an
         // addition carrying its current type — not duplicated as a retag.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria helps q3 launch").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "maria helps q3 launch",
             extraction(&["Maria", "Q3 launch"], &[("Maria", "helps", "Q3 launch")]),
@@ -473,9 +473,9 @@ mod tests {
         // Pull-on-focus loop: a second delta using the first response's cursor
         // returns nothing (no change between the two pulls).
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria").await;
-        ingest_extraction(&db, &emb, bd, "maria", extraction(&["Maria"], &[]))
+        ingest_extraction(&db, &llm, bd, "maria", extraction(&["Maria"], &[]))
             .await
             .unwrap();
 

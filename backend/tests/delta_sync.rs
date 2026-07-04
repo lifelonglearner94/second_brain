@@ -20,21 +20,31 @@ use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{
-    ExtractedConcept, ExtractedEdge, ExtractionResult, Extractor,
+    ExtractedConcept, ExtractedEdge, ExtractionResult,
 };
 use second_brain_backend::graph;
+use second_brain_backend::llm::Llm;
 use second_brain_backend::routes;
 use second_brain_backend::state::AppState;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
 #[derive(Clone)]
-struct ScriptedExtractor {
+struct ScriptedLlm {
     result: ExtractionResult,
 }
 
 #[async_trait]
-impl Extractor for ScriptedExtractor {
+impl Llm for ScriptedLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("ScriptedLlm::synthesize (unused by delta-sync tests)".to_string())
+    }
     async fn extract(
         &self,
         _verbatim: &str,
@@ -42,15 +52,33 @@ impl Extractor for ScriptedExtractor {
     ) -> Result<ExtractionResult> {
         Ok(self.result.clone())
     }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
+    }
 }
 
-struct SequencedExtractor {
+struct SequencedLlm {
     calls: Mutex<usize>,
     results: Vec<ExtractionResult>,
 }
 
 #[async_trait]
-impl Extractor for SequencedExtractor {
+impl Llm for SequencedLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("SequencedLlm::synthesize (unused by delta-sync tests)".to_string())
+    }
     async fn extract(
         &self,
         _verbatim: &str,
@@ -60,6 +88,15 @@ impl Extractor for SequencedExtractor {
         let idx = *calls;
         *calls += 1;
         Ok(self.results.get(idx).cloned().unwrap_or_default())
+    }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
     }
 }
 
@@ -137,9 +174,9 @@ async fn delta(
     (status, value)
 }
 
-fn app_with_extractor(db: Db, extractor: Arc<dyn Extractor>) -> axum::Router {
+fn app_with_llm(db: Db, llm: Arc<dyn Llm>) -> axum::Router {
     let mut state = AppState::for_tests(db);
-    state.extractor = extractor;
+    state.llm = llm;
     routes::router(state)
 }
 
@@ -184,13 +221,13 @@ async fn append_retag(db: &Db, edge_id: i64, type_slug: &str) {
 #[tokio::test]
 async fn delta_returns_additions_after_ingest() {
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(ScriptedExtractor {
+    let llm = Arc::new(ScriptedLlm {
         result: ExtractionResult {
             concepts: concepts(&["Maria", "Q3 launch"]),
             edges: vec![edge("Maria", "endangers", "Q3 launch")],
         },
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     submit(&app, &cookie, "maria endangers q3 launch").await;
@@ -218,13 +255,13 @@ async fn delta_returns_additions_after_ingest() {
 #[tokio::test]
 async fn delta_returns_deletions_after_braindump_delete() {
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(ScriptedExtractor {
+    let llm = Arc::new(ScriptedLlm {
         result: ExtractionResult {
             concepts: concepts(&["Maria", "Q3 launch"]),
             edges: vec![edge("Maria", "endangers", "Q3 launch")],
         },
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     let bd = submit(&app, &cookie, "maria endangers q3 launch").await;
@@ -271,13 +308,13 @@ async fn delta_returns_deletions_after_braindump_delete() {
 #[tokio::test]
 async fn delta_returns_retags_after_edge_type_refactor() {
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(ScriptedExtractor {
+    let llm = Arc::new(ScriptedLlm {
         result: ExtractionResult {
             concepts: concepts(&["Maria", "Q3 launch"]),
             edges: vec![edge("Maria", "helps", "Q3 launch")],
         },
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     submit(&app, &cookie, "maria helps q3 launch").await;
@@ -329,7 +366,7 @@ async fn delta_demo_returns_all_three_change_types() {
     // bd3 seeds fresh additions. Controlled timestamps keep the boundary
     // deterministic.
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(SequencedExtractor {
+    let llm = Arc::new(SequencedLlm {
         calls: Mutex::new(0),
         results: vec![
             // bd1: Maria —[helps]→ Q3 launch (will be retagged, survives).
@@ -349,7 +386,7 @@ async fn delta_demo_returns_all_three_change_types() {
             },
         ],
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     let bd1 = submit(&app, &cookie, "maria helps q3 launch").await;
@@ -471,13 +508,13 @@ async fn delta_with_no_since_defaults_to_first_sync() {
     // Omitting ?since defaults to 0 — a first sync returning everything as
     // additions.
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(ScriptedExtractor {
+    let llm = Arc::new(ScriptedLlm {
         result: ExtractionResult {
             concepts: concepts(&["Maria"]),
             edges: vec![],
         },
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     submit(&app, &cookie, "maria").await;
@@ -495,13 +532,13 @@ async fn delta_with_no_since_defaults_to_first_sync() {
 #[tokio::test]
 async fn delta_returns_empty_when_nothing_changed_since_cursor() {
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(ScriptedExtractor {
+    let llm = Arc::new(ScriptedLlm {
         result: ExtractionResult {
             concepts: concepts(&["Maria"]),
             edges: vec![],
         },
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     submit(&app, &cookie, "maria").await;

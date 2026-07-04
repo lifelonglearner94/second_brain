@@ -37,7 +37,6 @@ pub async fn chat(
     }
     let response = chat::chat(
         &state.db,
-        state.embedding.as_ref(),
         state.llm.as_ref(),
         &query,
     )

@@ -25,27 +25,49 @@ use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{
-    ExtractedConcept, ExtractedEdge, ExtractionResult, Extractor,
+    ExtractedConcept, ExtractedEdge, ExtractionResult,
 };
 use second_brain_backend::graph;
+use second_brain_backend::llm::Llm;
 use second_brain_backend::routes;
 use second_brain_backend::state::AppState;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
+/// An LLM whose `extract` returns a canned result regardless of input, so the
+/// accretion pipeline runs on deterministic concepts/edges. The non-extraction
+/// methods are stubs (these tests drive ingest + snapshot reads, not chat).
 #[derive(Clone)]
-struct ScriptedExtractor {
+struct ScriptedLlm {
     result: ExtractionResult,
 }
 
 #[async_trait]
-impl Extractor for ScriptedExtractor {
+impl Llm for ScriptedLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("ScriptedLlm::synthesize (unused by topology snapshot tests)".to_string())
+    }
     async fn extract(
         &self,
         _verbatim: &str,
         _ontology_slugs: &[String],
     ) -> Result<ExtractionResult> {
         Ok(self.result.clone())
+    }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
     }
 }
 
@@ -142,9 +164,9 @@ async fn graph(app: &axum::Router, cookie: &http::HeaderValue) -> (StatusCode, V
     (status, value, headers)
 }
 
-fn app_with_extractor(db: Db, extractor: Arc<dyn Extractor>) -> axum::Router {
+fn app_with_llm(db: Db, llm: Arc<dyn Llm>) -> axum::Router {
     let mut state = AppState::for_tests(db);
-    state.extractor = extractor;
+    state.llm = llm;
     routes::router(state)
 }
 
@@ -164,9 +186,9 @@ async fn get_graph_returns_gzipped_snapshot_with_concepts_edges_and_partitions()
     // full snapshot (all concepts, both edges with projected current type,
     // a partition assignment per concept) as a gzipped JSON payload.
     let db = Db::open_in_memory().unwrap();
-    let app = app_with_extractor(
+    let app = app_with_llm(
         db.clone(),
-        Arc::new(ScriptedExtractor {
+        Arc::new(ScriptedLlm {
             result: ExtractionResult {
                 concepts: concepts(&["Maria", "Q3 launch", "Alpha", "Beta"]),
                 edges: vec![
@@ -254,9 +276,9 @@ async fn get_graph_projects_current_type_from_type_history_after_retag() {
     // history, the snapshot reports current_type = "supports" with
     // original_type = "helps".
     let db = Db::open_in_memory().unwrap();
-    let app = app_with_extractor(
+    let app = app_with_llm(
         db.clone(),
-        Arc::new(ScriptedExtractor {
+        Arc::new(ScriptedLlm {
             result: ExtractionResult {
                 concepts: concepts(&["Maria", "Q3 launch"]),
                 edges: vec![edge("Maria", "helps", "Q3 launch")],
@@ -294,9 +316,9 @@ async fn get_graph_projects_current_type_from_type_history_after_retag() {
 #[tokio::test]
 async fn get_graph_on_empty_graph_returns_empty_gzipped_snapshot() {
     let db = Db::open_in_memory().unwrap();
-    let app = app_with_extractor(
+    let app = app_with_llm(
         db.clone(),
-        Arc::new(ScriptedExtractor {
+        Arc::new(ScriptedLlm {
             result: ExtractionResult::default(),
         }),
     );

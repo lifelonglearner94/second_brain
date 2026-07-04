@@ -17,22 +17,33 @@ use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::{now_seconds, Db};
 use second_brain_backend::error::Result;
-use second_brain_backend::extractor::{ExtractedConcept, ExtractionResult, Extractor};
+use second_brain_backend::extractor::{ExtractedConcept, ExtractionResult};
 use second_brain_backend::graph;
+use second_brain_backend::llm::Llm;
 use second_brain_backend::routes;
 use second_brain_backend::state::AppState;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-/// An extractor that returns a canned result regardless of input, so the
-/// accretion pipeline runs on deterministic concepts.
+/// An LLM whose `extract` returns a canned result regardless of input, so the
+/// accretion pipeline runs on deterministic concepts. The non-extraction
+/// methods are stubs (these tests drive merge suggestions, not chat/refactor).
 #[derive(Clone)]
-struct ScriptedExtractor {
+struct ScriptedLlm {
     result: ExtractionResult,
 }
 
 #[async_trait]
-impl Extractor for ScriptedExtractor {
+impl Llm for ScriptedLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("ScriptedLlm::synthesize (unused by merge-suggestion tests)".to_string())
+    }
     async fn extract(
         &self,
         _verbatim: &str,
@@ -40,17 +51,35 @@ impl Extractor for ScriptedExtractor {
     ) -> Result<ExtractionResult> {
         Ok(self.result.clone())
     }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
+    }
 }
 
-/// An extractor that returns a different result per call, so a two-braindump
-/// cycle can create two distinct concepts deterministically.
-struct SequencedExtractor {
+/// A scripted LLM whose `extract` returns a different result per call, so a
+/// two-braindump cycle can create two distinct concepts deterministically.
+struct SequencedLlm {
     calls: Mutex<usize>,
     results: Vec<ExtractionResult>,
 }
 
 #[async_trait]
-impl Extractor for SequencedExtractor {
+impl Llm for SequencedLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("SequencedLlm::synthesize (unused by merge-suggestion tests)".to_string())
+    }
     async fn extract(
         &self,
         _verbatim: &str,
@@ -60,6 +89,15 @@ impl Extractor for SequencedExtractor {
         let idx = *calls;
         *calls += 1;
         Ok(self.results.get(idx).cloned().unwrap_or_default())
+    }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
     }
 }
 
@@ -96,9 +134,9 @@ async fn submit(app: &axum::Router, cookie: &http::HeaderValue, verbatim: &str) 
     value["id"].as_i64().expect("id present")
 }
 
-fn app_with_extractor(db: Db, extractor: Arc<dyn Extractor>) -> axum::Router {
+fn app_with_llm(db: Db, llm: Arc<dyn Llm>) -> axum::Router {
     let mut state = AppState::for_tests(db);
-    state.extractor = extractor;
+    state.llm = llm;
     routes::router(state)
 }
 
@@ -153,7 +191,7 @@ async fn seed_suggestion(
 /// everything the tests need to exercise the queue and verify graph state.
 async fn seed_queue() -> (axum::Router, Db, http::HeaderValue, i64, i64, i64, i64, i64) {
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(SequencedExtractor {
+    let llm = Arc::new(SequencedLlm {
         calls: Mutex::new(0),
         results: vec![
             ExtractionResult {
@@ -166,7 +204,7 @@ async fn seed_queue() -> (axum::Router, Db, http::HeaderValue, i64, i64, i64, i6
             },
         ],
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
     let bd1 = submit(&app, &cookie, "maria").await;
     let bd2 = submit(&app, &cookie, "beta").await;
@@ -263,9 +301,9 @@ async fn reject_keeps_concepts_separate_and_drops_suggestion() {
 #[tokio::test]
 async fn approve_missing_suggestion_is_404() {
     let db = Db::open_in_memory().unwrap();
-    let app = app_with_extractor(
+    let app = app_with_llm(
         db.clone(),
-        Arc::new(ScriptedExtractor {
+        Arc::new(ScriptedLlm {
             result: ExtractionResult::default(),
         }),
     );
@@ -284,9 +322,9 @@ async fn approve_missing_suggestion_is_404() {
 #[tokio::test]
 async fn reject_missing_suggestion_is_404() {
     let db = Db::open_in_memory().unwrap();
-    let app = app_with_extractor(
+    let app = app_with_llm(
         db.clone(),
-        Arc::new(ScriptedExtractor {
+        Arc::new(ScriptedLlm {
             result: ExtractionResult::default(),
         }),
     );

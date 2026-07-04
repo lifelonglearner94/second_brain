@@ -1,7 +1,7 @@
 //! Integration tests for issue #8: the retrieval read path (ADR-0004).
 //!
 //! Seed-then-expand through the `POST /retrieve` route: the query is
-//! FakeEmbedding-embedded, concept-embedding KNN seeds, typed-edge graph
+//! FakeLlm-embedded, concept-embedding KNN seeds, typed-edge graph
 //! traversal expands, braindumps from the subgraph (plus braindump-embedding
 //! backfill) form the context. Unanchored queries fall back to
 //! braindump-vector-direct. Auth is bypassed by minting a session row directly
@@ -20,22 +20,33 @@ use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{
-    ExtractedConcept, ExtractedEdge, ExtractionResult, Extractor,
+    ExtractedConcept, ExtractedEdge, ExtractionResult,
 };
+use second_brain_backend::llm::Llm;
 use second_brain_backend::routes;
 use second_brain_backend::state::AppState;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-/// An extractor that returns a canned result regardless of input, so the
-/// accretion pipeline runs on deterministic concepts/edges.
+/// An LLM whose `extract` returns a canned result regardless of input, so the
+/// accretion pipeline runs on deterministic concepts/edges. The non-extraction
+/// methods are stubs (these tests drive ingest + retrieval, not chat/refactor).
 #[derive(Clone)]
-struct ScriptedExtractor {
+struct ScriptedLlm {
     result: ExtractionResult,
 }
 
 #[async_trait]
-impl Extractor for ScriptedExtractor {
+impl Llm for ScriptedLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("ScriptedLlm::synthesize (unused by retrieval tests)".to_string())
+    }
     async fn extract(
         &self,
         _verbatim: &str,
@@ -43,17 +54,35 @@ impl Extractor for ScriptedExtractor {
     ) -> Result<ExtractionResult> {
         Ok(self.result.clone())
     }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
+    }
 }
 
-/// A scripted extractor that returns a different result per call, so a single
-/// submit cycle can drive distinct concept/edge sets deterministically.
-struct SequencedExtractor {
+/// A scripted LLM whose `extract` returns a different result per call, so a
+/// single submit cycle can drive distinct concept/edge sets deterministically.
+struct SequencedLlm {
     calls: Mutex<usize>,
     results: Vec<ExtractionResult>,
 }
 
 #[async_trait]
-impl Extractor for SequencedExtractor {
+impl Llm for SequencedLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("SequencedLlm::synthesize (unused by retrieval tests)".to_string())
+    }
     async fn extract(
         &self,
         _verbatim: &str,
@@ -63,6 +92,15 @@ impl Extractor for SequencedExtractor {
         let idx = *calls;
         *calls += 1;
         Ok(self.results.get(idx).cloned().unwrap_or_default())
+    }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
     }
 }
 
@@ -126,9 +164,9 @@ async fn retrieve(
     (status, value)
 }
 
-fn app_with_extractor(db: Db, extractor: Arc<dyn Extractor>) -> axum::Router {
+fn app_with_llm(db: Db, llm: Arc<dyn Llm>) -> axum::Router {
     let mut state = AppState::for_tests(db);
-    state.extractor = extractor;
+    state.llm = llm;
     routes::router(state)
 }
 
@@ -139,13 +177,13 @@ async fn retrieve_finds_graph_linked_braindump_via_expansion() {
     // querying "Q3" — seed on Q3 launch, traverse the incoming edge to Maria,
     // collect her braindump.
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(ScriptedExtractor {
+    let llm = Arc::new(ScriptedLlm {
         result: ExtractionResult {
             concepts: concepts(&["Maria", "Q3 launch"]),
             edges: vec![edge("Maria", "endangers", "Q3 launch")],
         },
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     let bd = submit(&app, &cookie, "maria leaving tanks the timeline").await;
@@ -183,7 +221,7 @@ async fn retrieve_backfills_strays_the_graph_missed() {
     // A braindump whose concept does not seed and is not graph-connected,
     // but whose text matches the query — found by braindump-embedding backfill.
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(SequencedExtractor {
+    let llm = Arc::new(SequencedLlm {
         calls: Mutex::new(0),
         results: vec![
             ExtractionResult {
@@ -196,7 +234,7 @@ async fn retrieve_backfills_strays_the_graph_missed() {
             },
         ],
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     let _bd_graph = submit(&app, &cookie, "maria endangers the q3 launch").await;
@@ -217,7 +255,7 @@ async fn retrieve_falls_back_to_vector_direct_for_unanchored_query() {
     // ADR-0004 no-seed fallback: an unanchored query with no concept anchor
     // cannot seed; retrieval falls back to braindump-vector-direct.
     let db = Db::open_in_memory().unwrap();
-    let extractor = Arc::new(SequencedExtractor {
+    let llm = Arc::new(SequencedLlm {
         calls: Mutex::new(0),
         results: vec![
             ExtractionResult {
@@ -230,7 +268,7 @@ async fn retrieve_falls_back_to_vector_direct_for_unanchored_query() {
             },
         ],
     });
-    let app = app_with_extractor(db.clone(), extractor);
+    let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
 
     let bd_reflective = submit(

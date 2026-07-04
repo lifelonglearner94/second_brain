@@ -14,7 +14,9 @@ use http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
-use second_brain_backend::extractor::{ExtractionResult, Extractor};
+use second_brain_backend::error::Result;
+use second_brain_backend::extractor::ExtractionResult;
+use second_brain_backend::llm::Llm;
 use second_brain_backend::{db::Db, routes, state::AppState};
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -71,33 +73,52 @@ async fn submit(app: &axum::Router, cookie: &http::HeaderValue, verbatim: &str) 
     body
 }
 
-/// An extractor that counts how many times it was called, so tests can assert
-/// the seam is wired on submit and on edit.
+/// An LLM whose `extract` counts how many times it was called, so tests can
+/// assert the seam is wired on submit and on edit. The non-extraction methods
+/// are stubs (these tests exercise the braindump write path, not chat/refactor).
 #[derive(Default)]
-struct CountingExtractor {
+struct CountingLlm {
     calls: Arc<AtomicUsize>,
 }
 
 #[async_trait]
-impl Extractor for CountingExtractor {
+impl Llm for CountingLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        Ok("CountingLlm::synthesize (unused by braindump tests)".to_string())
+    }
     async fn extract(
         &self,
         _verbatim: &str,
         _ontology_slugs: &[String],
-    ) -> second_brain_backend::error::Result<ExtractionResult> {
+    ) -> Result<ExtractionResult> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(ExtractionResult::default())
     }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(text, 64))
+    }
+    fn dim(&self) -> usize {
+        64
+    }
 }
 
-/// Build app state with a recording extractor; return (app, calls-counter).
-fn app_with_recording_extractor(db: Db) -> (axum::Router, Arc<AtomicUsize>) {
+/// Build app state with a recording LLM; return (app, calls-counter).
+fn app_with_recording_llm(db: Db) -> (axum::Router, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
-    let extractor = Arc::new(CountingExtractor {
+    let llm = Arc::new(CountingLlm {
         calls: calls.clone(),
     });
     let mut state = AppState::for_tests(db);
-    state.extractor = extractor;
+    state.llm = llm;
     (routes::router(state), calls)
 }
 
@@ -157,7 +178,7 @@ async fn read_missing_braindump_is_404() {
 async fn edit_overwrites_verbatim_in_place_recleans_and_reruns_extractor() {
     let db = Db::open_in_memory().unwrap();
     let cookie = session_cookie(&db).await;
-    let (app, calls) = app_with_recording_extractor(db);
+    let (app, calls) = app_with_recording_llm(db);
 
     let submitted = submit(&app, &cookie, VERBATIM).await;
     let id = submitted["id"].as_i64().unwrap();
@@ -256,7 +277,7 @@ async fn verbatim_is_immutable_except_via_edit() {
 async fn submit_runs_the_stub_extractor_seam() {
     let db = Db::open_in_memory().unwrap();
     let cookie = session_cookie(&db).await;
-    let (app, calls) = app_with_recording_extractor(db);
+    let (app, calls) = app_with_recording_llm(db);
 
     submit(&app, &cookie, VERBATIM).await;
     assert_eq!(

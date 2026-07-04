@@ -4,7 +4,7 @@
 //! Given a braindump and the LLM's [`ExtractionResult`] (concepts + edges),
 //! this module:
 //!  1. embeds the braindump and each extracted concept label via the
-//!     [`EmbeddingClient`] seam (Gemini — supersedses the Cohere choice in
+//!     [`Llm`] seam (Gemini — supersedses the Cohere choice in
 //!     `first_draft.md` §C),
 //!  2. runs retract → embed-store → identity-resolution → concept accretion →
 //!     edge accretion → type-history init → provenance, all inside **one
@@ -26,9 +26,9 @@ use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 
 use crate::db::{now_seconds, Db};
-use crate::embedding::EmbeddingClient;
 use crate::error::{Error, Result};
 use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
+use crate::llm::Llm;
 
 /// Cosine similarity at or above which a newly-extracted concept is deemed the
 /// same as an existing one and accretes silently (ADR-0001: >95%).
@@ -110,17 +110,17 @@ pub struct MergeSuggestion {
 /// stale extraction before re-accreting — ADR-0007).
 pub async fn ingest_extraction(
     db: &Db,
-    embedding: &(dyn EmbeddingClient + Sync),
+    llm: &dyn Llm,
     braindump_id: i64,
     verbatim: &str,
     extraction: ExtractionResult,
 ) -> Result<IngestOutcome> {
-    let braindump_vec = embedding.embed_document(verbatim).await?;
+    let braindump_vec = llm.embed_document(verbatim).await?;
     let mut concept_vecs = Vec::with_capacity(extraction.concepts.len());
     for concept in &extraction.concepts {
-        concept_vecs.push(embedding.embed_document(&concept.label).await?);
+        concept_vecs.push(llm.embed_document(&concept.label).await?);
     }
-    let dim = embedding.dim();
+    let dim = llm.dim();
     let concepts = extraction.concepts;
     let edges = extraction.edges;
     db.run(move |conn| {
@@ -943,13 +943,13 @@ fn merge_concepts_conn(conn: &rusqlite::Connection, keep_id: i64, fold_id: i64) 
 mod tests {
     use super::*;
     use crate::braindump::{get_braindump, insert_braindump};
-    use crate::embedding::FakeEmbedding;
+    use crate::llm::{FakeLlm, Llm};
     use crate::error::Error;
-    use crate::extractor::{ExtractedConcept, ExtractedEdge};
+    use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
 
     /// In-memory Db with vec tables at the fake embedding dim.
     fn test_db() -> Db {
-        test_db_dim(FakeEmbedding::default().dim())
+        test_db_dim(FakeLlm::default().dim())
     }
 
     /// In-memory Db with vec tables at a chosen dim (for scripted-embedding
@@ -960,8 +960,8 @@ mod tests {
         db
     }
 
-    fn fake_embedding() -> FakeEmbedding {
-        FakeEmbedding::default()
+    fn fake_llm() -> FakeLlm {
+        FakeLlm::default()
     }
 
     fn extraction(concepts: &[&str], edges: &[(&str, &str, &str)]) -> ExtractionResult {
@@ -1036,12 +1036,12 @@ mod tests {
     #[tokio::test]
     async fn new_concept_created_with_provenance_and_embedding() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "q3 review went off the rails").await;
 
         let outcome = ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "q3 review went off the rails",
             extraction(&["Q3 review"], &[]),
@@ -1065,12 +1065,12 @@ mod tests {
     #[tokio::test]
     async fn same_concept_accretes_into_one_node_across_two_braindumps() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
 
         let bd1 = seed_braindump(&db, "the q3 review went off the rails").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd1,
             "the q3 review went off the rails",
             extraction(&["Q3 review"], &[]),
@@ -1081,7 +1081,7 @@ mod tests {
         let bd2 = seed_braindump(&db, "q3 review is still on my mind").await;
         let outcome = ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd2,
             "q3 review is still on my mind",
             extraction(&["Q3 review"], &[]),
@@ -1090,7 +1090,7 @@ mod tests {
         .unwrap();
 
         // Second extraction accretes to the same node (identical label →
-        // identical FakeEmbedding vector → cosine 1.0 > 0.95).
+        // identical FakeLlm vector → cosine 1.0 > 0.95).
         assert_eq!(outcome.concepts_created, 0, "{outcome:?}");
         assert_eq!(outcome.concepts_accreted, 1, "{outcome:?}");
         assert_eq!(count_concepts(&db).await, 1, "one node, not two");
@@ -1104,12 +1104,12 @@ mod tests {
     #[tokio::test]
     async fn distinct_concepts_stay_separate() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
 
         let bd = seed_braindump(&db, "maria and the q3 launch").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "maria and the q3 launch",
             extraction(&["Maria", "Q3 launch"], &[]),
@@ -1127,12 +1127,12 @@ mod tests {
     #[tokio::test]
     async fn edge_accretes_provenance_and_inits_type_history_at_index_zero() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
 
         let bd = seed_braindump(&db, "maria endangers the q3 launch").await;
         let outcome = ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "maria endangers the q3 launch",
             extraction(
@@ -1164,12 +1164,12 @@ mod tests {
     #[tokio::test]
     async fn second_braindump_asserting_same_edge_accretes_not_duplicates() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
 
         let bd1 = seed_braindump(&db, "maria endangers q3 launch").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd1,
             "maria endangers q3 launch",
             extraction(
@@ -1183,7 +1183,7 @@ mod tests {
         let bd2 = seed_braindump(&db, "maria still endangers q3 launch").await;
         let outcome = ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd2,
             "maria still endangers q3 launch",
             extraction(
@@ -1214,12 +1214,12 @@ mod tests {
         // ADR-0002: two braindumps may assert contradictory edges between the
         // same pair; both coexist, each with its own provenance.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
 
         let bd1 = seed_braindump(&db, "maria helps the q3 launch").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd1,
             "maria helps the q3 launch",
             extraction(&["Maria", "Q3 launch"], &[("Maria", "helps", "Q3 launch")]),
@@ -1230,7 +1230,7 @@ mod tests {
         let bd2 = seed_braindump(&db, "maria endangers the q3 launch").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd2,
             "maria endangers the q3 launch",
             extraction(
@@ -1247,11 +1247,11 @@ mod tests {
     #[tokio::test]
     async fn unsanctioned_edge_type_is_rejected() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria bamboozles q3 launch").await;
         let outcome = ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "maria bamboozles q3 launch",
             extraction(
@@ -1275,15 +1275,15 @@ mod tests {
         // → new concept + merge suggestion, not silent accretion).
         let dim = 2;
         let db = test_db_dim(dim);
-        let mut emb = ScriptedEmbedding::new(dim);
-        emb.set("alpha", vec![1.0, 0.0]);
+        let mut llm = ScriptedLlm::new(dim);
+        llm.set("alpha", vec![1.0, 0.0]);
         // [0.9, sqrt(1 - 0.81)] is unit-length and cosine 0.9 to [1, 0].
-        emb.set("alpha variant", vec![0.9, (1.0_f32 - 0.9 * 0.9).sqrt()]);
+        llm.set("alpha variant", vec![0.9, (1.0_f32 - 0.9 * 0.9).sqrt()]);
 
         let bd1 = seed_braindump(&db, "thinking about alpha").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd1,
             "thinking about alpha",
             extraction(&["alpha"], &[]),
@@ -1296,7 +1296,7 @@ mod tests {
         let bd2 = seed_braindump(&db, "more on the alpha variant").await;
         let outcome = ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd2,
             "more on the alpha variant",
             extraction(&["alpha variant"], &[]),
@@ -1334,12 +1334,12 @@ mod tests {
         // old extraction is retracted (provenance dropped, orphan nodes/edges
         // vanish) before the new one accretes — no double-accretion.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
 
         let bd = seed_braindump(&db, "maria endangers q3 launch").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "maria endangers q3 launch",
             extraction(
@@ -1356,7 +1356,7 @@ mod tests {
         // Maria/Q3 concepts vanish (no other braindump asserts them).
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "the alpha project",
             extraction(&["Alpha project"], &[]),
@@ -1378,12 +1378,12 @@ mod tests {
         // (braindump_id → braindumps.id). The whole transaction must roll back:
         // no concept, no embedding, no partial state. (foreign_keys is ON.)
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let ghost_braindump = 9999; // never inserted
 
         let outcome = ingest_extraction(
             &db,
-            &emb,
+            &llm,
             ghost_braindump,
             "maria endangers q3 launch",
             extraction(
@@ -1401,11 +1401,11 @@ mod tests {
     #[tokio::test]
     async fn empty_extraction_stores_only_braindump_embedding() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "just a feeling").await;
 
         let outcome =
-            ingest_extraction(&db, &emb, bd, "just a feeling", ExtractionResult::default())
+            ingest_extraction(&db, &llm, bd, "just a feeling", ExtractionResult::default())
                 .await
                 .unwrap();
 
@@ -1419,19 +1419,19 @@ mod tests {
     #[tokio::test]
     async fn delete_braindump_drops_extraction_provenance_and_vanishes_on_last_extractor() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd1 = seed_braindump(&db, "thinking about q3").await;
         let bd2 = seed_braindump(&db, "q3 again").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd1,
             "thinking about q3",
             extraction(&["Q3"], &[]),
         )
         .await
         .unwrap();
-        ingest_extraction(&db, &emb, bd2, "q3 again", extraction(&["Q3"], &[]))
+        ingest_extraction(&db, &llm, bd2, "q3 again", extraction(&["Q3"], &[]))
             .await
             .unwrap();
         let cid = db_concept_id_for_label(&db, "Q3").await;
@@ -1465,12 +1465,12 @@ mod tests {
     #[tokio::test]
     async fn delete_braindump_drops_edge_provenance_and_vanishes_on_last_asserter() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd1 = seed_braindump(&db, "maria endangers q3").await;
         let bd2 = seed_braindump(&db, "maria still endangers q3").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd1,
             "maria endangers q3",
             extraction(
@@ -1482,7 +1482,7 @@ mod tests {
         .unwrap();
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd2,
             "maria still endangers q3",
             extraction(
@@ -1528,12 +1528,12 @@ mod tests {
         // chat inference may assert an edge without extracting the endpoint —
         // ADR-0006). An edge with a missing endpoint is meaningless.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd1 = seed_braindump(&db, "maria endangers q3").await;
         let bd2 = seed_braindump(&db, "maria something").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd1,
             "maria endangers q3",
             extraction(
@@ -1546,7 +1546,7 @@ mod tests {
         // bd2 extracts only Maria, so Q3's sole extractor is bd1.
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd2,
             "maria something",
             extraction(&["Maria"], &[]),
@@ -1589,9 +1589,9 @@ mod tests {
     #[tokio::test]
     async fn delete_braindump_removes_row_and_braindump_embedding() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria").await;
-        ingest_extraction(&db, &emb, bd, "maria", extraction(&["Maria"], &[]))
+        ingest_extraction(&db, &llm, bd, "maria", extraction(&["Maria"], &[]))
             .await
             .unwrap();
         assert!(braindump_embedding_stored(&db, bd).await.unwrap());
@@ -1610,9 +1610,9 @@ mod tests {
     #[tokio::test]
     async fn delete_braindump_cleans_concept_embeddings_for_vanished_concepts() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria").await;
-        ingest_extraction(&db, &emb, bd, "maria", extraction(&["Maria"], &[]))
+        ingest_extraction(&db, &llm, bd, "maria", extraction(&["Maria"], &[]))
             .await
             .unwrap();
         let cid = db_concept_id_for_label(&db, "Maria").await;
@@ -1642,9 +1642,9 @@ mod tests {
         // a 'concept' tombstone row is appended so delta sync can report the
         // deletion (ADR-0010; the cascade deletes the row outright otherwise).
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria").await;
-        ingest_extraction(&db, &emb, bd, "maria", extraction(&["Maria"], &[]))
+        ingest_extraction(&db, &llm, bd, "maria", extraction(&["Maria"], &[]))
             .await
             .unwrap();
         let cid = db_concept_id_for_label(&db, "Maria").await;
@@ -1664,11 +1664,11 @@ mod tests {
         // When an edge vanishes (its last asserter is deleted), an 'edge'
         // tombstone row is appended so delta sync can report the deletion.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd = seed_braindump(&db, "maria endangers q3").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd,
             "maria endangers q3",
             extraction(
@@ -1700,13 +1700,13 @@ mod tests {
         // A concept that still has an extracting braindump after the cascade
         // must NOT be tombstoned — only vanished rows are.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd1 = seed_braindump(&db, "q3 one").await;
         let bd2 = seed_braindump(&db, "q3 two").await;
-        ingest_extraction(&db, &emb, bd1, "q3 one", extraction(&["Q3"], &[]))
+        ingest_extraction(&db, &llm, bd1, "q3 one", extraction(&["Q3"], &[]))
             .await
             .unwrap();
-        ingest_extraction(&db, &emb, bd2, "q3 two", extraction(&["Q3"], &[]))
+        ingest_extraction(&db, &llm, bd2, "q3 two", extraction(&["Q3"], &[]))
             .await
             .unwrap();
         let cid = db_concept_id_for_label(&db, "Q3").await;
@@ -1760,13 +1760,13 @@ mod tests {
     #[tokio::test]
     async fn approve_merge_unions_extraction_provenance_and_drops_fold_concept() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd1 = seed_braindump(&db, "maria").await;
         let bd2 = seed_braindump(&db, "beta").await;
-        ingest_extraction(&db, &emb, bd1, "maria", extraction(&["Maria"], &[]))
+        ingest_extraction(&db, &llm, bd1, "maria", extraction(&["Maria"], &[]))
             .await
             .unwrap();
-        ingest_extraction(&db, &emb, bd2, "beta", extraction(&["Beta"], &[]))
+        ingest_extraction(&db, &llm, bd2, "beta", extraction(&["Beta"], &[]))
             .await
             .unwrap();
         let maria = db_concept_id_for_label(&db, "Maria").await;
@@ -1802,12 +1802,12 @@ mod tests {
         // merged node; contradictory edges (different type) coexist rather than
         // being silently resolved.
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd1 = seed_braindump(&db, "maria endangers q3").await;
         let bd2 = seed_braindump(&db, "beta helps q3").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd1,
             "maria endangers q3",
             extraction(&["Maria", "Q3"], &[("Maria", "endangers", "Q3")]),
@@ -1816,7 +1816,7 @@ mod tests {
         .unwrap();
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd2,
             "beta helps q3",
             extraction(&["Beta", "Q3"], &[("Beta", "helps", "Q3")]),
@@ -1851,12 +1851,12 @@ mod tests {
     #[tokio::test]
     async fn approve_merge_unions_provenance_when_duplicate_edges_collide() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd1 = seed_braindump(&db, "maria helps q3").await;
         let bd2 = seed_braindump(&db, "beta helps q3").await;
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd1,
             "maria helps q3",
             extraction(&["Maria", "Q3"], &[("Maria", "helps", "Q3")]),
@@ -1865,7 +1865,7 @@ mod tests {
         .unwrap();
         ingest_extraction(
             &db,
-            &emb,
+            &llm,
             bd2,
             "beta helps q3",
             extraction(&["Beta", "Q3"], &[("Beta", "helps", "Q3")]),
@@ -1895,13 +1895,13 @@ mod tests {
     #[tokio::test]
     async fn reject_merge_keeps_concepts_separate_and_drops_suggestion() {
         let db = test_db();
-        let emb = fake_embedding();
+        let llm = fake_llm();
         let bd1 = seed_braindump(&db, "maria").await;
         let bd2 = seed_braindump(&db, "beta").await;
-        ingest_extraction(&db, &emb, bd1, "maria", extraction(&["Maria"], &[]))
+        ingest_extraction(&db, &llm, bd1, "maria", extraction(&["Maria"], &[]))
             .await
             .unwrap();
-        ingest_extraction(&db, &emb, bd2, "beta", extraction(&["Beta"], &[]))
+        ingest_extraction(&db, &llm, bd2, "beta", extraction(&["Beta"], &[]))
             .await
             .unwrap();
         let maria = db_concept_id_for_label(&db, "Maria").await;
@@ -1986,17 +1986,19 @@ mod tests {
         .unwrap()
     }
 
-    /// An embedding client with scripted per-text vectors, for tests that need a
+    /// An LLM with scripted per-text embedding vectors, for tests that need a
     /// controlled cosine (e.g. to land a match in the merge-suggestion band).
     /// Unknown text falls back to a zero vector (the braindump-verbatim
     /// embedding in those tests — its value is irrelevant to the assertion).
+    /// The non-embedding methods are unused stubs — graph tests only drive
+    /// `ingest_extraction`, which touches `embed_document`/`dim`.
     #[derive(Clone)]
-    struct ScriptedEmbedding {
+    struct ScriptedLlm {
         dim: usize,
         vectors: std::collections::HashMap<String, Vec<f32>>,
     }
 
-    impl ScriptedEmbedding {
+    impl ScriptedLlm {
         fn new(dim: usize) -> Self {
             Self {
                 dim,
@@ -2009,7 +2011,23 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl EmbeddingClient for ScriptedEmbedding {
+    impl Llm for ScriptedLlm {
+        async fn clean(&self, verbatim: &str) -> Result<String> {
+            Ok(verbatim.trim().to_string())
+        }
+        async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+            Ok(user.to_string())
+        }
+        async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+            Ok("ScriptedLlm::synthesize (unused by graph tests)".to_string())
+        }
+        async fn extract(
+            &self,
+            _verbatim: &str,
+            _ontology_slugs: &[String],
+        ) -> Result<ExtractionResult> {
+            Ok(ExtractionResult::default())
+        }
         async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
             Ok(self
                 .vectors
