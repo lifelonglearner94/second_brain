@@ -67,13 +67,19 @@ assert "app_network" in (edge.get("networks") or []), "edge must be on app_netwo
 assert "app_network" in cfg.get("networks", {}), "app_network must be declared"
 
 # --- Litestream Brain Replica sidecar (ADR-0002, #32) ------------------------
-# Shares sqlite_data READ-ONLY at /data for WAL tailing (never writes the brain).
+# Shares sqlite_data READ-WRITE at /data. Litestream v0.5.x maintains its own
+# internal tracking tables (_litestream_seq, _litestream_shadow) in the source
+# SQLite database to record WAL position, so a read-only mount crash-loops with
+# `attempt to write a readonly database (8)` once real R2 credentials are
+# present. This is safe — Litestream appends ONLY to its own _litestream_*
+# tables and never mutates braindump/concept/edge rows, so the Brain File's
+# user-data integrity is not at risk (ADR-0002 trust contract unchanged).
 lsvols = [v for v in litestream.get("volumes", []) if isinstance(v, dict) and v.get("target") == "/data"]
 assert lsvols, f"litestream must mount sqlite_data at /data; got {litestream.get('volumes')}"
 lm = lsvols[0]
 assert lm.get("type") == "volume" and lm.get("source") == "sqlite_data", \
     f"litestream /data must be the sqlite_data named volume; got {lm}"
-assert lm.get("read_only") is True, f"litestream must mount sqlite_data READ-ONLY; got {lm}"
+assert lm.get("read_only") is not True, f"litestream must mount sqlite_data READ-WRITE at /data; got {lm}"
 # Litestream config mounted at the default /etc/litestream.yml (read-only).
 lscfg = [v for v in litestream.get("volumes", []) if isinstance(v, dict) and v.get("target") == "/etc/litestream.yml"]
 assert lscfg, f"litestream must mount litestream.yml at /etc/litestream.yml; got {litestream.get('volumes')}"
@@ -95,7 +101,7 @@ assert "backend" in (litestream.get("depends_on") or []), "litestream must depen
 print("ok   - backend internal-only (expose 8080, no ports) per ADR-0006")
 print("ok   - Brain File on named volume sqlite_data at /data")
 print("ok   - edge sole published :80+:443; all services on app_network")
-print("ok   - litestream sidecar: sqlite_data ro, /etc/litestream.yml, :9090 loopback (ADR-0002/#32)")
+print("ok   - litestream sidecar: sqlite_data rw, /etc/litestream.yml ro, :9090 loopback (ADR-0002/#32)")
 PY
 
 # --- raw YAML by grep: env_file (ADR-0004) + image-tag fallback (#31) --------

@@ -2,8 +2,8 @@
 #   Edge    — custom Caddy image: terminates TLS, serves the baked PWA Bundle
 #             via file_server, reverse-proxies /api/* to the Backend.
 #   Backend — Rust/Axum; internal-only (ADR-0006): expose, no host ports.
-#   Litestream — Brain Replica sidecar (ADR-0002): tails the Brain File WAL on
-#             sqlite_data and streams to Cloudflare R2. Infra, not user-facing.
+#   Litestream — Brain Replica sidecar (ADR-0002): streams the Brain File WAL on
+#             sqlite_data to Cloudflare R2. Infra, not user-facing.
 #
 # The Brain File lives on the named volume `sqlite_data` mounted at /data
 # (never a bind mount, never baked into an image). Runtime secrets come from
@@ -60,17 +60,28 @@ services:
     restart: unless-stopped
 
   litestream:
-    # Brain Replica sidecar (ADR-0002, slice #32). Tails the Brain File WAL on
-    # the shared sqlite_data volume (read-only) and streams to Cloudflare R2,
-    # cutting the Recovery Point Objective to ~1 second. NOT a user-facing
-    # service — an infra sidecar alongside edge/backend. The backend already
-    # runs in WAL mode with busy_timeout=5000 (backend/src/db.rs), so Litestream's
-    # PASSIVE checkpoints do not contend with writes.
+    # Brain Replica sidecar (ADR-0002, slice #32). Streams the Brain File WAL on
+    # the shared sqlite_data volume to Cloudflare R2, cutting the Recovery Point
+    # Objective to ~1 second. NOT a user-facing service — an infra sidecar
+    # alongside edge/backend. The backend already runs in WAL mode with
+    # busy_timeout=5000 (backend/src/db.rs), so Litestream's PASSIVE checkpoints
+    # do not contend with writes.
+    # The /data mount is READ-WRITE, not read-only: Litestream v0.5.x maintains
+    # its own internal tracking tables (_litestream_seq, _litestream_shadow) in
+    # the source SQLite database to record WAL position, so a read-only mount
+    # crash-loops with `attempt to write a readonly database (8)` as soon as real
+    # R2 credentials are present. This is safe — Litestream appends ONLY to its
+    # own _litestream_* tables and never mutates braindump/concept/edge rows, so
+    # the Brain File's user-data integrity is not at risk (ADR-0002 trust
+    # contract unchanged). The /etc/litestream.yml config mount below stays :ro.
     image: litestream/litestream:0.5.13
     command: ["replicate"]
     volumes:
-      # Read-only WAL tailing: Litestream only reads the Brain File + -wal/-shm.
-      - sqlite_data:/data:ro
+      # Brain File mount is READ-WRITE: Litestream v0.5.x appends only to its
+      # own _litestream_* tracking tables in the source DB to record WAL
+      # position (see the service comment above + ADR-0002 for the safety
+      # argument — it never mutates braindump/concept/edge rows).
+      - sqlite_data:/data
       - ./infrastructure/litestream.yml:/etc/litestream.yml:ro
     env_file:
       # R2 credentials are auto-read by Litestream from LITESTREAM_ACCESS_KEY_ID

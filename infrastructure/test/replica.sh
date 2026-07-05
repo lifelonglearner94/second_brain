@@ -71,10 +71,14 @@ ls = svc["litestream"]
 assert str(ls.get("image","")).startswith("litestream/litestream:"), \
     f"litestream must use the upstream litestream image (pinned tag); got {ls.get('image')}"
 assert ls.get("command") == ["replicate"], f"litestream command must be [replicate]; got {ls.get('command')}"
-# Read-only Brain File volume for WAL tailing.
-ro = [v for v in ls.get("volumes", []) if isinstance(v, dict) and v.get("target") == "/data"]
-assert ro and ro[0].get("read_only") is True and ro[0].get("source") == "sqlite_data", \
-    f"litestream must mount sqlite_data at /data read-only; got {ls.get('volumes')}"
+# Read-write Brain File volume: Litestream v0.5.x appends only to its own
+# _litestream_* tracking tables in the source DB to record WAL position (it
+# never mutates braindump/concept/edge rows), so /data must be rw — a read-only
+# mount crash-loops with `attempt to write a readonly database (8)` once real R2
+# credentials are present.
+rw = [v for v in ls.get("volumes", []) if isinstance(v, dict) and v.get("target") == "/data"]
+assert rw and rw[0].get("read_only") is not True and rw[0].get("source") == "sqlite_data", \
+    f"litestream must mount sqlite_data at /data read-write; got {ls.get('volumes')}"
 # Metrics loopback-only (so the host cron Health Push can reach it, nothing else can).
 ports = ls.get("ports", [])
 assert any(p.get("target") == 9090 and p.get("host_ip") == "127.0.0.1" for p in ports), \
@@ -84,7 +88,7 @@ assert any(p.get("target") == 9090 and p.get("host_ip") == "127.0.0.1" for p in 
 env = ls.get("environment") or {}
 bad = [k for k in env if "LITESTREAM" in k.upper() or "SECRET" in k.upper() or "ACCESS_KEY" in k.upper()]
 assert not bad, f"litestream environment bakes a secret ({bad}); use env_file only (ADR-0004)"
-print("ok   - compose litestream: upstream pinned image, sqlite_data ro, :9090 loopback, no baked secret")
+print("ok   - compose litestream: upstream pinned image, sqlite_data rw, :9090 loopback, no baked secret")
 PY
 pass "Brain Replica structural shape (ADR-0002 / #32)"
 
