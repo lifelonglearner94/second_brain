@@ -237,3 +237,105 @@ async fn recovery_seam_exists_and_is_stubbed() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["error"].as_str().unwrap(), "recovery_not_implemented");
 }
+
+/// Register one soft passkey against a fresh app and return the app, so the
+/// singleton-lock tests start from the "a passkey already exists" state.
+async fn app_with_one_registered_passkey() -> axum::Router {
+    let db = Db::open_in_memory().unwrap();
+    let app = routes::router(AppState::for_tests(db));
+    let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let origin = Url::parse(ORIGIN).unwrap();
+
+    let (_, body, _) = do_request(&app, "POST", "/auth/register/begin", None).await;
+    let state = body["state"].as_str().unwrap().to_string();
+    let challenge: CreationChallengeResponse =
+        serde_json::from_value(body["challenge"].clone()).unwrap();
+    let credential = authenticator
+        .do_registration(origin, challenge)
+        .expect("soft passkey registers");
+    let finish_body = serde_json::json!({ "credential": credential, "state": state });
+    let (status, body, _) = do_request(
+        &app,
+        "POST",
+        "/auth/register/finish",
+        Some((finish_body, None)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "setup register finish: {body}");
+    app
+}
+
+#[tokio::test]
+async fn register_begin_refused_once_a_passkey_exists() {
+    // Deploy-time singleton lock (issue #2): after the first passkey lands,
+    // registration is closed. A second `register_begin` gets 409 Conflict —
+    // not 200 — so no one else can create a credential against the service.
+    let app = app_with_one_registered_passkey().await;
+    let (status, body, _) = do_request(&app, "POST", "/auth/register/begin", None).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "second register_begin: {body}"
+    );
+}
+
+#[tokio::test]
+async fn register_finish_refused_if_a_passkey_appeared_mid_flow() {
+    // The begin-time check is best-effort; the authoritative gate lives in
+    // `store_first_passkey` so a second caller whose `begin` succeeded while
+    // the table was still empty cannot complete registration once the first
+    // finish has landed. Two begins → first finish OK → second finish 409.
+    let db = Db::open_in_memory().unwrap();
+    let app = routes::router(AppState::for_tests(db));
+    let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let origin = Url::parse(ORIGIN).unwrap();
+
+    // Two begins while zero passkeys exist — both succeed (begin only checks,
+    // it does not insert).
+    let (_, body1, _) = do_request(&app, "POST", "/auth/register/begin", None).await;
+    let state1 = body1["state"].as_str().unwrap().to_string();
+    let ch1: CreationChallengeResponse =
+        serde_json::from_value(body1["challenge"].clone()).unwrap();
+    let cred1 = authenticator
+        .do_registration(origin.clone(), ch1)
+        .expect("first registration");
+
+    let (_, body2, _) = do_request(&app, "POST", "/auth/register/begin", None).await;
+    let state2 = body2["state"].as_str().unwrap().to_string();
+    let ch2: CreationChallengeResponse =
+        serde_json::from_value(body2["challenge"].clone()).unwrap();
+    let cred2 = authenticator
+        .do_registration(origin, ch2)
+        .expect("second registration");
+
+    // First finish stores the passkey — count goes 0 → 1.
+    let (status, body, _) = do_request(
+        &app,
+        "POST",
+        "/auth/register/finish",
+        Some((
+            serde_json::json!({ "credential": cred1, "state": state1 }),
+            None,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "first finish: {body}");
+
+    // Second finish hits the authoritative gate: count is now 1, so the insert
+    // is refused even though this caller's begin succeeded.
+    let (status, body, _) = do_request(
+        &app,
+        "POST",
+        "/auth/register/finish",
+        Some((
+            serde_json::json!({ "credential": cred2, "state": state2 }),
+            None,
+        )),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "second finish must be refused by the singleton lock: {body}"
+    );
+}

@@ -19,7 +19,7 @@ use crate::state::AppState;
 /// Begin passkey registration. Returns the creation challenge the browser signs
 /// plus an opaque `state` token echoed on finish.
 pub async fn register_begin(State(state): State<AppState>) -> Result<Json<RegistrationBegin>> {
-    let begin = state.auth.register_begin().await?;
+    let begin = state.auth.register_begin(&state.db).await?;
     Ok(Json(begin))
 }
 
