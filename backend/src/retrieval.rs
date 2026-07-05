@@ -17,7 +17,7 @@ use serde::Serialize;
 
 use crate::db::Db;
 use crate::error::Result;
-use crate::graph::{current_type_subquery, vec_to_blob};
+use crate::graph_repo::{current_type_subquery, GraphRepo, SqliteGraphRepo};
 use crate::llm::Llm;
 
 /// Cosine similarity at or above which a concept-embedding KNN hit counts as a
@@ -97,30 +97,38 @@ pub struct RetrievalResult {
 /// braindump-embedding KNN, and returns ranked braindumps plus the traversed
 /// edge paths. When no concept seed clears [`SEED_SIMILARITY_FLOOR`], retrieval
 /// falls back to braindump-vector-direct (ADR-0004 no-seed fallback).
+///
+/// Issue #45 lifted the KNN seed/backfill out of the `Db::run` closure to route
+/// them through the [`GraphRepo`] trait — the vec0 KNN SQL now lives in the
+/// Sqlite adapter, not in this module. The BFS expansion (`expand` +
+/// `collect_subgraph_braindumps`) stays inside a closure for #47 to migrate;
+/// its raw SQL reads (concepts, edges, concept_provenance, braindumps) are
+/// #47's scope, not #45's.
 pub async fn retrieve(db: &Db, llm: &dyn Llm, query: &str) -> Result<RetrievalResult> {
     let query_vec = llm.embed_query(query).await?;
     let dim = llm.dim();
-    db.run(move |conn| {
-        crate::db::ensure_vec_tables(conn, dim)?;
-        retrieve_conn(conn, &query_vec)
-    })
-    .await
-}
-
-fn retrieve_conn(conn: &rusqlite::Connection, query_vec: &[f32]) -> Result<RetrievalResult> {
-    let candidates = knn_concepts(conn, query_vec, SEED_TOP_K)?;
+    db.ensure_vec_tables(dim)?;
+    let repo = SqliteGraphRepo::new(db.clone());
+    let candidates = repo.knn_concepts(&query_vec, SEED_TOP_K).await?;
     let seeds: Vec<(i64, f32)> = candidates
         .into_iter()
         .filter(|(_, sim)| *sim >= SEED_SIMILARITY_FLOOR)
         .collect();
 
     if seeds.is_empty() {
-        return no_seed_fallback(conn, query_vec);
+        return no_seed_fallback(&repo, db, &query_vec).await;
     }
 
-    let (concept_hops, traversed_edges) = expand(conn, &seeds)?;
-    let subgraph = collect_subgraph_braindumps(conn, &concept_hops)?;
-    let backfill = backfill_braindumps(conn, query_vec, &subgraph)?;
+    // BFS expansion + subgraph collection stay inside one Db::run closure
+    // (#47's scope to migrate the BFS reads to the trait).
+    let (traversed_edges, subgraph) = db
+        .run(move |conn| {
+            let (concept_hops, traversed_edges) = expand(conn, &seeds)?;
+            let subgraph = collect_subgraph_braindumps(conn, &concept_hops)?;
+            Ok((traversed_edges, subgraph))
+        })
+        .await?;
+    let backfill = backfill_braindumps(&repo, db, &query_vec, &subgraph).await?;
 
     let mut all = subgraph;
     all.extend(backfill);
@@ -138,22 +146,33 @@ fn retrieve_conn(conn: &rusqlite::Connection, query_vec: &[f32]) -> Result<Retri
 }
 
 /// No-seed fallback (ADR-0004): the query had no concept anchor, so vectors
-/// become primary — braindump-embedding KNN, vector-direct.
-fn no_seed_fallback(conn: &rusqlite::Connection, query_vec: &[f32]) -> Result<RetrievalResult> {
-    let hits = knn_braindumps(conn, query_vec, BRAINDUMP_TOP_K)?;
-    let mut braindumps = Vec::new();
-    for (bd_id, sim) in hits {
-        if let Some(b) = load_braindump_row(conn, bd_id)? {
-            braindumps.push(RetrievedBraindump {
-                id: b.id,
-                verbatim: b.verbatim,
-                cleaned: b.cleaned,
-                created_at: b.created_at,
-                score: sim,
-                source: BraindumpSource::VectorDirect,
-            });
-        }
-    }
+/// become primary — braindump-embedding KNN, vector-direct. The KNN runs
+/// through the [`GraphRepo`] trait (issue #45); the braindump-row load stays
+/// in a `Db::run` closure.
+async fn no_seed_fallback(
+    repo: &SqliteGraphRepo,
+    db: &Db,
+    query_vec: &[f32],
+) -> Result<RetrievalResult> {
+    let hits = repo.knn_braindumps(query_vec, BRAINDUMP_TOP_K).await?;
+    let braindumps = db
+        .run(move |conn| {
+            let mut out = Vec::new();
+            for (bd_id, sim) in &hits {
+                if let Some(b) = load_braindump_row(conn, *bd_id)? {
+                    out.push(RetrievedBraindump {
+                        id: b.id,
+                        verbatim: b.verbatim,
+                        cleaned: b.cleaned,
+                        created_at: b.created_at,
+                        score: *sim,
+                        source: BraindumpSource::VectorDirect,
+                    });
+                }
+            }
+            Ok(out)
+        })
+        .await?;
     Ok(RetrievalResult {
         braindumps,
         paths: Vec::new(),
@@ -307,29 +326,37 @@ fn collect_subgraph_braindumps(
 
 /// Braindump-embedding KNN backfill for strays the graph missed (ADR-0004).
 /// Returns braindumps not already in the subgraph set, scored by similarity.
-fn backfill_braindumps(
-    conn: &rusqlite::Connection,
+/// The KNN runs through the [`GraphRepo`] trait (issue #45); the braindump-row
+/// load stays in a `Db::run` closure.
+async fn backfill_braindumps(
+    repo: &SqliteGraphRepo,
+    db: &Db,
     query_vec: &[f32],
     subgraph: &[RetrievedBraindump],
 ) -> Result<Vec<RetrievedBraindump>> {
     let already: HashSet<i64> = subgraph.iter().map(|b| b.id).collect();
-    let hits = knn_braindumps(conn, query_vec, BRAINDUMP_TOP_K)?;
-    let mut backfill = Vec::new();
-    for (bd_id, sim) in hits {
-        if already.contains(&bd_id) {
-            continue;
-        }
-        if let Some(b) = load_braindump_row(conn, bd_id)? {
-            backfill.push(RetrievedBraindump {
-                id: b.id,
-                verbatim: b.verbatim,
-                cleaned: b.cleaned,
-                created_at: b.created_at,
-                score: sim,
-                source: BraindumpSource::Backfill,
-            });
-        }
-    }
+    let hits = repo.knn_braindumps(query_vec, BRAINDUMP_TOP_K).await?;
+    let backfill = db
+        .run(move |conn| {
+            let mut out = Vec::new();
+            for (bd_id, sim) in &hits {
+                if already.contains(bd_id) {
+                    continue;
+                }
+                if let Some(b) = load_braindump_row(conn, *bd_id)? {
+                    out.push(RetrievedBraindump {
+                        id: b.id,
+                        verbatim: b.verbatim,
+                        cleaned: b.cleaned,
+                        created_at: b.created_at,
+                        score: *sim,
+                        source: BraindumpSource::Backfill,
+                    });
+                }
+            }
+            Ok(out)
+        })
+        .await?;
     Ok(backfill)
 }
 
@@ -358,49 +385,11 @@ fn load_braindump_row(conn: &rusqlite::Connection, id: i64) -> Result<Option<Bra
     Ok(row)
 }
 
-/// sqlite-vec KNN: top-K concepts by cosine similarity to the query vector.
-/// similarity = 1 − distance (cosine metric on the vec0 table).
-fn knn_concepts(
-    conn: &rusqlite::Connection,
-    query_vec: &[f32],
-    limit: usize,
-) -> Result<Vec<(i64, f32)>> {
-    let blob = vec_to_blob(query_vec);
-    let mut stmt = conn.prepare(
-        "SELECT concept_id, distance FROM concept_embeddings
-         WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
-    )?;
-    let rows = stmt.query_map(params![blob, limit as i64], |r| {
-        Ok((r.get::<_, i64>(0)?, 1.0 - r.get::<_, f64>(1)? as f32))
-    })?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row?);
-    }
-    Ok(out)
-}
-
-/// sqlite-vec KNN: top-K braindumps by cosine similarity to the query vector.
-fn knn_braindumps(
-    conn: &rusqlite::Connection,
-    query_vec: &[f32],
-    limit: usize,
-) -> Result<Vec<(i64, f32)>> {
-    let blob = vec_to_blob(query_vec);
-    let mut stmt = conn.prepare(
-        "SELECT braindump_id, distance FROM braindump_embeddings
-         WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
-    )?;
-    let rows = stmt.query_map(params![blob, limit as i64], |r| {
-        Ok((r.get::<_, i64>(0)?, 1.0 - r.get::<_, f64>(1)? as f32))
-    })?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row?);
-    }
-    Ok(out)
-}
-
+/// sqlite-vec KNN over concept and braindump embeddings moved to the
+/// [`GraphRepo`] trait (issue #45): see [`SqliteGraphRepo::knn_concepts`] and
+/// [`SqliteGraphRepo::knn_braindumps`]. The trait methods are async, so they
+/// cannot be called from inside the sync `Db::run` closure that owns the BFS;
+/// `retrieve` lifts the KNN out of the closure and calls the trait directly.
 #[cfg(test)]
 mod tests {
     use super::*;

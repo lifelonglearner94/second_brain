@@ -33,23 +33,17 @@ pub struct Ontology {
 }
 
 pub async fn ontology(State(state): State<AppState>) -> Result<Json<Ontology>> {
-    let edge_types = state
-        .db
-        .run(|conn| {
-            let mut stmt =
-                conn.prepare("SELECT slug, label, description FROM ontology ORDER BY id")?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok(EdgeType {
-                        slug: r.get(0)?,
-                        label: r.get(1)?,
-                        description: r.get(2)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<_>>()?;
-            Ok(rows)
+    // The duplicated full-row ontology query lives in exactly one place now
+    // (issue #45): the Sqlite adapter's `GraphRepo::ontology_types` impl.
+    let rows = state.graph_repo.ontology_types().await?;
+    let edge_types = rows
+        .into_iter()
+        .map(|(slug, label, description)| EdgeType {
+            slug,
+            label,
+            description,
         })
-        .await?;
+        .collect();
     Ok(Json(Ontology { edge_types }))
 }
 

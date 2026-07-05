@@ -1,11 +1,18 @@
 # Brain Replica config (ADR-0002, slice #32).
 #
-# Litestream tails the Brain File's WAL at /data/second_brain.db and streams it
-# to Cloudflare R2 (S3-compatible, zero egress), reducing the Recovery Point
-# Objective to ~1 second — the trust contract of a Second Brain forbids losing a
-# day's worth of braindumps to a VPS fire. Run by the `litestream` sidecar in
-# docker-compose.yml, which mounts this file at /etc/litestream.yml (Litestream's
-# default config path) and the `sqlite_data` named volume READ-ONLY at /data.
+# Litestream streams the Brain File's WAL at /data/second_brain.db to Cloudflare
+# R2 (S3-compatible, zero egress), reducing the Recovery Point Objective to ~1
+# second — the trust contract of a Second Brain forbids losing a day's worth of
+# braindumps to a VPS fire. Run by the `litestream` sidecar in docker-compose.yml,
+# which mounts this file at /etc/litestream.yml (Litestream's default config
+# path, READ-ONLY) and the `sqlite_data` named volume READ-WRITE at /data.
+# Litestream v0.5.x maintains its own internal tracking tables (_litestream_seq,
+# _litestream_shadow) in the source SQLite database to record WAL position, so
+# /data must be read-write — a read-only mount crash-loops with `attempt to write
+# a readonly database (8)` once real R2 credentials are present. This is safe:
+# Litestream appends ONLY to its own _litestream_* tables and never mutates
+# braindump/concept/edge rows, so the Brain File's user-data integrity is not at
+# risk (ADR-0002 trust contract unchanged).
 #
 # Zero-Trust (ADR-0004): this file is committed and carries NO secrets. R2
 # credentials are deliberately NOT referenced here — Litestream auto-reads

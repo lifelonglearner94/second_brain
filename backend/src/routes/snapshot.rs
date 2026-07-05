@@ -27,7 +27,7 @@ use crate::state::AppState;
 
 /// `GET /graph` — return the Global Topology Snapshot as a gzipped JSON body.
 pub async fn topology_snapshot(State(state): State<AppState>) -> Result<Response> {
-    let snapshot = snapshot::topology_snapshot(&state.db).await?;
+    let snapshot = snapshot::topology_snapshot(state.graph_repo.as_ref(), &state.db).await?;
     let json = serde_json::to_vec(&snapshot)
         .map_err(|e| Error::internal(format!("snapshot encode: {e}")))?;
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());

@@ -1,33 +1,30 @@
-//! The atomic accretion pipeline (issue #6, ADR-0001 / ADR-0002 / ADR-0003 /
-//! ADR-0010).
+//! The atomic accretion pipeline types + delegating wrappers (issue #6,
+//! ADR-0001 / ADR-0002 / ADR-0003 / ADR-0010).
 //!
-//! Given a braindump and the LLM's [`ExtractionResult`] (concepts + edges),
-//! this module:
-//!  1. embeds the braindump and each extracted concept label via the
-//!     [`Llm`] seam (Gemini — supersedses the Cohere choice in
-//!     `first_draft.md` §C),
-//!  2. runs retract → embed-store → identity-resolution → concept accretion →
-//!     edge accretion → type-history init → provenance, all inside **one
-//!     SQLite transaction** against the in-process `sqlite-vec`.
+//! The accretion logic (retract → embed-store → identity-resolution → concept
+//! accretion → edge accretion → type-history init → provenance) moved behind
+//! the [`GraphRepo`] trait in issue #46 and now lives in
+//! [`crate::graph_repo::SqliteGraphRepo`]'s trait impl. This module retains
+//! the domain types ([`Concept`], [`Edge`], [`MergeSuggestion`],
+//! [`IngestOutcome`], [`EdgeProjection`], [`TypeHistoryEntry`]) and the
+//! identity thresholds ([`ACCRETION_SIMILARITY`], [`SUGGESTION_FLOOR_SIMILARITY`])
+//! that the accretion logic consumes, plus one-line delegating wrappers
+//! ([`ingest_extraction`], [`delete_braindump`], [`approve_merge_suggestion`],
+//! [`reject_merge_suggestion`]) so existing callers — including the
+//! integration tests under `backend/tests/` — keep compiling without taking a
+//! `&dyn GraphRepo` directly. #48 removes these wrappers once every caller is
+//! migrated.
 //!
-//! The embedding *computation* (a network call) cannot live inside a sync
-//! SQLite transaction, so it runs first; the embedding *storage* and every
-//! graph mutation commit atomically together (ADR-0001: a separate vector
-//! server would break this).
-//!
-//! Concept identity is embedding-match (ADR-0001): >95% cosine accretes,
-//! borderline surfaces a merge suggestion, below the floor a new concept is
-//! born. Edge identity anchors on (source, original_type, target) — the
-//! original type is immutable; the *current* type is a projection off the
-//! append-only `edge_type_history` (ADR-0003). Provenance is origin-typed in a
-//! later slice; here every assertion is braindump-origin.
+//! The `pub(crate) *_conn` helpers that used to live here moved into
+//! [`crate::graph_repo`] (the Sqlite adapter's home) in #46; `graph.rs` no
+//! longer imports or calls any `*_conn` helper.
 
-use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 
-use crate::db::{now_seconds, Db};
-use crate::error::{Error, Result};
-use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
+use crate::db::Db;
+use crate::error::Result;
+use crate::extractor::ExtractionResult;
+use crate::graph_repo::{GraphRepo, SqliteGraphRepo};
 use crate::llm::Llm;
 
 /// Cosine similarity at or above which a newly-extracted concept is deemed the
@@ -100,9 +97,15 @@ pub struct MergeSuggestion {
     pub created_at: i64,
 }
 
-/// The accretion pipeline entry point. Embeds the braindump and each concept
-/// label (Gemini), then commits embedding storage + identity resolution +
-/// accretion + provenance + type-history init in one SQLite transaction.
+/// The accretion pipeline entry point (delegating wrapper, issue #46). Embeds
+/// the braindump and each concept label (Gemini), then delegates the atomic
+/// accretion (embedding storage, identity resolution, accretion, provenance,
+/// type-history init) to [`GraphRepo::ingest_extraction`] on a
+/// [`SqliteGraphRepo`].
+///
+/// The embedding *computation* (network call) runs here; the precomputed
+/// vectors are passed into the trait method so the synchronous storage work
+/// commits atomically (ADR-0001).
 ///
 /// Idempotent over a braindump: any prior extraction for `braindump_id` is
 /// retracted first (concepts/edges losing their last asserter vanish), so this
@@ -115,511 +118,41 @@ pub async fn ingest_extraction(
     verbatim: &str,
     extraction: ExtractionResult,
 ) -> Result<IngestOutcome> {
+    db.ensure_vec_tables(llm.dim())?;
     let braindump_vec = llm.embed_document(verbatim).await?;
     let mut concept_vecs = Vec::with_capacity(extraction.concepts.len());
     for concept in &extraction.concepts {
         concept_vecs.push(llm.embed_document(&concept.label).await?);
     }
-    let dim = llm.dim();
-    let concepts = extraction.concepts;
-    let edges = extraction.edges;
-    db.run(move |conn| {
-        // The vec0 tables are dim-dependent (the embedding model fixes the
-        // dimensionality), so they are created here rather than in the
-        // dim-agnostic schema migration. A cheap `IF NOT EXISTS` metadata check.
-        crate::db::ensure_vec_tables(conn, dim)?;
-        // Manual transaction control: `Db::run` hands out `&Connection`
-        // (immutable), so the `Transaction` API (`&mut self`) is unavailable.
-        // `execute_batch` takes `&self`, so BEGIN/COMMIT/ROLLBACK work. The
-        // whole extraction + embedding + identity-resolution commit atomically
-        // (ADR-0001); any error rolls back — no partial graph state.
-        conn.execute_batch("BEGIN")?;
-        match accrete(
-            conn,
-            braindump_id,
-            braindump_vec,
-            concepts,
-            concept_vecs,
-            edges,
-        ) {
-            Ok(outcome) => {
-                conn.execute_batch("COMMIT")?;
-                Ok(outcome)
-            }
-            Err(e) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
-        }
-    })
-    .await
-}
-
-/// Run the full accretion for one braindump inside an open transaction.
-fn accrete(
-    conn: &rusqlite::Connection,
-    braindump_id: i64,
-    braindump_vec: Vec<f32>,
-    concepts: Vec<ExtractedConcept>,
-    concept_vecs: Vec<Vec<f32>>,
-    edges: Vec<ExtractedEdge>,
-) -> Result<IngestOutcome> {
-    let mut outcome = IngestOutcome::default();
-
-    retract_extraction(conn, braindump_id)?;
-
-    store_braindump_embedding(conn, braindump_id, &braindump_vec)?;
-
-    let ontology: Vec<String> = ontology_slugs_conn(conn)?;
-
-    // Resolve each extracted concept: accrete, suggest, or create. Build a
-    // label→concept_id map for the edge step (edges reference concepts by the
-    // label the LLM emitted in the same extraction).
-    let mut label_to_id: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
-    let mut seen_labels: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for (concept, vec) in concepts.iter().zip(concept_vecs.iter()) {
-        if !seen_labels.insert(concept.label.as_str()) {
-            continue;
-        }
-        let resolved = resolve_concept(conn, braindump_id, &concept.label, vec)?;
-        match resolved {
-            ConceptResolution::Accreted(existing_id) => {
-                outcome.concepts_accreted += 1;
-                label_to_id.insert(concept.label.clone(), existing_id);
-            }
-            ConceptResolution::Created { id, .. } => {
-                outcome.concepts_created += 1;
-                label_to_id.insert(concept.label.clone(), id);
-            }
-            ConceptResolution::Suggested { new_id, .. } => {
-                outcome.concepts_created += 1;
-                outcome.merge_suggestions += 1;
-                label_to_id.insert(concept.label.clone(), new_id);
-            }
-        }
-    }
-
-    // Edges accrete by (source, original_type, target). Unsanctioned types are
-    // rejected (ADR-0002: the LLM never invents a type); edges whose endpoints
-    // were not extracted as concepts in this braindump are skipped.
-    let mut seen_edges: std::collections::HashSet<(&str, &str, &str)> =
-        std::collections::HashSet::new();
-    for edge in &edges {
-        let dup_key = (
-            edge.from_label.as_str(),
-            edge.type_slug.as_str(),
-            edge.to_label.as_str(),
-        );
-        if !seen_edges.insert(dup_key) {
-            continue;
-        }
-        let Some(&source_id) = label_to_id.get(&edge.from_label) else {
-            tracing::warn!(
-                braindump_id,
-                from = %edge.from_label,
-                "edge skipped: source concept not in this extraction"
-            );
-            outcome.edges_rejected += 1;
-            continue;
-        };
-        let Some(&target_id) = label_to_id.get(&edge.to_label) else {
-            tracing::warn!(
-                braindump_id,
-                to = %edge.to_label,
-                "edge skipped: target concept not in this extraction"
-            );
-            outcome.edges_rejected += 1;
-            continue;
-        };
-        if !ontology.iter().any(|s| s == &edge.type_slug) {
-            tracing::warn!(
-                braindump_id,
-                type_slug = %edge.type_slug,
-                "edge rejected: type not in ontology (LLM must not invent types)"
-            );
-            outcome.edges_rejected += 1;
-            continue;
-        }
-        if let Some(edge_id) = find_edge_id_conn(conn, source_id, &edge.type_slug, target_id)? {
-            insert_edge_provenance(conn, edge_id, braindump_id)?;
-            outcome.edges_accreted += 1;
-        } else {
-            let edge_id = insert_edge_conn(conn, source_id, target_id, &edge.type_slug)?;
-            init_type_history_conn(conn, edge_id, &edge.type_slug)?;
-            insert_edge_provenance(conn, edge_id, braindump_id)?;
-            outcome.edges_created += 1;
-        }
-    }
-
-    Ok(outcome)
-}
-
-enum ConceptResolution {
-    Accreted(i64),
-    Created { id: i64 },
-    Suggested { new_id: i64 },
-}
-
-/// Resolve a newly-extracted concept against existing ones by embedding KNN
-/// (ADR-0001). >95% accretes; borderline → new concept + merge suggestion;
-/// below the floor → new concept.
-fn resolve_concept(
-    conn: &rusqlite::Connection,
-    braindump_id: i64,
-    label: &str,
-    vec: &[f32],
-) -> Result<ConceptResolution> {
-    if let Some((existing_id, similarity)) = knn_concept(conn, vec)? {
-        if similarity >= ACCRETION_SIMILARITY {
-            insert_concept_provenance(conn, existing_id, braindump_id)?;
-            return Ok(ConceptResolution::Accreted(existing_id));
-        }
-        if similarity >= SUGGESTION_FLOOR_SIMILARITY {
-            let new_id = create_concept(conn, braindump_id, label, vec)?;
-            insert_merge_suggestion(conn, braindump_id, label, new_id, existing_id, similarity)?;
-            return Ok(ConceptResolution::Suggested { new_id });
-        }
-    }
-    let id = create_concept(conn, braindump_id, label, vec)?;
-    Ok(ConceptResolution::Created { id })
-}
-
-/// Create a concept, store its embedding (identity + retrieval seed), and record
-/// this braindump as its first extractor (ADR-0010).
-fn create_concept(
-    conn: &rusqlite::Connection,
-    braindump_id: i64,
-    label: &str,
-    vec: &[f32],
-) -> Result<i64> {
-    let created_at = now_seconds();
-    conn.execute(
-        "INSERT INTO concepts (label, created_at) VALUES (?1, ?2)",
-        params![label, created_at],
-    )?;
-    let id = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO concept_embeddings (concept_id, embedding) VALUES (?1, ?2)",
-        params![id, vec_to_blob(vec)],
-    )?;
-    insert_concept_provenance(conn, id, braindump_id)?;
-    Ok(id)
-}
-
-/// sqlite-vec KNN: nearest concept by cosine. Returns `(concept_id,
-/// similarity)` where similarity = 1 − distance (cosine metric on the vec0
-/// table). `None` if no concepts exist yet.
-fn knn_concept(conn: &rusqlite::Connection, query_vec: &[f32]) -> Result<Option<(i64, f32)>> {
-    let blob = vec_to_blob(query_vec);
-    let row = conn
-        .prepare(
-            "SELECT concept_id, distance FROM concept_embeddings
-             WHERE embedding MATCH ?1 ORDER BY distance LIMIT 1",
-        )?
-        .query_row(params![blob], |r| {
-            Ok((r.get::<_, i64>(0)?, 1.0 - r.get::<_, f64>(1)? as f32))
-        })
-        .optional()?;
-    Ok(row)
-}
-
-fn store_braindump_embedding(
-    conn: &rusqlite::Connection,
-    braindump_id: i64,
-    vec: &[f32],
-) -> Result<()> {
-    conn.execute(
-        "INSERT INTO braindump_embeddings (braindump_id, embedding) VALUES (?1, ?2)",
-        params![braindump_id, vec_to_blob(vec)],
-    )?;
-    Ok(())
-}
-
-fn insert_concept_provenance(
-    conn: &rusqlite::Connection,
-    concept_id: i64,
-    braindump_id: i64,
-) -> Result<()> {
-    conn.execute(
-        "INSERT OR IGNORE INTO concept_provenance (concept_id, braindump_id) VALUES (?1, ?2)",
-        params![concept_id, braindump_id],
-    )?;
-    Ok(())
-}
-
-fn insert_edge_provenance(
-    conn: &rusqlite::Connection,
-    edge_id: i64,
-    braindump_id: i64,
-) -> Result<()> {
-    conn.execute(
-        "INSERT OR IGNORE INTO edge_provenance (edge_id, braindump_id) VALUES (?1, ?2)",
-        params![edge_id, braindump_id],
-    )?;
-    Ok(())
-}
-
-pub(crate) fn insert_edge_conn(
-    conn: &rusqlite::Connection,
-    source_id: i64,
-    target_id: i64,
-    original_type: &str,
-) -> Result<i64> {
-    let created_at = now_seconds();
-    conn.execute(
-        "INSERT INTO edges (source_concept_id, target_concept_id, original_type, created_at)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![source_id, target_id, original_type, created_at],
-    )?;
-    Ok(conn.last_insert_rowid())
-}
-
-/// Initialize the append-only type history at index 0 = the LLM's original
-/// assertion (ADR-0003). The edge's current type is a projection off this log.
-pub(crate) fn init_type_history_conn(
-    conn: &rusqlite::Connection,
-    edge_id: i64,
-    type_slug: &str,
-) -> Result<()> {
-    let created_at = now_seconds();
-    conn.execute(
-        "INSERT INTO edge_type_history (edge_id, seq_index, type_slug, created_at)
-         VALUES (?1, 0, ?2, ?3)",
-        params![edge_id, type_slug, created_at],
-    )?;
-    Ok(())
-}
-
-pub(crate) fn find_edge_id_conn(
-    conn: &rusqlite::Connection,
-    source_id: i64,
-    original_type: &str,
-    target_id: i64,
-) -> Result<Option<i64>> {
-    let id = conn
-        .query_row(
-            "SELECT id FROM edges
-             WHERE source_concept_id = ?1 AND original_type = ?2 AND target_concept_id = ?3",
-            params![source_id, original_type, target_id],
-            |r| r.get::<_, i64>(0),
-        )
-        .optional()?;
-    Ok(id)
-}
-
-/// Whether `source —[type]→ target` exists wearing `type` as its current
-/// projected type (ADR-0003) — the structural-inference traversability check.
-pub(crate) fn edge_exists_with_current_type_conn(
-    conn: &rusqlite::Connection,
-    source_id: i64,
-    type_slug: &str,
-    target_id: i64,
-) -> Result<bool> {
-    let exists = conn
-        .query_row(
-            &format!(
-                "SELECT 1 FROM edges e WHERE e.source_concept_id = ?1
-                 AND e.target_concept_id = ?2 AND ({}) = ?3",
-                current_type_subquery()
-            ),
-            params![source_id, target_id, type_slug],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    Ok(exists)
-}
-
-/// Whether a concept with `id` exists in the graph.
-pub(crate) fn concept_exists_conn(conn: &rusqlite::Connection, id: i64) -> Result<bool> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM concepts WHERE id = ?1",
-        params![id],
-        |r| r.get(0),
-    )?;
-    Ok(n > 0)
-}
-
-fn insert_merge_suggestion(
-    conn: &rusqlite::Connection,
-    braindump_id: i64,
-    new_label: &str,
-    new_concept_id: i64,
-    existing_concept_id: i64,
-    similarity: f32,
-) -> Result<()> {
-    let created_at = now_seconds();
-    conn.execute(
-        "INSERT INTO merge_suggestions
-            (kind, braindump_id, new_concept_label, new_concept_id, existing_concept_id,
-             similarity, status, created_at)
-         VALUES ('concept', ?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
-        params![
-            braindump_id,
-            new_label,
-            new_concept_id,
-            existing_concept_id,
-            similarity,
-            created_at
-        ],
-    )?;
-    Ok(())
-}
-
-/// Retract a braindump's prior extraction (idempotent over a braindump, so
-/// submit retracts nothing and edit retracts the stale extraction before
-/// re-accreting — ADR-0007). Concepts/edges that lose their last asserter
-/// vanish (ADR-0002 / ADR-0010); type-history and suggestions cascade. Vanished
-/// concepts/edges are tombstoned into `graph_tombstones` before the row DELETEs
-/// so delta sync can report what disappeared (issue #28 — the cascade deletes
-/// outright, leaving no trace without a tombstone log).
-fn retract_extraction(conn: &rusqlite::Connection, braindump_id: i64) -> Result<()> {
-    conn.execute(
-        "DELETE FROM concept_provenance WHERE braindump_id = ?1",
-        params![braindump_id],
-    )?;
-    conn.execute(
-        "DELETE FROM edge_provenance WHERE braindump_id = ?1",
-        params![braindump_id],
-    )?;
-    conn.execute(
-        "DELETE FROM braindump_embeddings WHERE braindump_id = ?1",
-        params![braindump_id],
-    )?;
-    conn.execute(
-        "DELETE FROM merge_suggestions WHERE braindump_id = ?1",
-        params![braindump_id],
-    )?;
-    // Tombstone orphan edges (no asserter left) before the row DELETE so delta
-    // sync can report the deletion (issue #28). An edge's asserter list is the
-    // union of braindump provenance (`edge_provenance`, ADR-0002) and
-    // chat-inference provenance (`edge_inference_provenance`, ADR-0006) — so an
-    // edge backed only by a chat inference is NOT orphaned by a braindump
-    // deletion (the inference is its own origin).
-    tombstone_orphan_edges(conn)?;
-    // Orphan edges first (they reference concepts), then orphan concepts.
-    conn.execute(
-        "DELETE FROM edges WHERE NOT EXISTS
-            (SELECT 1 FROM edge_provenance WHERE edge_id = edges.id)
-          AND NOT EXISTS
-            (SELECT 1 FROM edge_inference_provenance WHERE edge_id = edges.id)",
-        [],
-    )?;
-    // The vec0 concept_embeddings table has no FK cascade — clean embeddings for
-    // concepts about to vanish, so KNN never returns a deleted concept's vector.
-    conn.execute(
-        "DELETE FROM concept_embeddings WHERE concept_id IN
-            (SELECT id FROM concepts WHERE NOT EXISTS
-                (SELECT 1 FROM concept_provenance WHERE concept_id = concepts.id))",
-        [],
-    )?;
-    // Tombstone orphan concepts (no extractor left) before the row DELETE.
-    tombstone_orphan_concepts(conn)?;
-    conn.execute(
-        "DELETE FROM concepts WHERE NOT EXISTS
-            (SELECT 1 FROM concept_provenance WHERE concept_id = concepts.id)",
-        [],
-    )?;
-    Ok(())
-}
-
-/// Append 'edge' tombstone rows for every edge about to vanish (no asserter
-/// remains) in the current transaction. A single `INSERT ... SELECT` — no Rust
-/// loop. Idempotent in the sense that it only fires when called inside the
-/// cascade; an edge with remaining provenance (braindump or chat-inference,
-/// ADR-0006) is not tombstoned.
-fn tombstone_orphan_edges(conn: &rusqlite::Connection) -> Result<()> {
-    let now = now_seconds();
-    conn.execute(
-        "INSERT INTO graph_tombstones (kind, entity_id, created_at)
-         SELECT 'edge', id, ?1 FROM edges
-         WHERE NOT EXISTS
-            (SELECT 1 FROM edge_provenance WHERE edge_id = edges.id)
-           AND NOT EXISTS
-            (SELECT 1 FROM edge_inference_provenance WHERE edge_id = edges.id)",
-        params![now],
-    )?;
-    Ok(())
-}
-
-/// Append 'concept' tombstone rows for every concept about to vanish (no
-/// extractor remains) in the current transaction. Symmetric to
-/// [`tombstone_orphan_edges`].
-fn tombstone_orphan_concepts(conn: &rusqlite::Connection) -> Result<()> {
-    let now = now_seconds();
-    conn.execute(
-        "INSERT INTO graph_tombstones (kind, entity_id, created_at)
-         SELECT 'concept', id, ?1 FROM concepts
-         WHERE NOT EXISTS
-            (SELECT 1 FROM concept_provenance WHERE concept_id = concepts.id)",
-        params![now],
-    )?;
-    Ok(())
-}
-
-/// The canonical current-type projection SQL fragment (ADR-0003): the last
-/// `edge_type_history` entry, correlated on the outer edges alias `e`.
-pub(crate) fn current_type_subquery() -> &'static str {
-    "SELECT type_slug FROM edge_type_history WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1"
-}
-
-/// f32 slice → little-endian byte blob, the on-disk format sqlite-vec expects.
-pub(crate) fn vec_to_blob(v: &[f32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(v.len() * 4);
-    for f in v {
-        bytes.extend_from_slice(&f.to_le_bytes());
-    }
-    bytes
+    SqliteGraphRepo::new(db.clone())
+        .ingest_extraction(braindump_id, braindump_vec, extraction, concept_vecs)
+        .await
 }
 
 // --- read helpers (public; the future GET /graph surface + test seam) ---
+//
+// These free functions remain as one-line delegators to the [`GraphRepo`]
+// trait (issue #45) so existing callers — including the integration tests
+// under `backend/tests/` and the unit tests in this module — keep compiling
+// without taking a `&dyn GraphRepo` directly. The raw SQL that used to live
+// here moved into [`SqliteGraphRepo`]'s trait impl (one source of truth);
+// #48 removes these delegators once every caller is migrated to pass the
+// repo through.
 
 /// Load the governed edge-type slugs (the LLM draws from these).
 pub async fn ontology_slugs(db: &Db) -> Result<Vec<String>> {
-    db.run(ontology_slugs_conn).await
-}
-
-fn ontology_slugs_conn(conn: &rusqlite::Connection) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare("SELECT slug FROM ontology ORDER BY id")?;
-    let slugs = stmt
-        .query_map([], |r| r.get::<_, String>(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(slugs)
+    SqliteGraphRepo::new(db.clone()).ontology_slugs().await
 }
 
 pub async fn get_concept(db: &Db, id: i64) -> Result<Option<Concept>> {
-    db.run(move |conn| {
-        let row = conn
-            .query_row(
-                "SELECT id, label, created_at FROM concepts WHERE id = ?1",
-                params![id],
-                |r| {
-                    Ok(Concept {
-                        id: r.get(0)?,
-                        label: r.get(1)?,
-                        created_at: r.get(2)?,
-                    })
-                },
-            )
-            .optional()?;
-        Ok(row)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone()).get_concept(id).await
 }
 
 /// The braindump ids that extracted a concept (ADR-0010 extraction provenance).
 pub async fn concept_provenance(db: &Db, concept_id: i64) -> Result<Vec<i64>> {
-    db.run(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT braindump_id FROM concept_provenance
-             WHERE concept_id = ?1 ORDER BY braindump_id",
-        )?;
-        let ids = stmt
-            .query_map(params![concept_id], |r| r.get::<_, i64>(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(ids)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .concept_provenance(concept_id)
+        .await
 }
 
 pub async fn find_edge(
@@ -628,122 +161,43 @@ pub async fn find_edge(
     original_type: &str,
     target_id: i64,
 ) -> Result<Option<Edge>> {
-    let original_type = original_type.to_string();
-    db.run(move |conn| {
-        let row = conn
-            .query_row(
-                "SELECT id, source_concept_id, target_concept_id, original_type, created_at
-                 FROM edges
-                 WHERE source_concept_id = ?1 AND original_type = ?2 AND target_concept_id = ?3",
-                params![source_id, original_type, target_id],
-                |r| {
-                    Ok(Edge {
-                        id: r.get(0)?,
-                        source_concept_id: r.get(1)?,
-                        target_concept_id: r.get(2)?,
-                        original_type: r.get(3)?,
-                        created_at: r.get(4)?,
-                    })
-                },
-            )
-            .optional()?;
-        Ok(row)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .find_edge(source_id, original_type, target_id)
+        .await
 }
 
 /// The braindump ids asserting an edge (ADR-0002 `asserted_by`).
 pub async fn edge_provenance(db: &Db, edge_id: i64) -> Result<Vec<i64>> {
-    db.run(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT braindump_id FROM edge_provenance
-             WHERE edge_id = ?1 ORDER BY braindump_id",
-        )?;
-        let ids = stmt
-            .query_map(params![edge_id], |r| r.get::<_, i64>(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(ids)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .edge_provenance(edge_id)
+        .await
 }
 
 /// The append-only type history of an edge (ADR-0003). Index 0 is the original
 /// assertion; the last entry is the current (projected) type.
 pub async fn edge_type_history(db: &Db, edge_id: i64) -> Result<Vec<TypeHistoryEntry>> {
-    db.run(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT seq_index, type_slug, created_at FROM edge_type_history
-             WHERE edge_id = ?1 ORDER BY seq_index",
-        )?;
-        let entries = stmt
-            .query_map(params![edge_id], |r| {
-                Ok(TypeHistoryEntry {
-                    seq_index: r.get(0)?,
-                    type_slug: r.get(1)?,
-                    created_at: r.get(2)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(entries)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .edge_type_history(edge_id)
+        .await
 }
 
 pub async fn merge_suggestions(db: &Db) -> Result<Vec<MergeSuggestion>> {
-    db.run(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, kind, braindump_id, new_concept_label, new_concept_id,
-                    existing_concept_id, similarity, status, created_at
-             FROM merge_suggestions ORDER BY id",
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(MergeSuggestion {
-                    id: r.get(0)?,
-                    kind: r.get(1)?,
-                    braindump_id: r.get(2)?,
-                    new_concept_label: r.get(3)?,
-                    new_concept_id: r.get(4)?,
-                    existing_concept_id: r.get(5)?,
-                    similarity: r.get::<_, f64>(6)? as f32,
-                    status: r.get(7)?,
-                    created_at: r.get(8)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(rows)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone()).merge_suggestions().await
 }
 
 /// Look up a concept id by exact label. Identity is by embedding (ADR-0001),
 /// not label, so this is a test/inspection helper — not the identity path.
 pub async fn concept_id_for_label(db: &Db, label: &str) -> Result<Option<i64>> {
-    let label = label.to_string();
-    db.run(move |conn| {
-        let id = conn
-            .query_row(
-                "SELECT id FROM concepts WHERE label = ?1 ORDER BY id LIMIT 1",
-                params![label],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()?;
-        Ok(id)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .concept_id_for_label(label)
+        .await
 }
 
 /// Whether a braindump-embedding is stored (retrieval backfill, ADR-0004).
 pub async fn braindump_embedding_stored(db: &Db, braindump_id: i64) -> Result<bool> {
-    db.run(move |conn| {
-        let exists: i64 = conn.query_row(
-            "SELECT count(*) FROM braindump_embeddings WHERE braindump_id = ?1",
-            params![braindump_id],
-            |r| r.get(0),
-        )?;
-        Ok(exists > 0)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .braindump_embedding_stored(braindump_id)
+        .await
 }
 
 /// An edge paired with its projected current type (ADR-0003) — the last entry
@@ -762,92 +216,28 @@ pub struct EdgeProjection {
 /// Every concept, ordered by id — the full node set for whole-graph reads
 /// (issue #27's Global Topology Snapshot).
 pub async fn all_concepts(db: &Db) -> Result<Vec<Concept>> {
-    db.run(|conn| {
-        let mut stmt = conn.prepare("SELECT id, label, created_at FROM concepts ORDER BY id")?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(Concept {
-                    id: r.get(0)?,
-                    label: r.get(1)?,
-                    created_at: r.get(2)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(rows)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone()).all_concepts().await
 }
 
 /// Every edge with its projected current type (ADR-0003), ordered by id. The
 /// current type is the last `edge_type_history` entry; for a freshly-created
 /// edge it equals the original assertion.
 pub async fn all_edges_with_current_type(db: &Db) -> Result<Vec<EdgeProjection>> {
-    db.run(|conn| {
-        let mut stmt = conn.prepare(&format!(
-            "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
-                    e.created_at, ({}) AS current_type
-             FROM edges e ORDER BY e.id",
-            current_type_subquery()
-        ))?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(EdgeProjection {
-                    id: r.get(0)?,
-                    source_concept_id: r.get(1)?,
-                    target_concept_id: r.get(2)?,
-                    original_type: r.get(3)?,
-                    created_at: r.get(4)?,
-                    current_type: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(rows)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .all_edges_with_current_type()
+        .await
 }
 
-// --- issue #7: braindump deletion + merge-suggestion queue ---
+// --- issue #7: braindump deletion + merge-suggestion queue (delegating
+//     wrappers, issue #46) ---
 
 /// Delete a braindump and cascade through the graph (ADR-0002 / ADR-0007 /
-/// ADR-0010). Drops the braindump's id from every concept's extraction
-/// provenance and every edge's `asserted_by`; a concept vanishes when its last
-/// extracting braindump is removed, an edge vanishes when its last asserter is
-/// removed, and an edge whose endpoint concept vanishes is cascade-deleted
-/// (ADR-0010 addendum — an edge with a missing endpoint is meaningless).
-/// Returns `false` if no braindump with `id` exists.
+/// ADR-0010). Delegates to [`GraphRepo::delete_braindump`] on a
+/// [`SqliteGraphRepo`]. Returns `false` if no braindump with `id` exists.
 pub async fn delete_braindump(db: &Db, braindump_id: i64) -> Result<bool> {
-    db.run(move |conn| {
-        let exists = conn
-            .query_row(
-                "SELECT 1 FROM braindumps WHERE id = ?1",
-                params![braindump_id],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some();
-        if !exists {
-            return Ok(false);
-        }
-        conn.execute_batch("BEGIN")?;
-        let res = retract_extraction(conn, braindump_id).and_then(|_| {
-            let n = conn.execute(
-                "DELETE FROM braindumps WHERE id = ?1",
-                params![braindump_id],
-            )?;
-            Ok(n > 0)
-        });
-        match res {
-            Ok(deleted) => {
-                conn.execute_batch("COMMIT")?;
-                Ok(deleted)
-            }
-            Err(e) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
-        }
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .delete_braindump(braindump_id)
+        .await
 }
 
 /// Approve a pending concept merge suggestion (ADR-0001 / ADR-0010): fold the
@@ -855,138 +245,32 @@ pub async fn delete_braindump(db: &Db, braindump_id: i64) -> Result<bool> {
 /// provenance and repoint edges from the fold concept onto the surviving one,
 /// merging duplicate edges by unioning provenance (ADR-0002 accretion). The
 /// fold concept and the suggestion are removed. `NotFound` if the suggestion
-/// does not exist.
+/// does not exist. Delegates to [`GraphRepo::approve_merge_suggestion`].
 pub async fn approve_merge_suggestion(db: &Db, suggestion_id: i64) -> Result<()> {
-    db.run(move |conn| {
-        let pair = conn
-            .query_row(
-                "SELECT new_concept_id, existing_concept_id FROM merge_suggestions
-                 WHERE id = ?1",
-                params![suggestion_id],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
-            )
-            .optional()?;
-        let Some((fold_id, keep_id)) = pair else {
-            return Err(Error::NotFound(format!(
-                "merge suggestion {suggestion_id} not found"
-            )));
-        };
-        if fold_id == keep_id {
-            return Err(Error::BadRequest(
-                "merge suggestion references the same concept twice".into(),
-            ));
-        }
-        conn.execute_batch("BEGIN")?;
-        let res = merge_concepts_conn(conn, keep_id, fold_id);
-        match res {
-            Ok(()) => {
-                conn.execute_batch("COMMIT")?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
-        }
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .approve_merge_suggestion(suggestion_id)
+        .await
 }
 
 /// Reject a pending concept merge suggestion (ADR-0001): keep the two concepts
-/// separate and drop the suggestion. `NotFound` if the suggestion does not exist.
+/// separate and drop the suggestion. `NotFound` if the suggestion does not
+/// exist. Delegates to [`GraphRepo::reject_merge_suggestion`].
 pub async fn reject_merge_suggestion(db: &Db, suggestion_id: i64) -> Result<()> {
-    db.run(move |conn| {
-        let n = conn.execute(
-            "DELETE FROM merge_suggestions WHERE id = ?1",
-            params![suggestion_id],
-        )?;
-        if n == 0 {
-            return Err(Error::NotFound(format!(
-                "merge suggestion {suggestion_id} not found"
-            )));
-        }
-        Ok(())
-    })
-    .await
-}
-
-/// Fold `fold_id` into `keep_id` (the survivor) inside an open transaction:
-/// repoint/merge edges touching the fold concept, union extraction provenance,
-/// drop the fold concept's embedding (vec0 has no FK cascade), then delete the
-/// fold concept — its remaining provenance and any merge suggestions referencing
-/// it cascade away.
-fn merge_concepts_conn(conn: &rusqlite::Connection, keep_id: i64, fold_id: i64) -> Result<()> {
-    // Edges touching the fold concept: merge duplicates (union provenance) and
-    // repoint the rest onto the survivor. Iterated in Rust because the edges
-    // table's UNIQUE (source, original_type, target) would otherwise trip on a
-    // straight UPDATE when a duplicate already exists on the survivor.
-    let fold_edges: Vec<(i64, i64, i64, String)> = conn
-        .prepare(
-            "SELECT id, source_concept_id, target_concept_id, original_type
-             FROM edges WHERE source_concept_id = ?1 OR target_concept_id = ?1",
-        )?
-        .query_map(params![fold_id], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    for (edge_id, src, tgt, otype) in fold_edges {
-        let new_src = if src == fold_id { keep_id } else { src };
-        let new_tgt = if tgt == fold_id { keep_id } else { tgt };
-        let collision = conn
-            .query_row(
-                "SELECT id FROM edges
-                 WHERE source_concept_id = ?1 AND original_type = ?2
-                   AND target_concept_id = ?3 AND id != ?4",
-                params![new_src, &otype, new_tgt, edge_id],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()?;
-        if let Some(keeper_edge_id) = collision {
-            // Same (source, original_type, target) already on the survivor →
-            // union provenance onto the keeper, then drop the fold edge (its
-            // type-history + remaining provenance cascade).
-            conn.execute(
-                "INSERT OR IGNORE INTO edge_provenance (edge_id, braindump_id)
-                 SELECT ?1, braindump_id FROM edge_provenance WHERE edge_id = ?2",
-                params![keeper_edge_id, edge_id],
-            )?;
-            conn.execute("DELETE FROM edges WHERE id = ?1", params![edge_id])?;
-        } else {
-            conn.execute(
-                "UPDATE edges
-                 SET source_concept_id = ?1, target_concept_id = ?2
-                 WHERE id = ?3",
-                params![new_src, new_tgt, edge_id],
-            )?;
-        }
-    }
-
-    // Union extraction provenance: the fold concept's extractors accrete onto
-    // the survivor (ADR-0010: a merged concept's provenance is the union).
-    conn.execute(
-        "INSERT OR IGNORE INTO concept_provenance (concept_id, braindump_id)
-         SELECT ?1, braindump_id FROM concept_provenance WHERE concept_id = ?2",
-        params![keep_id, fold_id],
-    )?;
-    // The vec0 concept_embeddings table has no FK cascade — clean manually.
-    conn.execute(
-        "DELETE FROM concept_embeddings WHERE concept_id = ?1",
-        params![fold_id],
-    )?;
-    // Delete the fold concept; cascades drop its remaining provenance, any
-    // edges still referencing it (none — all repointed above), and merge
-    // suggestions that reference it as new/existing (the approved one included).
-    conn.execute("DELETE FROM concepts WHERE id = ?1", params![fold_id])?;
-    Ok(())
+    SqliteGraphRepo::new(db.clone())
+        .reject_merge_suggestion(suggestion_id)
+        .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::braindump::{get_braindump, insert_braindump};
+    use crate::db::now_seconds;
     use crate::error::Error;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
+    use crate::graph_repo::{current_type_subquery, vec_to_blob};
     use crate::llm::{FakeLlm, Llm};
+    use rusqlite::params;
 
     /// In-memory Db with vec tables at the fake embedding dim.
     fn test_db() -> Db {

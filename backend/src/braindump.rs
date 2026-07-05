@@ -17,9 +17,10 @@
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::db::{now_seconds, Db};
+use crate::db::Db;
 use crate::error::Result;
 use crate::graph::{self, IngestOutcome};
+use crate::graph_repo::{GraphRepo, SqliteGraphRepo};
 use crate::llm::Llm;
 
 /// One immutable thought-snapshot. `verbatim` is the user-confirmed text at
@@ -33,27 +34,14 @@ pub struct Braindump {
     pub created_at: i64,
 }
 
-/// Persist a new braindump with its verbatim and cleaned rendering. Returns
-/// the row as stored, with the surrogate id and created_at filled in.
+/// Persist a new braindump with its verbatim and cleaned rendering (delegating
+/// wrapper, issue #46). Returns the row as stored, with the surrogate id and
+/// `created_at` filled in. Delegates to [`GraphRepo::insert_braindump`] on a
+/// [`SqliteGraphRepo`].
 pub async fn insert_braindump(db: &Db, verbatim: &str, cleaned: &str) -> Result<Braindump> {
-    let verbatim = verbatim.to_string();
-    let cleaned = cleaned.to_string();
-    db.run(move |conn| {
-        let created_at = now_seconds();
-        conn.execute(
-            "INSERT INTO braindumps (verbatim, cleaned, created_at)
-             VALUES (?1, ?2, ?3)",
-            params![verbatim, cleaned, created_at],
-        )?;
-        let id = conn.last_insert_rowid();
-        Ok(Braindump {
-            id,
-            verbatim,
-            cleaned,
-            created_at,
-        })
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .insert_braindump(verbatim, cleaned)
+        .await
 }
 
 /// Look up a braindump by id. `None` if no row matches.
