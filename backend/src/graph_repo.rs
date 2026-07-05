@@ -4856,4 +4856,866 @@ mod tests {
             "reject missing: {reject:?}"
         );
     }
+
+    // --- issue #47: chat write-back (ADR-0006) against InMemoryGraphRepo ---
+
+    /// Helper: build an `EvidenceEdge` hop for the structural-inference path.
+    fn hop(source: i64, edge_type: &str, target: i64) -> EvidenceEdge {
+        EvidenceEdge {
+            source_concept_id: source,
+            edge_type: edge_type.to_string(),
+            target_concept_id: target,
+        }
+    }
+
+    /// ADR-0006: a structural proposal enters the queue pending. No
+    /// auto-endorse — no edge is persisted. Mirrors `propose_with_traversable_
+    /// path_creates_pending_proposal_and_no_edge`.
+    #[tokio::test]
+    async fn in_memory_propose_structural_stores_pending_proposal_and_no_edge() {
+        let repo = InMemoryGraphRepo::new();
+        repo.add_ontology_type("causes", "Causes", "A brings about B.");
+        repo.add_concept(Concept {
+            id: 1,
+            label: "A".into(),
+            created_at: 0,
+        });
+        repo.add_concept(Concept {
+            id: 2,
+            label: "B".into(),
+            created_at: 0,
+        });
+        // Seed edge 1 —[causes]→ 2 so the single-hop evidence path is traversable.
+        repo.add_edge(Edge {
+            id: 10,
+            source_concept_id: 1,
+            target_concept_id: 2,
+            original_type: "causes".into(),
+            created_at: 0,
+        });
+
+        let proposal = repo
+            .propose_structural_inference(
+                1,
+                2,
+                "causes",
+                vec![hop(1, "causes", 2)],
+                Some("summary"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(proposal.mode, STRUCTURAL_MODE);
+        assert_eq!(proposal.status, STATUS_PENDING);
+        assert_eq!(proposal.source_concept_id, 1);
+        assert_eq!(proposal.target_concept_id, 2);
+        assert_eq!(proposal.proposed_type, "causes");
+        assert_eq!(proposal.evidence_path, vec![hop(1, "causes", 2)]);
+        assert_eq!(proposal.rationale.as_deref(), Some("summary"));
+        assert!(
+            proposal.snapshot.is_none(),
+            "structural carries no snapshot"
+        );
+        assert!(proposal.resolved_at.is_none());
+
+        assert_eq!(
+            repo.list_inference_proposals().await.unwrap().len(),
+            1,
+            "exactly one proposal queued"
+        );
+        // No new edge persisted — the only edge is the seed 1 —[causes]→ 2.
+        assert_eq!(
+            repo.all_edges_with_current_type().await.unwrap().len(),
+            1,
+            "no edge persisted on a pending proposal (no auto-endorse)"
+        );
+        assert!(
+            repo.edge_inference_asserted_by(10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "no inference provenance written on a pending proposal"
+        );
+    }
+
+    /// ADR-0002: the LLM never invents a type. An unsanctioned proposed type
+    /// is rejected and the caller is directed to the ontology governance queue.
+    /// Mirrors `propose_with_unsanctioned_type_is_rejected_and_directed_to_
+    /// ontology_queue`.
+    #[tokio::test]
+    async fn in_memory_propose_structural_rejects_unsanctioned_type() {
+        let repo = InMemoryGraphRepo::new();
+        repo.add_ontology_type("causes", "Causes", "A brings about B.");
+        repo.add_concept(Concept {
+            id: 1,
+            label: "A".into(),
+            created_at: 0,
+        });
+        repo.add_concept(Concept {
+            id: 2,
+            label: "B".into(),
+            created_at: 0,
+        });
+        repo.add_edge(Edge {
+            id: 10,
+            source_concept_id: 1,
+            target_concept_id: 2,
+            original_type: "causes".into(),
+            created_at: 0,
+        });
+
+        let err = repo
+            .propose_structural_inference(1, 2, "bogus", vec![hop(1, "causes", 2)], None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
+        assert!(
+            err.to_string().contains("/ontology/propose"),
+            "directed to the ontology queue: {err:?}"
+        );
+        assert!(
+            repo.list_inference_proposals().await.unwrap().is_empty(),
+            "no proposal created for an unsanctioned type"
+        );
+    }
+
+    /// ADR-0006 thematic mode + ADR-0009: a thematic proposal carries a frozen
+    /// Thematic Snapshot — the braindump ids whose edges formed the cluster's
+    /// density, plus the cluster's concept composition. Pending — no auto-
+    /// endorse. Mirrors `propose_thematic_inference_creates_pending_proposal_
+    /// with_frozen_snapshot`.
+    #[tokio::test]
+    async fn in_memory_propose_thematic_stores_pending_proposal_with_snapshot() {
+        let repo = InMemoryGraphRepo::new();
+        repo.add_ontology_type("endangers", "Endangers", "A threatens B.");
+        repo.add_ontology_type("depends_on", "Depends on", "A needs B.");
+        for (id, label) in [(1_i64, "Maria"), (2, "Q3 launch"), (3, "Beta release")] {
+            repo.add_concept(Concept {
+                id,
+                label: label.into(),
+                created_at: 0,
+            });
+        }
+        // One braindump asserts both cluster edges → it is the snapshot evidence.
+        let bd = repo
+            .insert_braindump(
+                "maria endangers q3 which beta depends on",
+                "maria endangers q3 which beta depends on",
+            )
+            .await
+            .unwrap();
+        repo.add_edge(Edge {
+            id: 10,
+            source_concept_id: 1,
+            target_concept_id: 2,
+            original_type: "endangers".into(),
+            created_at: 0,
+        });
+        repo.add_edge_provenance(10, bd.id);
+        repo.add_edge(Edge {
+            id: 11,
+            source_concept_id: 2,
+            target_concept_id: 3,
+            original_type: "depends_on".into(),
+            created_at: 0,
+        });
+        repo.add_edge_provenance(11, bd.id);
+
+        let proposal = repo
+            .propose_thematic_inference(1, 3, "endangers", vec![1, 2, 3], Some("bridge"))
+            .await
+            .unwrap();
+
+        assert_eq!(proposal.mode, THEMATIC_MODE);
+        assert_eq!(proposal.status, STATUS_PENDING);
+        assert_eq!(proposal.source_concept_id, 1);
+        assert_eq!(proposal.target_concept_id, 3);
+        assert_eq!(proposal.proposed_type, "endangers");
+        assert!(
+            proposal.evidence_path.is_empty(),
+            "thematic mode has no evidence path — not graph-backed"
+        );
+        assert_eq!(proposal.rationale.as_deref(), Some("bridge"));
+        assert!(proposal.resolved_at.is_none());
+
+        let snapshot = proposal
+            .snapshot
+            .as_ref()
+            .expect("thematic proposal carries a Thematic Snapshot");
+        assert_eq!(
+            snapshot.concept_ids,
+            vec![1, 2, 3],
+            "snapshot captured the cluster's composition"
+        );
+        assert_eq!(
+            snapshot.braindump_ids,
+            vec![bd.id],
+            "snapshot captured the cluster's braindump evidence"
+        );
+        // No edge persisted yet — no auto-endorse.
+        assert!(
+            repo.find_edge(1, "endangers", 3).await.unwrap().is_none(),
+            "no edge persisted on a pending thematic proposal"
+        );
+    }
+
+    /// ADR-0006: on endorsement the edge persists with inference provenance
+    /// `asserted_by: [Chat_Inference_ID, mode: structural]`. When the seed edge
+    /// already matches (source, original_type, target) the inference accretes
+    /// onto it rather than duplicating. Mirrors `endorse_persists_edge_with_
+    /// structural_inference_provenance_and_type_history`.
+    #[tokio::test]
+    async fn in_memory_endorse_persists_edge_with_inference_provenance_and_type_history() {
+        let repo = InMemoryGraphRepo::new();
+        repo.add_ontology_type("causes", "Causes", "A brings about B.");
+        repo.add_concept(Concept {
+            id: 1,
+            label: "A".into(),
+            created_at: 0,
+        });
+        repo.add_concept(Concept {
+            id: 2,
+            label: "B".into(),
+            created_at: 0,
+        });
+        repo.add_edge(Edge {
+            id: 10,
+            source_concept_id: 1,
+            target_concept_id: 2,
+            original_type: "causes".into(),
+            created_at: 0,
+        });
+        let proposal = repo
+            .propose_structural_inference(
+                1,
+                2,
+                "causes",
+                vec![hop(1, "causes", 2)],
+                Some("summary"),
+            )
+            .await
+            .unwrap();
+
+        let endorsed = repo.endorse_inference_proposal(proposal.id).await.unwrap();
+        assert_eq!(endorsed.status, STATUS_ENDORSED);
+        assert!(endorsed.resolved_at.is_some());
+
+        // The seed edge accretes the inference provenance — no duplicate edge.
+        assert_eq!(
+            repo.all_edges_with_current_type().await.unwrap().len(),
+            1,
+            "edge accreted, not duplicated"
+        );
+        let edge = repo
+            .find_edge(1, "causes", 2)
+            .await
+            .unwrap()
+            .expect("endorsed edge present");
+        assert_eq!(edge.id, 10);
+        // Type history retains its index-0 seed (ADR-0003).
+        let history = repo.edge_type_history(10).await.unwrap();
+        assert_eq!(history.len(), 1, "type history seeded at index 0");
+        assert_eq!(history[0].seq_index, 0);
+        assert_eq!(history[0].type_slug, "causes");
+        // Provenance: this proposal is the asserter, origin structural, no snapshot.
+        let assertions = repo.edge_inference_asserted_by(10).await.unwrap();
+        assert_eq!(assertions.len(), 1);
+        assert_eq!(assertions[0].chat_inference_id, proposal.id);
+        assert_eq!(assertions[0].mode, STRUCTURAL_MODE);
+        assert!(
+            assertions[0].snapshot_id.is_none(),
+            "structural provenance has no snapshot"
+        );
+    }
+
+    /// ADR-0002 accretion: if the direct edge already exists (asserted by a
+    /// braindump), endorsing adds the inference as a co-asserter rather than
+    /// duplicating the edge. Mirrors `endorse_accretes_provenance_when_direct_
+    /// edge_already_exists`.
+    #[tokio::test]
+    async fn in_memory_endorse_accretes_provenance_when_direct_edge_already_exists() {
+        let repo = InMemoryGraphRepo::new();
+        repo.add_ontology_type("endangers", "Endangers", "A threatens B.");
+        repo.add_ontology_type("depends_on", "Depends on", "A needs B.");
+        for (id, label) in [(1_i64, "Maria"), (2, "Q3 launch"), (3, "Beta release")] {
+            repo.add_concept(Concept {
+                id,
+                label: label.into(),
+                created_at: 0,
+            });
+        }
+        let bd_path = repo
+            .insert_braindump(
+                "maria endangers q3 which beta depends on",
+                "maria endangers q3 which beta depends on",
+            )
+            .await
+            .unwrap();
+        repo.add_edge(Edge {
+            id: 10,
+            source_concept_id: 1,
+            target_concept_id: 2,
+            original_type: "endangers".into(),
+            created_at: 0,
+        });
+        repo.add_edge_provenance(10, bd_path.id);
+        repo.add_edge(Edge {
+            id: 11,
+            source_concept_id: 2,
+            target_concept_id: 3,
+            original_type: "depends_on".into(),
+            created_at: 0,
+        });
+        repo.add_edge_provenance(11, bd_path.id);
+        // Separately assert the direct edge Maria —[endangers]→ Beta with a
+        // second braindump.
+        let bd_direct = repo
+            .insert_braindump(
+                "maria endangers the beta release directly",
+                "maria endangers the beta release directly",
+            )
+            .await
+            .unwrap();
+        repo.add_edge(Edge {
+            id: 12,
+            source_concept_id: 1,
+            target_concept_id: 3,
+            original_type: "endangers".into(),
+            created_at: 0,
+        });
+        repo.add_edge_provenance(12, bd_direct.id);
+
+        let proposal = repo
+            .propose_structural_inference(
+                1,
+                3,
+                "endangers",
+                vec![hop(1, "endangers", 2), hop(2, "depends_on", 3)],
+                None,
+            )
+            .await
+            .unwrap();
+        repo.endorse_inference_proposal(proposal.id).await.unwrap();
+
+        // Same edge (no duplicate), braindump provenance preserved.
+        let edge = repo
+            .find_edge(1, "endangers", 3)
+            .await
+            .unwrap()
+            .expect("edge still present");
+        assert_eq!(edge.id, 12, "edge accreted, not duplicated");
+        assert_eq!(
+            repo.edge_provenance(edge.id).await.unwrap(),
+            vec![bd_direct.id],
+            "braindump provenance preserved"
+        );
+        let assertions = repo.edge_inference_asserted_by(edge.id).await.unwrap();
+        assert_eq!(assertions.len(), 1);
+        assert_eq!(assertions[0].chat_inference_id, proposal.id);
+        assert_eq!(assertions[0].mode, STRUCTURAL_MODE);
+    }
+
+    /// ADR-0006: a rejected inference never enters the graph. The proposal
+    /// stays in the table (audit trail) but is no longer pending. Mirrors
+    /// `reject_drops_the_proposal_and_persists_no_edge`.
+    #[tokio::test]
+    async fn in_memory_reject_drops_proposal_and_persists_no_edge() {
+        let repo = InMemoryGraphRepo::new();
+        repo.add_ontology_type("causes", "Causes", "A brings about B.");
+        repo.add_concept(Concept {
+            id: 1,
+            label: "A".into(),
+            created_at: 0,
+        });
+        repo.add_concept(Concept {
+            id: 2,
+            label: "B".into(),
+            created_at: 0,
+        });
+        repo.add_edge(Edge {
+            id: 10,
+            source_concept_id: 1,
+            target_concept_id: 2,
+            original_type: "causes".into(),
+            created_at: 0,
+        });
+        let proposal = repo
+            .propose_structural_inference(1, 2, "causes", vec![hop(1, "causes", 2)], None)
+            .await
+            .unwrap();
+
+        let rejected = repo.reject_inference_proposal(proposal.id).await.unwrap();
+        assert_eq!(rejected.status, STATUS_REJECTED);
+        assert!(rejected.resolved_at.is_some());
+
+        // No new edge — only the seed remains.
+        assert_eq!(
+            repo.all_edges_with_current_type().await.unwrap().len(),
+            1,
+            "no edge persisted on reject"
+        );
+        assert!(
+            repo.edge_inference_asserted_by(10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "no inference provenance written on reject"
+        );
+        // The rejected proposal stays in the table but is no longer pending.
+        let refreshed = repo
+            .get_inference_proposal(proposal.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(refreshed.status, STATUS_REJECTED);
+    }
+
+    /// Endorsement is immutable: endorsing a missing proposal is `NotFound`,
+    /// and endorsing an already-endorsed proposal is `Conflict`. Mirrors
+    /// `endorse_missing_proposal_is_not_found` + `endorse_already_endorsed_
+    /// is_conflict`.
+    #[tokio::test]
+    async fn in_memory_endorse_missing_is_not_found_and_already_endorsed_is_conflict() {
+        let repo = InMemoryGraphRepo::new();
+        repo.add_ontology_type("causes", "Causes", "A brings about B.");
+        repo.add_concept(Concept {
+            id: 1,
+            label: "A".into(),
+            created_at: 0,
+        });
+        repo.add_concept(Concept {
+            id: 2,
+            label: "B".into(),
+            created_at: 0,
+        });
+        repo.add_edge(Edge {
+            id: 10,
+            source_concept_id: 1,
+            target_concept_id: 2,
+            original_type: "causes".into(),
+            created_at: 0,
+        });
+        let missing = repo.endorse_inference_proposal(9999).await;
+        assert!(
+            matches!(missing, Err(Error::NotFound(_))),
+            "endorse missing: {missing:?}"
+        );
+
+        let proposal = repo
+            .propose_structural_inference(1, 2, "causes", vec![hop(1, "causes", 2)], None)
+            .await
+            .unwrap();
+        repo.endorse_inference_proposal(proposal.id).await.unwrap();
+        let again = repo.endorse_inference_proposal(proposal.id).await;
+        assert!(
+            matches!(again, Err(Error::Conflict(_))),
+            "endorse already-endorsed: {again:?}"
+        );
+    }
+
+    // --- issue #47: ontology governance + refactor (ADR-0003) ---
+
+    /// `insert_type_proposal` stores the row; `list_type_proposals` returns it
+    /// oldest-first and `get_type_proposal` looks it up by id. Mirrors the
+    /// governance storage flow in `ontology.rs::tests`.
+    #[tokio::test]
+    async fn in_memory_insert_type_proposal_then_list_and_get() {
+        let repo = InMemoryGraphRepo::new();
+        let proposal = repo
+            .insert_type_proposal(
+                "nurtures".into(),
+                "Nurtures".into(),
+                "A nurtures B.".into(),
+                None,
+                "pending".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(proposal.slug, "nurtures");
+        assert_eq!(proposal.label, "Nurtures");
+        assert_eq!(proposal.description, "A nurtures B.");
+        assert!(proposal.merge_of.is_none());
+        assert_eq!(proposal.status, "pending");
+        assert!(proposal.near_match_slug.is_none());
+        assert!(proposal.near_match_similarity.is_none());
+        assert!(proposal.resolved_at.is_none());
+
+        let listed = repo.list_type_proposals().await.unwrap();
+        assert_eq!(listed.len(), 1, "exactly one proposal queued");
+        assert_eq!(listed[0].id, proposal.id, "oldest-first");
+        let got = repo
+            .get_type_proposal(proposal.id)
+            .await
+            .unwrap()
+            .expect("proposal found by id");
+        assert_eq!(got, proposal);
+    }
+
+    /// ADR-0003: approving a `merge_of` proposal adds the new type to the
+    /// ontology, then `run_refactor` re-classifies each edge wearing the merged
+    /// type and appends the LLM's chosen slug to its type history. With FakeLlm
+    /// (which echoes the prompt — not a valid slug) the refactor falls back to
+    /// the new slug. Mirrors `run_refactor_with_merge_of_and_no_edges_is_noop`
+    /// (the non-noop case) + the `approve_*` governance tests.
+    #[tokio::test]
+    async fn in_memory_approve_type_proposal_retags_edges_via_refactor() {
+        use crate::llm::FakeLlm;
+
+        let repo = InMemoryGraphRepo::new();
+        repo.add_ontology_type("causes", "Causes", "A brings about B.");
+        repo.add_concept(Concept {
+            id: 1,
+            label: "A".into(),
+            created_at: 0,
+        });
+        repo.add_concept(Concept {
+            id: 2,
+            label: "B".into(),
+            created_at: 0,
+        });
+        repo.add_edge(Edge {
+            id: 10,
+            source_concept_id: 1,
+            target_concept_id: 2,
+            original_type: "causes".into(),
+            created_at: 0,
+        });
+        let proposal = repo
+            .insert_type_proposal(
+                "causes_v2".into(),
+                "Causes v2".into(),
+                "A brings about B, revised.".into(),
+                Some("causes".into()),
+                "pending".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // The InMemory approve does not run the refactor (the wrapper would);
+        // it only adds the type + embedding + flips status. Run the refactor
+        // explicitly against the approved proposal.
+        repo.approve_type_proposal(
+            proposal.id,
+            "causes_v2".into(),
+            "Causes v2".into(),
+            "A brings about B, revised.".into(),
+            vec![1.0; 64],
+        )
+        .await
+        .unwrap();
+        let approved = repo
+            .get_type_proposal(proposal.id)
+            .await
+            .unwrap()
+            .expect("approved proposal present");
+        assert_eq!(approved.status, "approved", "approve flipped the status");
+        assert!(approved.resolved_at.is_some());
+
+        let outcome = repo
+            .run_refactor(&FakeLlm::default(), &approved)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome.edges_retagged, 1,
+            "the one `causes` edge was retagged"
+        );
+
+        // The edge's current type is now the new slug (history appended).
+        assert_eq!(
+            repo.current_edge_type(10).await.unwrap().as_deref(),
+            Some("causes_v2"),
+            "current type projected from the retag"
+        );
+        assert_eq!(
+            repo.edges_with_current_type("causes").await.unwrap(),
+            Vec::<i64>::new(),
+            "the edge no longer wears `causes`"
+        );
+        assert_eq!(
+            repo.edges_with_current_type("causes_v2").await.unwrap(),
+            vec![10],
+            "the edge now wears `causes_v2`"
+        );
+        let history = repo.edge_type_history(10).await.unwrap();
+        assert_eq!(history.len(), 2, "original + retag");
+        assert_eq!(history[0].seq_index, 0);
+        assert_eq!(history[0].type_slug, "causes");
+        assert_eq!(history[1].seq_index, 1);
+        assert_eq!(history[1].type_slug, "causes_v2");
+    }
+
+    /// ADR-0003: rejecting a proposal marks it rejected, no ontology change,
+    /// no retag — edges keep wearing their current type. Missing id is
+    /// `NotFound`. Mirrors `reject_marks_pending_proposal_rejected` +
+    /// `reject_missing_proposal_is_not_found`.
+    #[tokio::test]
+    async fn in_memory_reject_type_proposal_keeps_edges_untouched() {
+        let repo = InMemoryGraphRepo::new();
+        repo.add_ontology_type("causes", "Causes", "A brings about B.");
+        repo.add_concept(Concept {
+            id: 1,
+            label: "A".into(),
+            created_at: 0,
+        });
+        repo.add_concept(Concept {
+            id: 2,
+            label: "B".into(),
+            created_at: 0,
+        });
+        repo.add_edge(Edge {
+            id: 10,
+            source_concept_id: 1,
+            target_concept_id: 2,
+            original_type: "causes".into(),
+            created_at: 0,
+        });
+        let proposal = repo
+            .insert_type_proposal(
+                "causes_v2".into(),
+                "Causes v2".into(),
+                "revised".into(),
+                Some("causes".into()),
+                "pending".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        repo.reject_type_proposal(proposal.id).await.unwrap();
+        let rejected = repo
+            .get_type_proposal(proposal.id)
+            .await
+            .unwrap()
+            .expect("rejected proposal present");
+        assert_eq!(rejected.status, "rejected");
+        assert!(rejected.resolved_at.is_some());
+
+        // No retag — the edge still wears `causes`.
+        assert_eq!(
+            repo.current_edge_type(10).await.unwrap().as_deref(),
+            Some("causes"),
+            "edges untouched on reject"
+        );
+        assert_eq!(
+            repo.edges_with_current_type("causes").await.unwrap(),
+            vec![10],
+            "no edges retagged"
+        );
+        assert!(
+            repo.ontology_slugs().await.unwrap() == vec!["causes".to_string()],
+            "no ontology change on reject"
+        );
+
+        // Missing id → NotFound.
+        let missing = repo.reject_type_proposal(9999).await;
+        assert!(
+            matches!(missing, Err(Error::NotFound(_))),
+            "reject missing: {missing:?}"
+        );
+    }
+
+    /// THE #47 acceptance test: `RefactorRunner` runs the refactor against
+    /// `InMemoryGraphRepo` — no real SQLite, no real LLM. Proves the runner's
+    /// `spawn(repo: Arc<dyn GraphRepo>, llm: Arc<dyn Llm>, proposal)` +
+    /// `await_all` seam works against any adapter. Mirrors the shape of
+    /// `run_refactor_with_merge_of_and_no_edges_is_noop` but with edges +
+    /// `InMemoryGraphRepo`.
+    #[tokio::test]
+    async fn refactor_runner_runs_against_in_memory_graph_repo_without_sqlite() {
+        use crate::llm::FakeLlm;
+        use crate::ontology::RefactorRunner;
+        use std::sync::Arc;
+
+        let repo = InMemoryGraphRepo::new();
+        repo.add_ontology_type("causes", "Causes", "A brings about B.");
+        repo.add_concept(Concept {
+            id: 1,
+            label: "A".into(),
+            created_at: 0,
+        });
+        repo.add_concept(Concept {
+            id: 2,
+            label: "B".into(),
+            created_at: 0,
+        });
+        repo.add_edge(Edge {
+            id: 10,
+            source_concept_id: 1,
+            target_concept_id: 2,
+            original_type: "causes".into(),
+            created_at: 0,
+        });
+        let repo: Arc<dyn GraphRepo> = Arc::new(repo);
+
+        let proposal = repo
+            .insert_type_proposal(
+                "causes_v2".into(),
+                "Causes v2".into(),
+                "A brings about B, revised.".into(),
+                Some("causes".into()),
+                "pending".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        repo.approve_type_proposal(
+            proposal.id,
+            "causes_v2".into(),
+            "Causes v2".into(),
+            "A brings about B, revised.".into(),
+            vec![1.0; 64],
+        )
+        .await
+        .unwrap();
+        let approved = repo
+            .get_type_proposal(proposal.id)
+            .await
+            .unwrap()
+            .expect("approved proposal present");
+
+        let runner = RefactorRunner::new();
+        runner.spawn(
+            Arc::clone(&repo),
+            Arc::new(FakeLlm::default()) as Arc<dyn Llm>,
+            approved,
+        );
+        runner.await_all().await;
+
+        // The refactor appended the new slug to the edge's type history;
+        // FakeLlm echoes the prompt (not a valid slug) so the runner fell back
+        // to the proposal's new slug `causes_v2`.
+        assert_eq!(
+            repo.current_edge_type(10).await.unwrap().as_deref(),
+            Some("causes_v2"),
+            "RefactorRunner retagged the edge against InMemoryGraphRepo"
+        );
+        let history = repo.edge_type_history(10).await.unwrap();
+        assert_eq!(history.len(), 2, "original + retag");
+        assert_eq!(history[0].type_slug, "causes");
+        assert_eq!(history[1].type_slug, "causes_v2");
+    }
+
+    // --- issue #47: retrieval pipeline (ADR-0004) against InMemoryGraphRepo ---
+
+    /// ADR-0004 seed-then-expand: the query seeds an entry concept by
+    /// embedding KNN, the graph traverses typed edges to expand the
+    /// neighbourhood, and braindumps collected from the subgraph (via concept
+    /// extraction provenance) form the context. Mirrors `expand_finds_
+    /// braindump_connected_by_edge_but_not_containing_query_word`.
+    #[tokio::test]
+    async fn in_memory_retrieve_finds_braindump_via_edge_expansion() {
+        let repo = InMemoryGraphRepo::new();
+        repo.add_concept(Concept {
+            id: 1,
+            label: "Maria".into(),
+            created_at: 0,
+        });
+        repo.add_concept(Concept {
+            id: 2,
+            label: "Q3 launch".into(),
+            created_at: 0,
+        });
+        repo.set_concept_embedding(1, vec![1.0, 0.0]);
+        repo.add_edge(Edge {
+            id: 10,
+            source_concept_id: 1,
+            target_concept_id: 2,
+            original_type: "endangers".into(),
+            created_at: 0,
+        });
+        // A braindump that extracted Q3 (the expansion target), not the seed.
+        // It does not lexically contain the query vector's "concept" — the
+        // graph link is what surfaces it.
+        let bd = repo
+            .insert_braindump(
+                "maria leaving tanks the timeline",
+                "maria leaving tanks the timeline",
+            )
+            .await
+            .unwrap();
+        repo.add_concept_provenance(2, bd.id);
+
+        let result = repo.retrieve(&[1.0, 0.0]).await.unwrap();
+
+        assert_eq!(result.mode, RetrievalMode::SeedThenExpand);
+        let found = result
+            .braindumps
+            .iter()
+            .find(|b| b.id == bd.id)
+            .expect("the graph-linked braindump is found via expansion");
+        assert_eq!(found.source, BraindumpSource::Subgraph);
+        assert!(
+            result.paths.iter().any(|e| {
+                e.source_concept_label == "Maria"
+                    && e.target_concept_label == "Q3 launch"
+                    && e.edge_type == "endangers"
+            }),
+            "traversed edge path present: {:?}",
+            result.paths
+        );
+    }
+
+    /// ADR-0004 backfill: a braindump not connected to the seeded subgraph but
+    /// whose braindump-embedding is near the query is returned as `Backfill`.
+    /// Mirrors `backfill_finds_strays_the_graph_missed`.
+    #[tokio::test]
+    async fn in_memory_retrieve_backfills_strays_the_graph_missed() {
+        let repo = InMemoryGraphRepo::new();
+        repo.add_concept(Concept {
+            id: 1,
+            label: "Maria".into(),
+            created_at: 0,
+        });
+        repo.set_concept_embedding(1, vec![1.0, 0.0]);
+        // A graph-linked braindump (in the subgraph via concept provenance).
+        let bd_graph = repo
+            .insert_braindump(
+                "maria endangers the q3 launch",
+                "maria endangers the q3 launch",
+            )
+            .await
+            .unwrap();
+        repo.add_concept_provenance(1, bd_graph.id);
+        // A stray braindump with no concept link, but a near-query embedding.
+        let bd_stray = repo
+            .insert_braindump("q3 risk assessment notes", "q3 risk assessment notes")
+            .await
+            .unwrap();
+        repo.set_braindump_embedding(bd_stray.id, vec![1.0, 0.0]);
+
+        let result = repo.retrieve(&[1.0, 0.0]).await.unwrap();
+
+        let stray = result
+            .braindumps
+            .iter()
+            .find(|b| b.id == bd_stray.id)
+            .expect("stray braindump found via backfill");
+        assert_eq!(stray.source, BraindumpSource::Backfill);
+        assert!(stray.score > 0.0);
+    }
+
+    /// ADR-0004 no-seed fallback: an empty graph has no concept seeds, so
+    /// retrieval falls back to braindump-vector-direct — which is also empty.
+    /// `mode` is `NoSeedFallback` and no paths are traversed.
+    #[tokio::test]
+    async fn in_memory_retrieve_returns_empty_on_empty_graph() {
+        use crate::llm::FakeLlm;
+
+        let repo = InMemoryGraphRepo::new();
+        let result = repo
+            .retrieve(&vec![0.0; FakeLlm::default().dim()])
+            .await
+            .unwrap();
+
+        assert_eq!(result.mode, RetrievalMode::NoSeedFallback);
+        assert!(
+            result.braindumps.is_empty(),
+            "no braindumps on an empty graph"
+        );
+        assert!(result.paths.is_empty(), "no graph traversal in fallback");
+    }
 }
