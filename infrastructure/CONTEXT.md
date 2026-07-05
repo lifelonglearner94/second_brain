@@ -5,7 +5,7 @@ The deployment and runtime topology for Second Brain — Docker Compose, the pub
 ## Language
 
 **Edge**:
-The single public-facing service in the two-service topology — terminates TLS (Caddy, auto-HTTPS), serves the baked-in PWA Bundle via `file_server`, and reverse-proxies `/api/*` to the Backend. Stateless and disposable: rebuilt as a custom image per deploy, holds no runtime state.
+The single public-facing service in the two-service topology — terminates TLS (Caddy, auto-HTTPS), serves the baked-in PWA Bundle via `file_server`, and reverse-proxies `/api/*` to the Backend. Disposable as an *image* — rebuilt as a custom image per deploy — but NOT stateless at runtime: Caddy's ACME state (issued Let's Encrypt certificates and ACME account keys in `/data`, plus autosaved config in `/config`) must survive container recreations, so both paths are mounted on named volumes (`caddy_data`, `caddy_config`). Without `/data`, every `docker compose down/up` or deploy wipes ACME state and forces a fresh cert request, tripping Let's Encrypt's 5-issuances-per-168h rate limit and taking HTTPS down (#55). The ACME account key lives in this volume — same host-disk trust boundary as the Brain File, not the Zero-Trust Image boundary (ADR-0004).
 _Avoid_: proxy, gateway, reverse proxy, frontend host, front door
 
 **PWA Bundle**:

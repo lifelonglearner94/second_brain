@@ -66,6 +66,27 @@ assert "app_network" in (be.get("networks") or []), "backend must be on app_netw
 assert "app_network" in (edge.get("networks") or []), "edge must be on app_network"
 assert "app_network" in cfg.get("networks", {}), "app_network must be declared"
 
+# --- Edge ACME state (ADR-0001 as corrected by #55) --------------------------
+# Caddy's issued Let's Encrypt certificates + ACME account keys live in /data,
+# and its autosaved config in /config — runtime state that must survive
+# container recreations on named volumes. Without /data, every `docker compose
+# down/up` or deploy wipes ACME state and forces a fresh cert request, which
+# trips Let's Encrypt's 5-issuances-per-168h rate limit and takes HTTPS down
+# (the live outage #55 fixes). The Edge stays a disposable IMAGE (rebuilt per
+# deploy) and a Zero-Trust Image (ADR-0004): the volume is host-side runtime
+# state, nothing baked into the image.
+evols = {v.get("target"): v for v in edge.get("volumes", []) if isinstance(v, dict)}
+assert "/data" in evols, f"edge must mount a volume at /data (ACME state, #55); got {edge.get('volumes')}"
+ed = evols["/data"]
+assert ed.get("type") == "volume" and ed.get("source") == "caddy_data", \
+    f"edge /data must be the caddy_data named volume; got {ed}"
+assert "/config" in evols, f"edge must mount a volume at /config (Caddy autosaved config, #55); got {edge.get('volumes')}"
+ec = evols["/config"]
+assert ec.get("type") == "volume" and ec.get("source") == "caddy_config", \
+    f"edge /config must be the caddy_config named volume; got {ec}"
+assert "caddy_data" in cfg.get("volumes", {}), "top-level volume caddy_data must be declared"
+assert "caddy_config" in cfg.get("volumes", {}), "top-level volume caddy_config must be declared"
+
 # --- Litestream Brain Replica sidecar (ADR-0002, #32) ------------------------
 # Shares sqlite_data READ-WRITE at /data. Litestream v0.5.x maintains its own
 # internal tracking tables (_litestream_seq, _litestream_shadow) in the source
@@ -101,6 +122,7 @@ assert "backend" in (litestream.get("depends_on") or []), "litestream must depen
 print("ok   - backend internal-only (expose 8080, no ports) per ADR-0006")
 print("ok   - Brain File on named volume sqlite_data at /data")
 print("ok   - edge sole published :80+:443; all services on app_network")
+print("ok   - edge ACME state on named volumes caddy_data@/data + caddy_config@/config (#55)")
 print("ok   - litestream sidecar: sqlite_data rw, /etc/litestream.yml ro, :9090 loopback (ADR-0002/#32)")
 PY
 
