@@ -121,9 +121,11 @@ pub async fn approve(
     // If the approved type merges another, spawn the refactor out-of-band so
     // ingest is not blocked while it runs (ADR-0003). Fire-and-forget; the
     // JoinHandle is tracked on the runner so tests can await it.
-    state
-        .refactor_runner
-        .spawn(state.db.clone(), state.llm.clone(), proposal.clone());
+    state.refactor_runner.spawn(
+        state.graph_repo.clone(),
+        state.llm.clone(),
+        proposal.clone(),
+    );
     Ok(Json(proposal.into()))
 }
 

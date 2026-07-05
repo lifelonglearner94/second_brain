@@ -35,17 +35,25 @@
 //! Thematic Snapshot — a frozen capture of the motivating cluster's braindumps
 //! — because the ephemeral evidence must be preserved as an audit trail even
 //! after the cluster dissolves.
+//!
+//! After #47 the full propose→HITL→endorse/reject storage flow is behind the
+//! [`GraphRepo`] trait. The free functions here are thin delegating wrappers:
+//! they own the pure validation (path shape, type non-empty, cluster shape)
+//! and delegate the DB work (ontology slug check, traversability, INSERT,
+//! edge persistence, status flip) to [`SqliteGraphRepo`]'s trait impl. No
+//! `*_conn` helpers live here after #47 — they moved to the adapter.
+//!
+//! The `InferenceProposer` trait is the natural next step after this slice:
+//! splitting Structural and Thematic proposal *generation* (the LLM side —
+//! tracing the path, observing the cluster, composing the rationale) behind a
+//! separate trait, so the chat route depends on the proposer interface rather
+//! than calling the LLM directly. The DB trait (`GraphRepo`) stays pure-DB.
 
-use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::db::{now_seconds, Db};
+use crate::db::Db;
 use crate::error::{Error, Result};
-use crate::graph_repo::{
-    concept_exists_conn, edge_exists_with_current_type_conn, find_edge_id_conn,
-    init_type_history_conn, insert_edge_conn,
-};
-use crate::ontology::ontology_slug_exists_conn;
+use crate::graph_repo::{GraphRepo, SqliteGraphRepo};
 
 /// Origin tag for a structural inference proposal (ADR-0006). The
 /// graph-backed, deterministic mode — "the graph supports this; I'm labeling
@@ -150,6 +158,10 @@ pub struct InferenceAssertion {
 /// (ADR-0003). The `proposed_type` must be a governed ontology slug
 /// (ADR-0002: the LLM never invents a type); an unsanctioned type is rejected
 /// and the caller is directed to the ontology governance queue.
+///
+/// Wrapper: the pure path-shape validation runs here; the DB checks (ontology
+/// slug, traversability) and the INSERT are delegated to
+/// [`GraphRepo::propose_structural_inference`] (issue #47).
 pub async fn propose_structural_inference(
     db: &Db,
     source_concept_id: i64,
@@ -158,87 +170,26 @@ pub async fn propose_structural_inference(
     evidence_path: Vec<EvidenceEdge>,
     rationale: Option<&str>,
 ) -> Result<ChatInferenceProposal> {
-    let proposed_type = proposed_type.trim().to_string();
-    if proposed_type.is_empty() {
+    if proposed_type.trim().is_empty() {
         return Err(Error::BadRequest("proposed_type must be non-empty".into()));
     }
     validate_path(&evidence_path, source_concept_id, target_concept_id)?;
-    let rationale = rationale
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let evidence_json = serde_json::to_string(&evidence_path)
-        .map_err(|e| Error::internal(format!("encode evidence_path: {e}")))?;
-
-    let created_at = now_seconds();
-    let proposal = db
-        .run(move |conn| {
-            // The proposed type must be a governed ontology slug (ADR-0002).
-            // An unsanctioned type routes to the ontology governance queue —
-            // the caller must propose the type via `POST /ontology/propose`
-            // and re-propose the inference once it is approved.
-            if !ontology_slug_exists_conn(conn, &proposed_type)? {
-                return Err(Error::BadRequest(format!(
-                    "proposed type `{proposed_type}` is not in the ontology; \
-                     propose it via POST /ontology/propose and re-propose the \
-                     inference once approved"
-                )));
-            }
-            // The structural guarantee: every hop must be a real edge wearing
-            // the stated type as its current projected type. This is what
-            // makes a structural inference graph-backed rather than
-            // hallucinated.
-            for hop in &evidence_path {
-                if !edge_exists_with_current_type_conn(
-                    conn,
-                    hop.source_concept_id,
-                    &hop.edge_type,
-                    hop.target_concept_id,
-                )? {
-                    return Err(Error::BadRequest(format!(
-                        "evidence path hop {} —[{}]→ {} is not a traversable edge in the graph",
-                        hop.source_concept_id, hop.edge_type, hop.target_concept_id
-                    )));
-                }
-            }
-            conn.execute(
-                "INSERT INTO chat_inference_proposals
-                    (mode, source_concept_id, target_concept_id, proposed_type,
-                     evidence_path, rationale, snapshot_id, status, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8)",
-                params![
-                    STRUCTURAL_MODE,
-                    source_concept_id,
-                    target_concept_id,
-                    proposed_type,
-                    evidence_json,
-                    rationale,
-                    STATUS_PENDING,
-                    created_at
-                ],
-            )?;
-            Ok(ChatInferenceProposal {
-                id: conn.last_insert_rowid(),
-                mode: STRUCTURAL_MODE.to_string(),
-                source_concept_id,
-                target_concept_id,
-                proposed_type,
-                evidence_path,
-                rationale,
-                status: STATUS_PENDING.to_string(),
-                created_at,
-                resolved_at: None,
-                snapshot: None,
-            })
-        })
-        .await?;
-    Ok(proposal)
+    SqliteGraphRepo::new(db.clone())
+        .propose_structural_inference(
+            source_concept_id,
+            target_concept_id,
+            proposed_type,
+            evidence_path,
+            rationale,
+        )
+        .await
 }
 
 /// Validate the evidence path is non-empty, connected, and spans
 /// `source_concept_id` → `target_concept_id`. Pure (no I/O) so it is
 /// hermetically testable. Traversability (each hop is a real edge) is checked
-/// against the DB in [`propose_structural_inference`].
-fn validate_path(
+/// against the DB in the trait method.
+pub(crate) fn validate_path(
     path: &[EvidenceEdge],
     source_concept_id: i64,
     target_concept_id: i64,
@@ -302,6 +253,10 @@ fn validate_path(
 /// No graph-traversability check: the partition is non-deterministic, so
 /// "no edge path" is the LLM's observation at proposal time; the HITL
 /// reviewer is the gate, and the snapshot is the receipt.
+///
+/// Wrapper: the pure cluster-shape validation runs here; the DB checks
+/// (ontology slug, concept existence, braindump computation) and the INSERT
+/// are delegated to [`GraphRepo::propose_thematic_inference`] (issue #47).
 pub async fn propose_thematic_inference(
     db: &Db,
     source_concept_id: i64,
@@ -310,8 +265,7 @@ pub async fn propose_thematic_inference(
     cluster_concept_ids: Vec<i64>,
     rationale: Option<&str>,
 ) -> Result<ChatInferenceProposal> {
-    let proposed_type = proposed_type.trim().to_string();
-    if proposed_type.is_empty() {
+    if proposed_type.trim().is_empty() {
         return Err(Error::BadRequest("proposed_type must be non-empty".into()));
     }
     if source_concept_id == target_concept_id {
@@ -320,7 +274,7 @@ pub async fn propose_thematic_inference(
                 .into(),
         ));
     }
-    let mut cluster = cluster_concept_ids;
+    let mut cluster = cluster_concept_ids.clone();
     cluster.sort_unstable();
     cluster.dedup();
     if cluster.is_empty() {
@@ -335,84 +289,15 @@ pub async fn propose_thematic_inference(
                 .into(),
         ));
     }
-    let rationale = rationale
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let created_at = now_seconds();
-    let proposal = db
-        .run(move |conn| {
-            if !ontology_slug_exists_conn(conn, &proposed_type)? {
-                return Err(Error::BadRequest(format!(
-                    "proposed type `{proposed_type}` is not in the ontology; \
-                     propose it via POST /ontology/propose and re-propose the \
-                     inference once approved"
-                )));
-            }
-            for &cid in &cluster {
-                if !concept_exists_conn(conn, cid)? {
-                    return Err(Error::BadRequest(format!(
-                        "cluster concept id {cid} does not exist"
-                    )));
-                }
-            }
-            let braindump_ids = compute_cluster_braindump_ids_conn(conn, &cluster)?;
-            if braindump_ids.is_empty() {
-                return Err(Error::BadRequest(
-                    "the motivating cluster has no braindump-backed edges between \
-                     its concepts — no thematic density from user thoughts"
-                        .into(),
-                ));
-            }
-            let braindump_json = serde_json::to_string(&braindump_ids)
-                .map_err(|e| Error::internal(format!("encode braindump_ids: {e}")))?;
-            let concept_json = serde_json::to_string(&cluster)
-                .map_err(|e| Error::internal(format!("encode concept_ids: {e}")))?;
-            conn.execute(
-                "INSERT INTO thematic_snapshots (braindump_ids, concept_ids, captured_at)
-                 VALUES (?1, ?2, ?3)",
-                params![braindump_json, concept_json, created_at],
-            )?;
-            let snapshot_id = conn.last_insert_rowid();
-            let evidence_json = serde_json::to_string(&Vec::<EvidenceEdge>::new())
-                .map_err(|e| Error::internal(format!("encode empty evidence_path: {e}")))?;
-            conn.execute(
-                "INSERT INTO chat_inference_proposals
-                    (mode, source_concept_id, target_concept_id, proposed_type,
-                     evidence_path, rationale, snapshot_id, status, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    THEMATIC_MODE,
-                    source_concept_id,
-                    target_concept_id,
-                    proposed_type,
-                    evidence_json,
-                    rationale,
-                    snapshot_id,
-                    STATUS_PENDING,
-                    created_at
-                ],
-            )?;
-            Ok(ChatInferenceProposal {
-                id: conn.last_insert_rowid(),
-                mode: THEMATIC_MODE.to_string(),
-                source_concept_id,
-                target_concept_id,
-                proposed_type,
-                evidence_path: Vec::new(),
-                rationale,
-                status: STATUS_PENDING.to_string(),
-                created_at,
-                resolved_at: None,
-                snapshot: Some(ThematicSnapshot {
-                    id: snapshot_id,
-                    braindump_ids,
-                    concept_ids: cluster,
-                    captured_at: created_at,
-                }),
-            })
-        })
-        .await?;
-    Ok(proposal)
+    SqliteGraphRepo::new(db.clone())
+        .propose_thematic_inference(
+            source_concept_id,
+            target_concept_id,
+            proposed_type,
+            cluster_concept_ids,
+            rationale,
+        )
+        .await
 }
 
 /// Endorse a pending chat-inference proposal (ADR-0006): persist the
@@ -430,55 +315,12 @@ pub async fn propose_thematic_inference(
 /// `NotFound` if the proposal does not exist; `Conflict` if it is not
 /// `pending` (already endorsed or rejected — endorsement is immutable, no
 /// second chance). Returns the refreshed proposal.
+///
+/// Wrapper: delegates to [`GraphRepo::endorse_inference_proposal`] (issue #47).
 pub async fn endorse_inference_proposal(db: &Db, id: i64) -> Result<ChatInferenceProposal> {
-    let proposal = get_inference_proposal(db, id)
-        .await?
-        .ok_or_else(|| Error::NotFound(format!("chat inference proposal {id} not found")))?;
-    if proposal.status != STATUS_PENDING {
-        return Err(Error::Conflict(format!(
-            "proposal {id} is `{}`, not `pending` — cannot endorse",
-            proposal.status
-        )));
-    }
-    let source = proposal.source_concept_id;
-    let target = proposal.target_concept_id;
-    let proposed_type = proposal.proposed_type.clone();
-    let mode = proposal.mode.clone();
-    let snapshot_id = proposal.snapshot.as_ref().map(|s| s.id);
-    db.run(move |conn| {
-        conn.execute_batch("BEGIN")?;
-        match (|| -> Result<()> {
-            let edge_id =
-                if let Some(eid) = find_edge_id_conn(conn, source, &proposed_type, target)? {
-                    eid
-                } else {
-                    let eid = insert_edge_conn(conn, source, target, &proposed_type)?;
-                    init_type_history_conn(conn, eid, &proposed_type)?;
-                    eid
-                };
-            insert_inference_provenance_conn(conn, edge_id, id, &mode, snapshot_id)?;
-            let now = now_seconds();
-            conn.execute(
-                "UPDATE chat_inference_proposals
-                 SET status = ?1, resolved_at = ?2 WHERE id = ?3",
-                params![STATUS_ENDORSED, now, id],
-            )?;
-            Ok(())
-        })() {
-            Ok(()) => {
-                conn.execute_batch("COMMIT")?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
-        }
-    })
-    .await?;
-    get_inference_proposal(db, id)
-        .await?
-        .ok_or_else(|| Error::internal("proposal vanished after endorse"))
+    SqliteGraphRepo::new(db.clone())
+        .endorse_inference_proposal(id)
+        .await
 }
 
 /// Reject a pending structural inference proposal (ADR-0006): keep the graph
@@ -486,107 +328,30 @@ pub async fn endorse_inference_proposal(db: &Db, id: i64) -> Result<ChatInferenc
 /// inference-claim never enters the graph. `NotFound` if the proposal does
 /// not exist; `Conflict` if it is not `pending`. Returns the refreshed
 /// proposal.
+///
+/// Wrapper: delegates to [`GraphRepo::reject_inference_proposal`] (issue #47).
 pub async fn reject_inference_proposal(db: &Db, id: i64) -> Result<ChatInferenceProposal> {
-    let now = now_seconds();
-    let updated = db
-        .run(move |conn| {
-            Ok(conn.execute(
-                "UPDATE chat_inference_proposals
-                 SET status = ?1, resolved_at = ?2
-                 WHERE id = ?3 AND status = ?4",
-                params![STATUS_REJECTED, now, id, STATUS_PENDING],
-            )?)
-        })
-        .await?;
-    if updated == 0 {
-        match get_inference_proposal(db, id).await? {
-            None => Err(Error::NotFound(format!(
-                "chat inference proposal {id} not found"
-            ))),
-            Some(p) => Err(Error::Conflict(format!(
-                "proposal {id} is `{}`, not `pending` — cannot reject",
-                p.status
-            ))),
-        }
-    } else {
-        get_inference_proposal(db, id)
-            .await?
-            .ok_or_else(|| Error::internal("proposal vanished after reject"))
-    }
+    SqliteGraphRepo::new(db.clone())
+        .reject_inference_proposal(id)
+        .await
 }
 
 /// List all chat-inference proposals, oldest first.
+///
+/// Wrapper: delegates to [`GraphRepo::list_inference_proposals`] (issue #47).
 pub async fn list_inference_proposals(db: &Db) -> Result<Vec<ChatInferenceProposal>> {
-    db.run(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT p.id, p.mode, p.source_concept_id, p.target_concept_id,
-                    p.proposed_type, p.evidence_path, p.rationale,
-                    p.status, p.created_at, p.resolved_at,
-                    s.id, s.braindump_ids, s.concept_ids, s.captured_at
-             FROM chat_inference_proposals p
-             LEFT JOIN thematic_snapshots s ON p.snapshot_id = s.id
-             ORDER BY p.id",
-        )?;
-        let rows = stmt
-            .query_map([], row_to_proposal)?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(rows)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .list_inference_proposals()
+        .await
 }
 
 /// Look up a single proposal by id. `None` if no row matches.
+///
+/// Wrapper: delegates to [`GraphRepo::get_inference_proposal`] (issue #47).
 pub async fn get_inference_proposal(db: &Db, id: i64) -> Result<Option<ChatInferenceProposal>> {
-    db.run(move |conn| {
-        let row = conn
-            .query_row(
-                "SELECT p.id, p.mode, p.source_concept_id, p.target_concept_id,
-                        p.proposed_type, p.evidence_path, p.rationale,
-                        p.status, p.created_at, p.resolved_at,
-                        s.id, s.braindump_ids, s.concept_ids, s.captured_at
-                 FROM chat_inference_proposals p
-                 LEFT JOIN thematic_snapshots s ON p.snapshot_id = s.id
-                 WHERE p.id = ?1",
-                params![id],
-                row_to_proposal,
-            )
-            .optional()?;
-        Ok(row)
-    })
-    .await
-}
-
-fn row_to_proposal(r: &rusqlite::Row) -> rusqlite::Result<ChatInferenceProposal> {
-    let evidence_json: String = r.get(5)?;
-    let evidence_path: Vec<EvidenceEdge> = serde_json::from_str(&evidence_json).unwrap_or_default();
-    let snapshot = match r.get::<_, Option<i64>>(10)? {
-        Some(id) => {
-            let braindump_json: String = r.get(11)?;
-            let concept_json: String = r.get(12)?;
-            let braindump_ids: Vec<i64> = serde_json::from_str(&braindump_json).unwrap_or_default();
-            let concept_ids: Vec<i64> = serde_json::from_str(&concept_json).unwrap_or_default();
-            Some(ThematicSnapshot {
-                id,
-                braindump_ids,
-                concept_ids,
-                captured_at: r.get(13)?,
-            })
-        }
-        None => None,
-    };
-    Ok(ChatInferenceProposal {
-        id: r.get(0)?,
-        mode: r.get(1)?,
-        source_concept_id: r.get(2)?,
-        target_concept_id: r.get(3)?,
-        proposed_type: r.get(4)?,
-        evidence_path,
-        rationale: r.get(6)?,
-        status: r.get(7)?,
-        created_at: r.get(8)?,
-        resolved_at: r.get(9)?,
-        snapshot,
-    })
+    SqliteGraphRepo::new(db.clone())
+        .get_inference_proposal(id)
+        .await
 }
 
 /// The chat-inference assertions backing an edge (ADR-0006 origin-typed
@@ -594,76 +359,12 @@ fn row_to_proposal(r: &rusqlite::Row) -> rusqlite::Result<ChatInferenceProposal>
 /// `edge_provenance` (ADR-0002); this is the chat-inference half. An edge's
 /// full asserter list is the union of both. `snapshot_id` is the frozen
 /// Thematic Snapshot for thematic assertions (ADR-0009); `None` for structural.
+///
+/// Wrapper: delegates to [`GraphRepo::edge_inference_asserted_by`] (issue #47).
 pub async fn edge_inference_asserted_by(db: &Db, edge_id: i64) -> Result<Vec<InferenceAssertion>> {
-    db.run(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT chat_inference_id, mode, snapshot_id FROM edge_inference_provenance
-             WHERE edge_id = ?1 ORDER BY chat_inference_id",
-        )?;
-        let rows = stmt
-            .query_map(params![edge_id], |r| {
-                Ok(InferenceAssertion {
-                    chat_inference_id: r.get(0)?,
-                    mode: r.get(1)?,
-                    snapshot_id: r.get(2)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(rows)
-    })
-    .await
-}
-
-// --- connection-scoped helpers ---
-
-fn insert_inference_provenance_conn(
-    conn: &rusqlite::Connection,
-    edge_id: i64,
-    chat_inference_id: i64,
-    mode: &str,
-    snapshot_id: Option<i64>,
-) -> Result<()> {
-    let created_at = now_seconds();
-    conn.execute(
-        "INSERT OR IGNORE INTO edge_inference_provenance
-            (edge_id, chat_inference_id, mode, snapshot_id, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![edge_id, chat_inference_id, mode, snapshot_id, created_at],
-    )?;
-    Ok(())
-}
-
-/// Compute the braindump ids whose edges formed the thematic density of a
-/// cluster (ADR-0009): the distinct braindumps that asserted edges (via
-/// `edge_provenance`, ADR-0002) where BOTH endpoints are in the cluster and
-/// the edge is not a self-edge. This is the verifiable, backend-computed half
-/// of the Thematic Snapshot — the receipt of user-thought evidence that
-/// motivated the proposal. Chat-inference-backed edges
-/// (`edge_inference_provenance`) are NOT included: the snapshot captures user
-/// thoughts, not LLM deductions. Uses `json_each` so the cluster is passed as
-/// one JSON parameter regardless of size.
-fn compute_cluster_braindump_ids_conn(
-    conn: &rusqlite::Connection,
-    cluster_concept_ids: &[i64],
-) -> Result<Vec<i64>> {
-    if cluster_concept_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let cluster_json = serde_json::to_string(cluster_concept_ids)
-        .map_err(|e| Error::internal(format!("encode cluster_concept_ids: {e}")))?;
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT ep.braindump_id
-         FROM edge_provenance ep
-         JOIN edges e ON ep.edge_id = e.id
-         WHERE e.source_concept_id != e.target_concept_id
-           AND e.source_concept_id IN (SELECT value FROM json_each(?1))
-           AND e.target_concept_id IN (SELECT value FROM json_each(?1))
-         ORDER BY ep.braindump_id",
-    )?;
-    let ids = stmt
-        .query_map(params![cluster_json], |r| r.get::<_, i64>(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(ids)
+    SqliteGraphRepo::new(db.clone())
+        .edge_inference_asserted_by(edge_id)
+        .await
 }
 
 #[cfg(test)]
@@ -1330,7 +1031,7 @@ mod tests {
                      JOIN edges e ON ep.edge_id = e.id
                      WHERE e.source_concept_id = ?1 AND e.target_concept_id = ?2
                      ORDER BY ep.braindump_id LIMIT 1",
-                    params![maria, q3],
+                    rusqlite::params![maria, q3],
                     |r| r.get(0),
                 )?)
             })

@@ -21,16 +21,29 @@
 //!
 //! [`run_txn`]: SqliteGraphRepo::run_txn
 
+use std::collections::{HashMap, HashSet, VecDeque};
+
 use async_trait::async_trait;
+use petgraph::stable_graph::{NodeIndex, StableUnGraph};
 use rusqlite::{params, OptionalExtension};
 
 use crate::braindump::Braindump;
+use crate::chat_inference::{
+    ChatInferenceProposal, EvidenceEdge, InferenceAssertion, ThematicSnapshot, STATUS_ENDORSED,
+    STATUS_PENDING, STATUS_REJECTED, STRUCTURAL_MODE, THEMATIC_MODE,
+};
 use crate::db::{now_seconds, Db};
 use crate::error::{Error, Result};
 use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
 use crate::graph::{
     Concept, Edge, EdgeProjection, IngestOutcome, MergeSuggestion, TypeHistoryEntry,
     ACCRETION_SIMILARITY, SUGGESTION_FLOOR_SIMILARITY,
+};
+use crate::llm::Llm;
+use crate::ontology::{RefactorOutcome, TypeProposal};
+use crate::retrieval::{
+    BraindumpSource, RetrievalMode, RetrievalResult, RetrievedBraindump, RetrievedEdge,
+    BRAINDUMP_TOP_K, EXPAND_DEPTH, SEED_SIMILARITY_FLOOR, SEED_TOP_K,
 };
 
 /// The canonical current-type projection SQL fragment (ADR-0003): the last
@@ -272,10 +285,9 @@ pub(crate) fn merge_concepts_conn(
 /// `pending_guard` is `true` the UPDATE includes `AND status = 'pending'` so
 /// a non-pending row yields 0 rows; when `false` the UPDATE is unguarded (for
 /// sites that pre-check status before the transaction — approve / endorse).
-/// Created in #46 for #47 to apply at the ontology and chat-inference sites;
-/// the merge-queue sites use DELETE semantics (not UPDATE) and so do not route
-/// through this helper.
-#[allow(dead_code)] // applied in #47 at the ontology + chat-inference sites
+/// Applied in #47 at the ontology approve/reject and chat-inference
+/// endorse/reject sites; the merge-queue sites use DELETE semantics (not
+/// UPDATE) and so do not route through this helper.
 fn transition_status_conn(
     conn: &rusqlite::Connection,
     table: &str,
@@ -307,6 +319,214 @@ fn transition_status_conn(
     } else {
         Ok(())
     }
+}
+
+// --- chat-inference `*_conn` helpers (moved from `chat_inference.rs` in #47) ---
+//
+// Private to the adapter — no domain module calls them after #47; the trait
+// methods own the propose/endorse/reject flows.
+
+/// Insert a chat-inference provenance row (ADR-0006 origin-typed). The `mode`
+/// origin-tags the assertion; `snapshot_id` is the frozen Thematic Snapshot for
+/// thematic assertions (ADR-0009), `None` for structural.
+fn insert_inference_provenance_conn(
+    conn: &rusqlite::Connection,
+    edge_id: i64,
+    chat_inference_id: i64,
+    mode: &str,
+    snapshot_id: Option<i64>,
+) -> Result<()> {
+    let created_at = now_seconds();
+    conn.execute(
+        "INSERT OR IGNORE INTO edge_inference_provenance
+            (edge_id, chat_inference_id, mode, snapshot_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![edge_id, chat_inference_id, mode, snapshot_id, created_at],
+    )?;
+    Ok(())
+}
+
+/// Compute the braindump ids whose edges formed the thematic density of a
+/// cluster (ADR-0009): the distinct braindumps that asserted edges where BOTH
+/// endpoints are in the cluster and the edge is not a self-edge.
+fn compute_cluster_braindump_ids_conn(
+    conn: &rusqlite::Connection,
+    cluster_concept_ids: &[i64],
+) -> Result<Vec<i64>> {
+    if cluster_concept_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cluster_json = serde_json::to_string(cluster_concept_ids)
+        .map_err(|e| Error::internal(format!("encode cluster_concept_ids: {e}")))?;
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT ep.braindump_id
+         FROM edge_provenance ep
+         JOIN edges e ON ep.edge_id = e.id
+         WHERE e.source_concept_id != e.target_concept_id
+           AND e.source_concept_id IN (SELECT value FROM json_each(?1))
+           AND e.target_concept_id IN (SELECT value FROM json_each(?1))
+         ORDER BY ep.braindump_id",
+    )?;
+    let ids = stmt
+        .query_map(params![cluster_json], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
+
+// --- ontology `*_conn` helpers (moved from `ontology.rs` in #47) ---
+
+/// Whether a slug already exists in the ontology (connection-scoped).
+fn ontology_slug_exists_conn(conn: &rusqlite::Connection, slug: &str) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM ontology WHERE slug = ?1",
+        params![slug],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// Append a new type-history entry to an edge (ADR-0003). `seq_index` is
+/// `max(existing) + 1`, so refactors stack without overwriting.
+fn append_type_history_conn(
+    conn: &rusqlite::Connection,
+    edge_id: i64,
+    type_slug: &str,
+) -> Result<()> {
+    let created_at = now_seconds();
+    let next_seq: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(seq_index), -1) + 1 FROM edge_type_history WHERE edge_id = ?1",
+            params![edge_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    conn.execute(
+        "INSERT INTO edge_type_history (edge_id, seq_index, type_slug, created_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![edge_id, next_seq, type_slug, created_at],
+    )?;
+    Ok(())
+}
+
+// --- retrieval helpers (moved from `retrieval.rs` in #47) ---
+//
+// The petgraph BFS is private to the retrieval implementation; no other module
+// imports petgraph. `bfs_expand` takes pre-loaded concept labels + edges so
+// both adapters can call it after loading from their respective stores.
+
+struct RetrievalEdgeInfo {
+    edge_type: String,
+    source_concept_id: i64,
+    target_concept_id: i64,
+}
+
+/// Build the typed-edge graph and BFS from the seed concepts up to
+/// [`EXPAND_DEPTH`] hops (undirected: incoming + outgoing). Returns each visited
+/// concept's minimum hop distance from a seed, and the edges in the traversed
+/// subgraph. petgraph is private to this function — no other module imports it.
+fn bfs_expand(
+    concept_labels: &HashMap<i64, String>,
+    edges: &[RetrievalEdgeInfo],
+    seeds: &[(i64, f32)],
+) -> (HashMap<i64, usize>, Vec<RetrievedEdge>) {
+    let mut graph: StableUnGraph<i64, RetrievalEdgeInfo> = StableUnGraph::default();
+    let mut node_index: HashMap<i64, NodeIndex> = HashMap::new();
+    for &cid in concept_labels.keys() {
+        let idx = graph.add_node(cid);
+        node_index.insert(cid, idx);
+    }
+    for info in edges {
+        if let (Some(&s), Some(&t)) = (
+            node_index.get(&info.source_concept_id),
+            node_index.get(&info.target_concept_id),
+        ) {
+            graph.add_edge(
+                s,
+                t,
+                RetrievalEdgeInfo {
+                    edge_type: info.edge_type.clone(),
+                    source_concept_id: info.source_concept_id,
+                    target_concept_id: info.target_concept_id,
+                },
+            );
+        }
+    }
+
+    let mut visited: HashSet<NodeIndex> = HashSet::new();
+    let mut concept_hops: HashMap<i64, usize> = HashMap::new();
+    let mut queue: VecDeque<(NodeIndex, usize)> = VecDeque::new();
+    for &(seed_cid, _) in seeds {
+        if let Some(&idx) = node_index.get(&seed_cid) {
+            if visited.insert(idx) {
+                concept_hops.insert(seed_cid, 0);
+                queue.push_back((idx, 0));
+            }
+        }
+    }
+    while let Some((node, depth)) = queue.pop_front() {
+        if depth >= EXPAND_DEPTH {
+            continue;
+        }
+        for neighbor in graph.neighbors(node) {
+            if visited.insert(neighbor) {
+                if let Some(&cid) = graph.node_weight(neighbor) {
+                    concept_hops.entry(cid).or_insert(depth + 1);
+                }
+                queue.push_back((neighbor, depth + 1));
+            }
+        }
+    }
+
+    let traversed: Vec<RetrievedEdge> = graph
+        .edge_indices()
+        .filter_map(|e| {
+            let (s, t) = graph.edge_endpoints(e)?;
+            if visited.contains(&s) && visited.contains(&t) {
+                let info = graph.edge_weight(e)?;
+                Some(RetrievedEdge {
+                    source_concept_id: info.source_concept_id,
+                    source_concept_label: concept_labels
+                        .get(&info.source_concept_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    target_concept_id: info.target_concept_id,
+                    target_concept_label: concept_labels
+                        .get(&info.target_concept_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    edge_type: info.edge_type.clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    (concept_hops, traversed)
+}
+
+/// Load a braindump row by id from a SQLite connection. `None` if no row
+/// matches. Used by the retrieval subgraph-collection, backfill, and
+/// no-seed-fallback paths.
+fn load_braindump_row_conn(
+    conn: &rusqlite::Connection,
+    id: i64,
+) -> Result<Option<(i64, String, String, i64)>> {
+    let row = conn
+        .query_row(
+            "SELECT id, verbatim, cleaned, created_at FROM braindumps WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    Ok(row)
 }
 
 /// The graph-repository seam. Reads against the knowledge graph behind one
@@ -456,6 +676,136 @@ pub trait GraphRepo: Send + Sync {
     /// concepts separate and drop the suggestion. `NotFound` if the suggestion
     /// does not exist.
     async fn reject_merge_suggestion(&self, suggestion_id: i64) -> Result<()>;
+
+    // --- chat write-back (issue #47, ADR-0006) ---
+    //
+    // All pure-DB: the LLM that produces the proposal info (path, cluster,
+    // rationale) lives in the chat route, not in chat_inference.rs. The trait
+    // methods own the propose→HITL→endorse/reject storage flow. The
+    // `InferenceProposer` trait (architecture-review candidate 3) becomes the
+    // natural next step after this slice — splitting Structural and Thematic
+    // proposal *generation* (the LLM side) behind a separate trait.
+
+    /// Propose a structural inference (ADR-0006): store a pending proposal for
+    /// a direct edge summarizing a traversable multi-hop path. Validates the
+    /// proposed type is a governed ontology slug and every evidence-path hop is
+    /// a real edge wearing the stated type as its current projected type.
+    async fn propose_structural_inference(
+        &self,
+        source_concept_id: i64,
+        target_concept_id: i64,
+        proposed_type: &str,
+        evidence_path: Vec<EvidenceEdge>,
+        rationale: Option<&str>,
+    ) -> Result<ChatInferenceProposal>;
+
+    /// Propose a thematic inference (ADR-0006 + ADR-0009): store a pending
+    /// proposal for a new edge bridging cluster-mates, with a frozen Thematic
+    /// Snapshot. Validates the proposed type, cluster concepts, and computed
+    /// braindump evidence.
+    async fn propose_thematic_inference(
+        &self,
+        source_concept_id: i64,
+        target_concept_id: i64,
+        proposed_type: &str,
+        cluster_concept_ids: Vec<i64>,
+        rationale: Option<&str>,
+    ) -> Result<ChatInferenceProposal>;
+
+    /// Endorse a pending proposal (ADR-0006): persist the edge + inference
+    /// provenance + type history, flip status to endorsed. `NotFound` if the
+    /// proposal does not exist; `Conflict` if not pending.
+    async fn endorse_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal>;
+
+    /// Reject a pending proposal (ADR-0006): keep the graph untouched, mark
+    /// the proposal rejected. `NotFound` if missing; `Conflict` if not pending.
+    async fn reject_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal>;
+
+    /// List all chat-inference proposals, oldest first.
+    async fn list_inference_proposals(&self) -> Result<Vec<ChatInferenceProposal>>;
+
+    /// Look up a single chat-inference proposal by id. `None` if no row matches.
+    async fn get_inference_proposal(&self, id: i64) -> Result<Option<ChatInferenceProposal>>;
+
+    /// The chat-inference assertions backing an edge (ADR-0006 origin-typed
+    /// provenance).
+    async fn edge_inference_asserted_by(&self, edge_id: i64) -> Result<Vec<InferenceAssertion>>;
+
+    // --- ontology governance + refactor (issue #47, ADR-0003) ---
+    //
+    // Governance (propose/approve/reject) is pure-DB: the LLM embedding
+    // computation runs in the wrapper. The refactor takes `&dyn Llm` (allowed
+    // deviation per #47's design rule) because it interleaves LLM-per-edge
+    // re-classification with DB reads; the InMemoryGraphRepo impl works with
+    // FakeLlm so tests are hermetic.
+
+    /// List all type proposals, oldest first.
+    async fn list_type_proposals(&self) -> Result<Vec<TypeProposal>>;
+
+    /// Look up a single type proposal by id. `None` if no row matches.
+    async fn get_type_proposal(&self, id: i64) -> Result<Option<TypeProposal>>;
+
+    /// Insert a type proposal row (pure-DB). The wrapper computes the embedding
+    /// + KNN near-match + status; this method owns only the INSERT.
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_type_proposal(
+        &self,
+        slug: String,
+        label: String,
+        description: String,
+        merge_of: Option<String>,
+        status: String,
+        near_match_slug: Option<String>,
+        near_match_similarity: Option<f32>,
+    ) -> Result<TypeProposal>;
+
+    /// Approve a pending type proposal (ADR-0003): add the type to the ontology,
+    /// store its type-embedding, mark the proposal approved. The wrapper computes
+    /// the embedding; this method owns the atomic INSERT+UPDATE inside one
+    /// transaction.
+    async fn approve_type_proposal(
+        &self,
+        id: i64,
+        slug: String,
+        label: String,
+        description: String,
+        type_vec: Vec<f32>,
+    ) -> Result<()>;
+
+    /// Reject a pending type proposal (ADR-0003): mark rejected, no ontology
+    /// change. `NotFound` if missing; `Conflict` if not pending.
+    async fn reject_type_proposal(&self, id: i64) -> Result<()>;
+
+    /// The projected current type of an edge: the last entry of its append-only
+    /// type history (ADR-0003). `None` if no history.
+    async fn current_edge_type(&self, edge_id: i64) -> Result<Option<String>>;
+
+    /// Every edge id whose projected current type is `slug`. The refactor
+    /// targets these edges.
+    async fn edges_with_current_type(&self, slug: &str) -> Result<Vec<i64>>;
+
+    /// The (source label, target label, current type) for an edge — the prompt
+    /// payload for the refactor LLM.
+    async fn edge_endpoints_and_type(&self, edge_id: i64) -> Result<(String, String, String)>;
+
+    /// Run the ontology refactor (ADR-0003): re-classify every edge of the
+    /// merged type against the new vocabulary, appending the LLM's chosen slug
+    /// to each edge's type history. Takes `&dyn Llm` (allowed deviation: the
+    /// LLM-per-edge interleaving can't be split without duplicating logic); the
+    /// InMemoryGraphRepo impl works with FakeLlm.
+    async fn run_refactor(&self, llm: &dyn Llm, proposal: &TypeProposal)
+        -> Result<RefactorOutcome>;
+
+    // --- retrieval pipeline (issue #47, ADR-0004) ---
+    //
+    // Pure-DB: the wrapper computes the query embedding (LLM); the trait method
+    // takes the precomputed `query_vec` and owns the full seed→expand→collect→
+    // backfill flow. The petgraph BFS is private to the adapter's impl.
+
+    /// Run seed-then-expand retrieval (or the no-seed fallback) for a
+    /// precomputed query vector. Returns ranked braindumps plus the traversed
+    /// edge paths.
+    async fn retrieve(&self, query_vec: &[f32]) -> Result<RetrievalResult>;
 }
 
 /// Production adapter: delegates to [`Db::run`] against the in-process
@@ -913,6 +1263,747 @@ impl GraphRepo for SqliteGraphRepo {
             })
             .await
     }
+
+    // --- chat write-back (issue #47) ---
+
+    async fn propose_structural_inference(
+        &self,
+        source_concept_id: i64,
+        target_concept_id: i64,
+        proposed_type: &str,
+        evidence_path: Vec<EvidenceEdge>,
+        rationale: Option<&str>,
+    ) -> Result<ChatInferenceProposal> {
+        let proposed_type = proposed_type.trim().to_string();
+        let rationale = rationale
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let evidence_json = serde_json::to_string(&evidence_path)
+            .map_err(|e| Error::internal(format!("encode evidence_path: {e}")))?;
+        let created_at = now_seconds();
+        self.db
+            .run(move |conn| {
+                if !ontology_slug_exists_conn(conn, &proposed_type)? {
+                    return Err(Error::BadRequest(format!(
+                        "proposed type `{proposed_type}` is not in the ontology; \
+                         propose it via POST /ontology/propose and re-propose the \
+                         inference once approved"
+                    )));
+                }
+                for hop in &evidence_path {
+                    if !edge_exists_with_current_type_conn(
+                        conn,
+                        hop.source_concept_id,
+                        &hop.edge_type,
+                        hop.target_concept_id,
+                    )? {
+                        return Err(Error::BadRequest(format!(
+                            "evidence path hop {} —[{}]→ {} is not a traversable edge in the graph",
+                            hop.source_concept_id, hop.edge_type, hop.target_concept_id
+                        )));
+                    }
+                }
+                conn.execute(
+                    "INSERT INTO chat_inference_proposals
+                        (mode, source_concept_id, target_concept_id, proposed_type,
+                         evidence_path, rationale, snapshot_id, status, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8)",
+                    params![
+                        STRUCTURAL_MODE,
+                        source_concept_id,
+                        target_concept_id,
+                        proposed_type,
+                        evidence_json,
+                        rationale,
+                        STATUS_PENDING,
+                        created_at
+                    ],
+                )?;
+                Ok(ChatInferenceProposal {
+                    id: conn.last_insert_rowid(),
+                    mode: STRUCTURAL_MODE.to_string(),
+                    source_concept_id,
+                    target_concept_id,
+                    proposed_type,
+                    evidence_path,
+                    rationale,
+                    status: STATUS_PENDING.to_string(),
+                    created_at,
+                    resolved_at: None,
+                    snapshot: None,
+                })
+            })
+            .await
+    }
+
+    async fn propose_thematic_inference(
+        &self,
+        source_concept_id: i64,
+        target_concept_id: i64,
+        proposed_type: &str,
+        cluster_concept_ids: Vec<i64>,
+        rationale: Option<&str>,
+    ) -> Result<ChatInferenceProposal> {
+        let proposed_type = proposed_type.trim().to_string();
+        let mut cluster = cluster_concept_ids;
+        cluster.sort_unstable();
+        cluster.dedup();
+        let rationale = rationale
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let created_at = now_seconds();
+        self.db
+            .run(move |conn| {
+                if !ontology_slug_exists_conn(conn, &proposed_type)? {
+                    return Err(Error::BadRequest(format!(
+                        "proposed type `{proposed_type}` is not in the ontology; \
+                         propose it via POST /ontology/propose and re-propose the \
+                         inference once approved"
+                    )));
+                }
+                for &cid in &cluster {
+                    if !concept_exists_conn(conn, cid)? {
+                        return Err(Error::BadRequest(format!(
+                            "cluster concept id {cid} does not exist"
+                        )));
+                    }
+                }
+                let braindump_ids = compute_cluster_braindump_ids_conn(conn, &cluster)?;
+                if braindump_ids.is_empty() {
+                    return Err(Error::BadRequest(
+                        "the motivating cluster has no braindump-backed edges between \
+                         its concepts — no thematic density from user thoughts"
+                            .into(),
+                    ));
+                }
+                let braindump_json = serde_json::to_string(&braindump_ids)
+                    .map_err(|e| Error::internal(format!("encode braindump_ids: {e}")))?;
+                let concept_json = serde_json::to_string(&cluster)
+                    .map_err(|e| Error::internal(format!("encode concept_ids: {e}")))?;
+                conn.execute(
+                    "INSERT INTO thematic_snapshots (braindump_ids, concept_ids, captured_at)
+                     VALUES (?1, ?2, ?3)",
+                    params![braindump_json, concept_json, created_at],
+                )?;
+                let snapshot_id = conn.last_insert_rowid();
+                let evidence_json = serde_json::to_string(&Vec::<EvidenceEdge>::new())
+                    .map_err(|e| Error::internal(format!("encode empty evidence_path: {e}")))?;
+                conn.execute(
+                    "INSERT INTO chat_inference_proposals
+                        (mode, source_concept_id, target_concept_id, proposed_type,
+                         evidence_path, rationale, snapshot_id, status, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        THEMATIC_MODE,
+                        source_concept_id,
+                        target_concept_id,
+                        proposed_type,
+                        evidence_json,
+                        rationale,
+                        snapshot_id,
+                        STATUS_PENDING,
+                        created_at
+                    ],
+                )?;
+                Ok(ChatInferenceProposal {
+                    id: conn.last_insert_rowid(),
+                    mode: THEMATIC_MODE.to_string(),
+                    source_concept_id,
+                    target_concept_id,
+                    proposed_type,
+                    evidence_path: Vec::new(),
+                    rationale,
+                    status: STATUS_PENDING.to_string(),
+                    created_at,
+                    resolved_at: None,
+                    snapshot: Some(ThematicSnapshot {
+                        id: snapshot_id,
+                        braindump_ids,
+                        concept_ids: cluster,
+                        captured_at: created_at,
+                    }),
+                })
+            })
+            .await
+    }
+
+    async fn endorse_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal> {
+        let proposal = self
+            .get_inference_proposal(id)
+            .await?
+            .ok_or_else(|| Error::NotFound(format!("chat inference proposal {id} not found")))?;
+        if proposal.status != STATUS_PENDING {
+            return Err(Error::Conflict(format!(
+                "proposal {id} is `{}`, not `pending` — cannot endorse",
+                proposal.status
+            )));
+        }
+        let source = proposal.source_concept_id;
+        let target = proposal.target_concept_id;
+        let proposed_type = proposal.proposed_type.clone();
+        let mode = proposal.mode.clone();
+        let snapshot_id = proposal.snapshot.as_ref().map(|s| s.id);
+        self.run_txn(move |conn| {
+            let edge_id =
+                if let Some(eid) = find_edge_id_conn(conn, source, &proposed_type, target)? {
+                    eid
+                } else {
+                    let eid = insert_edge_conn(conn, source, target, &proposed_type)?;
+                    init_type_history_conn(conn, eid, &proposed_type)?;
+                    eid
+                };
+            insert_inference_provenance_conn(conn, edge_id, id, &mode, snapshot_id)?;
+            transition_status_conn(conn, "chat_inference_proposals", id, STATUS_ENDORSED, false)?;
+            Ok(())
+        })
+        .await?;
+        self.get_inference_proposal(id)
+            .await?
+            .ok_or_else(|| Error::internal("proposal vanished after endorse"))
+    }
+
+    async fn reject_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal> {
+        self.db
+            .run(move |conn| {
+                transition_status_conn(conn, "chat_inference_proposals", id, STATUS_REJECTED, true)
+            })
+            .await?;
+        self.get_inference_proposal(id)
+            .await?
+            .ok_or_else(|| Error::internal("proposal vanished after reject"))
+    }
+
+    async fn list_inference_proposals(&self) -> Result<Vec<ChatInferenceProposal>> {
+        self.db
+            .run(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT p.id, p.mode, p.source_concept_id, p.target_concept_id,
+                            p.proposed_type, p.evidence_path, p.rationale,
+                            p.status, p.created_at, p.resolved_at,
+                            s.id, s.braindump_ids, s.concept_ids, s.captured_at
+                     FROM chat_inference_proposals p
+                     LEFT JOIN thematic_snapshots s ON p.snapshot_id = s.id
+                     ORDER BY p.id",
+                )?;
+                let rows = stmt
+                    .query_map([], row_to_proposal)?
+                    .collect::<rusqlite::Result<_>>()?;
+                Ok(rows)
+            })
+            .await
+    }
+
+    async fn get_inference_proposal(&self, id: i64) -> Result<Option<ChatInferenceProposal>> {
+        self.db
+            .run(move |conn| {
+                let row = conn
+                    .query_row(
+                        "SELECT p.id, p.mode, p.source_concept_id, p.target_concept_id,
+                                p.proposed_type, p.evidence_path, p.rationale,
+                                p.status, p.created_at, p.resolved_at,
+                                s.id, s.braindump_ids, s.concept_ids, s.captured_at
+                         FROM chat_inference_proposals p
+                         LEFT JOIN thematic_snapshots s ON p.snapshot_id = s.id
+                         WHERE p.id = ?1",
+                        params![id],
+                        row_to_proposal,
+                    )
+                    .optional()?;
+                Ok(row)
+            })
+            .await
+    }
+
+    async fn edge_inference_asserted_by(&self, edge_id: i64) -> Result<Vec<InferenceAssertion>> {
+        self.db
+            .run(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT chat_inference_id, mode, snapshot_id FROM edge_inference_provenance
+                     WHERE edge_id = ?1 ORDER BY chat_inference_id",
+                )?;
+                let rows = stmt
+                    .query_map(params![edge_id], |r| {
+                        Ok(InferenceAssertion {
+                            chat_inference_id: r.get(0)?,
+                            mode: r.get(1)?,
+                            snapshot_id: r.get(2)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<_>>()?;
+                Ok(rows)
+            })
+            .await
+    }
+
+    // --- ontology governance + refactor (issue #47) ---
+
+    async fn list_type_proposals(&self) -> Result<Vec<TypeProposal>> {
+        self.db
+            .run(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, slug, label, description, merge_of, status,
+                            near_match_slug, near_match_similarity, created_at, resolved_at
+                     FROM type_proposals ORDER BY id",
+                )?;
+                let rows = stmt
+                    .query_map([], |r| {
+                        Ok(TypeProposal {
+                            id: r.get(0)?,
+                            slug: r.get(1)?,
+                            label: r.get(2)?,
+                            description: r.get(3)?,
+                            merge_of: r.get(4)?,
+                            status: r.get(5)?,
+                            near_match_slug: r.get(6)?,
+                            near_match_similarity: r.get::<_, Option<f64>>(7)?.map(|f| f as f32),
+                            created_at: r.get(8)?,
+                            resolved_at: r.get(9)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<_>>()?;
+                Ok(rows)
+            })
+            .await
+    }
+
+    async fn get_type_proposal(&self, id: i64) -> Result<Option<TypeProposal>> {
+        self.db
+            .run(move |conn| {
+                let row = conn
+                    .query_row(
+                        "SELECT id, slug, label, description, merge_of, status,
+                                near_match_slug, near_match_similarity, created_at, resolved_at
+                         FROM type_proposals WHERE id = ?1",
+                        params![id],
+                        |r| {
+                            Ok(TypeProposal {
+                                id: r.get(0)?,
+                                slug: r.get(1)?,
+                                label: r.get(2)?,
+                                description: r.get(3)?,
+                                merge_of: r.get(4)?,
+                                status: r.get(5)?,
+                                near_match_slug: r.get(6)?,
+                                near_match_similarity: r
+                                    .get::<_, Option<f64>>(7)?
+                                    .map(|f| f as f32),
+                                created_at: r.get(8)?,
+                                resolved_at: r.get(9)?,
+                            })
+                        },
+                    )
+                    .optional()?;
+                Ok(row)
+            })
+            .await
+    }
+
+    async fn insert_type_proposal(
+        &self,
+        slug: String,
+        label: String,
+        description: String,
+        merge_of: Option<String>,
+        status: String,
+        near_match_slug: Option<String>,
+        near_match_similarity: Option<f32>,
+    ) -> Result<TypeProposal> {
+        let created_at = now_seconds();
+        self.db
+            .run(move |conn| {
+                conn.execute(
+                    "INSERT INTO type_proposals
+                        (slug, label, description, merge_of, status,
+                         near_match_slug, near_match_similarity, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        slug,
+                        label,
+                        description,
+                        merge_of,
+                        status,
+                        near_match_slug,
+                        near_match_similarity,
+                        created_at
+                    ],
+                )?;
+                Ok(TypeProposal {
+                    id: conn.last_insert_rowid(),
+                    slug,
+                    label,
+                    description,
+                    merge_of,
+                    status,
+                    near_match_slug,
+                    near_match_similarity,
+                    created_at,
+                    resolved_at: None,
+                })
+            })
+            .await
+    }
+
+    async fn approve_type_proposal(
+        &self,
+        id: i64,
+        slug: String,
+        label: String,
+        description: String,
+        type_vec: Vec<f32>,
+    ) -> Result<()> {
+        let now = now_seconds();
+        self.run_txn(move |conn| {
+            conn.execute(
+                "INSERT INTO ontology (slug, label, description, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![slug, label, description, now],
+            )?;
+            let ontology_id: i64 = conn.query_row(
+                "SELECT id FROM ontology WHERE slug = ?1",
+                params![slug],
+                |r| r.get(0),
+            )?;
+            conn.execute(
+                "INSERT INTO type_embeddings (ontology_id, embedding) VALUES (?1, ?2)",
+                params![ontology_id, vec_to_blob(&type_vec)],
+            )?;
+            transition_status_conn(conn, "type_proposals", id, "approved", false)?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn reject_type_proposal(&self, id: i64) -> Result<()> {
+        self.db
+            .run(move |conn| transition_status_conn(conn, "type_proposals", id, "rejected", true))
+            .await
+    }
+
+    async fn current_edge_type(&self, edge_id: i64) -> Result<Option<String>> {
+        self.db
+            .run(move |conn| {
+                let slug = conn
+                    .query_row(
+                        "SELECT type_slug FROM edge_type_history
+                         WHERE edge_id = ?1 ORDER BY seq_index DESC LIMIT 1",
+                        params![edge_id],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional()?;
+                Ok(slug)
+            })
+            .await
+    }
+
+    async fn edges_with_current_type(&self, slug: &str) -> Result<Vec<i64>> {
+        let slug = slug.to_string();
+        self.db
+            .run(move |conn| {
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT e.id FROM edges e WHERE ({}) = ?1 ORDER BY e.id",
+                    current_type_subquery()
+                ))?;
+                let ids = stmt
+                    .query_map(params![slug], |r| r.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                Ok(ids)
+            })
+            .await
+    }
+
+    async fn edge_endpoints_and_type(&self, edge_id: i64) -> Result<(String, String, String)> {
+        self.db
+            .run(move |conn| {
+                let row = conn.query_row(
+                    &format!(
+                        "SELECT sc.label, tc.label, ({})
+                         FROM edges e
+                         JOIN concepts sc ON sc.id = e.source_concept_id
+                         JOIN concepts tc ON tc.id = e.target_concept_id
+                         WHERE e.id = ?1",
+                        current_type_subquery()
+                    ),
+                    params![edge_id],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                        ))
+                    },
+                )?;
+                Ok(row)
+            })
+            .await
+    }
+
+    async fn run_refactor(
+        &self,
+        llm: &dyn Llm,
+        proposal: &TypeProposal,
+    ) -> Result<RefactorOutcome> {
+        let Some(merge_of) = proposal.merge_of.as_ref() else {
+            return Ok(RefactorOutcome::default());
+        };
+        let edge_ids = self.edges_with_current_type(merge_of).await?;
+        if edge_ids.is_empty() {
+            return Ok(RefactorOutcome::default());
+        }
+
+        let ontology = self.ontology_slugs().await?;
+        let new_slug = proposal.slug.clone();
+        let system = "You re-classify edges when the ontology evolves. \
+                      Given an edge and the new vocabulary, respond with the single slug \
+                      that best fits the edge now. Respond with only the slug, nothing else.";
+        let merge_of_for_prompt = merge_of.clone();
+        let label_for_prompt = proposal.label.clone();
+        let description_for_prompt = proposal.description.clone();
+
+        let mut retagged: Vec<(i64, String)> = Vec::with_capacity(edge_ids.len());
+        for edge_id in edge_ids {
+            let (source_label, target_label, current_type) =
+                self.edge_endpoints_and_type(edge_id).await?;
+            let user = format!(
+                "Edge: {source_label} —[{current_type}]→ {target_label}\n\
+                 The type `{merge_of_for_prompt}` has been merged into `{new_slug}` \
+                 (label: {label_for_prompt}; description: {description_for_prompt}).\n\
+                 Re-classify this edge. Respond with exactly one slug from: [{}].",
+                ontology.join(", ")
+            );
+            let response = llm.generate_pinned(system, &user).await?;
+            let slug = response.trim().to_string();
+            let chosen = if ontology.iter().any(|s| s == &slug) {
+                slug
+            } else {
+                tracing::warn!(
+                    edge_id,
+                    raw = %slug,
+                    "refactor LLM returned an unsanctioned slug; defaulting to the new type"
+                );
+                new_slug.clone()
+            };
+            retagged.push((edge_id, chosen));
+        }
+
+        let edges_retagged = retagged.len();
+        self.run_txn(move |conn| {
+            for (edge_id, slug) in &retagged {
+                append_type_history_conn(conn, *edge_id, slug)?;
+            }
+            Ok(())
+        })
+        .await?;
+
+        Ok(RefactorOutcome { edges_retagged })
+    }
+
+    // --- retrieval pipeline (issue #47) ---
+
+    async fn retrieve(&self, query_vec: &[f32]) -> Result<RetrievalResult> {
+        let candidates = self.knn_concepts(query_vec, SEED_TOP_K).await?;
+        let seeds: Vec<(i64, f32)> = candidates
+            .into_iter()
+            .filter(|(_, sim)| *sim >= SEED_SIMILARITY_FLOOR)
+            .collect();
+
+        if seeds.is_empty() {
+            return self.no_seed_fallback(query_vec).await;
+        }
+
+        let (traversed_edges, subgraph) = self
+            .db
+            .run(move |conn| {
+                let mut concept_labels: HashMap<i64, String> = HashMap::new();
+                {
+                    let mut stmt = conn.prepare("SELECT id, label FROM concepts")?;
+                    let rows =
+                        stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+                    for row in rows {
+                        let (id, label) = row?;
+                        concept_labels.insert(id, label);
+                    }
+                }
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT e.source_concept_id, e.target_concept_id, ({}) AS current_type
+                     FROM edges e",
+                    current_type_subquery()
+                ))?;
+                let edge_rows = stmt.query_map([], |r| {
+                    Ok(RetrievalEdgeInfo {
+                        source_concept_id: r.get(0)?,
+                        target_concept_id: r.get(1)?,
+                        edge_type: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    })
+                })?;
+                let mut edges = Vec::new();
+                for row in edge_rows {
+                    edges.push(row?);
+                }
+                let (concept_hops, traversed_edges) = bfs_expand(&concept_labels, &edges, &seeds);
+                let subgraph = collect_subgraph_braindumps_conn(conn, &concept_hops)?;
+                Ok((traversed_edges, subgraph))
+            })
+            .await?;
+
+        let backfill = self.backfill_braindumps(query_vec, &subgraph).await?;
+
+        let mut all = subgraph;
+        all.extend(backfill);
+        all.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(RetrievalResult {
+            braindumps: all,
+            paths: traversed_edges,
+            mode: RetrievalMode::SeedThenExpand,
+        })
+    }
+}
+
+/// Map a `rusqlite::Row` (the 14-column SELECT from
+/// `chat_inference_proposals` LEFT JOIN `thematic_snapshots`) into a
+/// [`ChatInferenceProposal`].
+fn row_to_proposal(r: &rusqlite::Row) -> rusqlite::Result<ChatInferenceProposal> {
+    let evidence_json: String = r.get(5)?;
+    let evidence_path: Vec<EvidenceEdge> = serde_json::from_str(&evidence_json).unwrap_or_default();
+    let snapshot = match r.get::<_, Option<i64>>(10)? {
+        Some(id) => {
+            let braindump_json: String = r.get(11)?;
+            let concept_json: String = r.get(12)?;
+            let braindump_ids: Vec<i64> = serde_json::from_str(&braindump_json).unwrap_or_default();
+            let concept_ids: Vec<i64> = serde_json::from_str(&concept_json).unwrap_or_default();
+            Some(ThematicSnapshot {
+                id,
+                braindump_ids,
+                concept_ids,
+                captured_at: r.get(13)?,
+            })
+        }
+        None => None,
+    };
+    Ok(ChatInferenceProposal {
+        id: r.get(0)?,
+        mode: r.get(1)?,
+        source_concept_id: r.get(2)?,
+        target_concept_id: r.get(3)?,
+        proposed_type: r.get(4)?,
+        evidence_path,
+        rationale: r.get(6)?,
+        status: r.get(7)?,
+        created_at: r.get(8)?,
+        resolved_at: r.get(9)?,
+        snapshot,
+    })
+}
+
+/// Collect braindumps from the traversed subgraph: each visited concept's
+/// extraction provenance (ADR-0010). Score decays with hop distance from the
+/// nearest seed.
+fn collect_subgraph_braindumps_conn(
+    conn: &rusqlite::Connection,
+    concept_hops: &HashMap<i64, usize>,
+) -> Result<Vec<RetrievedBraindump>> {
+    let mut best: HashMap<i64, f32> = HashMap::new();
+    for (cid, hops) in concept_hops {
+        let score = 1.0 / (1.0 + *hops as f32);
+        let mut stmt =
+            conn.prepare("SELECT braindump_id FROM concept_provenance WHERE concept_id = ?1")?;
+        let ids = stmt.query_map(params![cid], |r| r.get::<_, i64>(0))?;
+        for id in ids {
+            let bd_id = id?;
+            let entry = best.entry(bd_id).or_insert(0.0);
+            if score > *entry {
+                *entry = score;
+            }
+        }
+    }
+
+    let mut result = Vec::new();
+    for (bd_id, score) in &best {
+        if let Some((id, verbatim, cleaned, created_at)) = load_braindump_row_conn(conn, *bd_id)? {
+            result.push(RetrievedBraindump {
+                id,
+                verbatim,
+                cleaned,
+                created_at,
+                score: *score,
+                source: BraindumpSource::Subgraph,
+            });
+        }
+    }
+    Ok(result)
+}
+
+/// Braindump-embedding KNN backfill for strays the graph missed (ADR-0004).
+/// Returns braindumps not already in the subgraph set, scored by similarity.
+impl SqliteGraphRepo {
+    /// No-seed fallback (ADR-0004): braindump-vector-direct.
+    async fn no_seed_fallback(&self, query_vec: &[f32]) -> Result<RetrievalResult> {
+        let hits = self.knn_braindumps(query_vec, BRAINDUMP_TOP_K).await?;
+        let braindumps = self
+            .db
+            .run(move |conn| {
+                let mut out = Vec::new();
+                for (bd_id, sim) in &hits {
+                    if let Some((id, verbatim, cleaned, created_at)) =
+                        load_braindump_row_conn(conn, *bd_id)?
+                    {
+                        out.push(RetrievedBraindump {
+                            id,
+                            verbatim,
+                            cleaned,
+                            created_at,
+                            score: *sim,
+                            source: BraindumpSource::VectorDirect,
+                        });
+                    }
+                }
+                Ok(out)
+            })
+            .await?;
+        Ok(RetrievalResult {
+            braindumps,
+            paths: Vec::new(),
+            mode: RetrievalMode::NoSeedFallback,
+        })
+    }
+
+    async fn backfill_braindumps(
+        &self,
+        query_vec: &[f32],
+        subgraph: &[RetrievedBraindump],
+    ) -> Result<Vec<RetrievedBraindump>> {
+        let already: HashSet<i64> = subgraph.iter().map(|b| b.id).collect();
+        let hits = self.knn_braindumps(query_vec, BRAINDUMP_TOP_K).await?;
+        let backfill = self
+            .db
+            .run(move |conn| {
+                let mut out = Vec::new();
+                for (bd_id, sim) in &hits {
+                    if already.contains(bd_id) {
+                        continue;
+                    }
+                    if let Some((id, verbatim, cleaned, created_at)) =
+                        load_braindump_row_conn(conn, *bd_id)?
+                    {
+                        out.push(RetrievedBraindump {
+                            id,
+                            verbatim,
+                            cleaned,
+                            created_at,
+                            score: *sim,
+                            source: BraindumpSource::Backfill,
+                        });
+                    }
+                }
+                Ok(out)
+            })
+            .await?;
+        Ok(backfill)
+    }
 }
 
 // --- private accretion helpers (Sqlite adapter) ---
@@ -1270,12 +2361,24 @@ pub struct InMemoryGraphRepo {
     concept_embeddings: std::sync::Mutex<std::collections::HashMap<i64, Vec<f32>>>,
     /// `(slug, embedding)` for type-embedding KNN (ADR-0003 dedup).
     type_embeddings: std::sync::Mutex<Vec<(String, Vec<f32>)>>,
+    /// Chat-inference proposals (ADR-0006), ordered by id.
+    chat_inference_proposals: std::sync::Mutex<Vec<ChatInferenceProposal>>,
+    /// `snapshot_id → ThematicSnapshot` (ADR-0009 frozen receipts).
+    thematic_snapshots: std::sync::Mutex<std::collections::HashMap<i64, ThematicSnapshot>>,
+    /// `edge_id → Vec<InferenceAssertion>` (ADR-0006 origin-typed provenance).
+    edge_inference_provenance:
+        std::sync::Mutex<std::collections::HashMap<i64, Vec<InferenceAssertion>>>,
+    /// Type proposals (ADR-0003 governance queue), ordered by id.
+    type_proposals: std::sync::Mutex<Vec<TypeProposal>>,
     /// Monotonic id counters for auto-generated rows (avoid id reuse across
     /// retract + re-create cycles, matching Sqlite `AUTOINCREMENT`).
     next_braindump_id: std::sync::Mutex<i64>,
     next_concept_id: std::sync::Mutex<i64>,
     next_edge_id: std::sync::Mutex<i64>,
     next_suggestion_id: std::sync::Mutex<i64>,
+    next_proposal_id: std::sync::Mutex<i64>,
+    next_snapshot_id: std::sync::Mutex<i64>,
+    next_type_proposal_id: std::sync::Mutex<i64>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -1295,10 +2398,17 @@ impl InMemoryGraphRepo {
             ontology: std::sync::Mutex::new(Vec::new()),
             concept_embeddings: std::sync::Mutex::new(std::collections::HashMap::new()),
             type_embeddings: std::sync::Mutex::new(Vec::new()),
+            chat_inference_proposals: std::sync::Mutex::new(Vec::new()),
+            thematic_snapshots: std::sync::Mutex::new(std::collections::HashMap::new()),
+            edge_inference_provenance: std::sync::Mutex::new(std::collections::HashMap::new()),
+            type_proposals: std::sync::Mutex::new(Vec::new()),
             next_braindump_id: std::sync::Mutex::new(0),
             next_concept_id: std::sync::Mutex::new(0),
             next_edge_id: std::sync::Mutex::new(0),
             next_suggestion_id: std::sync::Mutex::new(0),
+            next_proposal_id: std::sync::Mutex::new(0),
+            next_snapshot_id: std::sync::Mutex::new(0),
+            next_type_proposal_id: std::sync::Mutex::new(0),
         }
     }
 
@@ -1839,6 +2949,590 @@ impl GraphRepo for InMemoryGraphRepo {
         }
         Ok(())
     }
+
+    // --- chat write-back (issue #47) ---
+
+    async fn propose_structural_inference(
+        &self,
+        source_concept_id: i64,
+        target_concept_id: i64,
+        proposed_type: &str,
+        evidence_path: Vec<EvidenceEdge>,
+        rationale: Option<&str>,
+    ) -> Result<ChatInferenceProposal> {
+        let proposed_type = proposed_type.trim().to_string();
+        let rationale = rationale
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let ontology = self
+            .ontology
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .iter()
+            .any(|(slug, _, _)| slug == &proposed_type);
+        if !ontology {
+            return Err(Error::BadRequest(format!(
+                "proposed type `{proposed_type}` is not in the ontology; \
+                 propose it via POST /ontology/propose and re-propose the \
+                 inference once approved"
+            )));
+        }
+        for hop in &evidence_path {
+            if !self.edge_exists_with_current_type_in_memory(
+                hop.source_concept_id,
+                &hop.edge_type,
+                hop.target_concept_id,
+            ) {
+                return Err(Error::BadRequest(format!(
+                    "evidence path hop {} —[{}]→ {} is not a traversable edge in the graph",
+                    hop.source_concept_id, hop.edge_type, hop.target_concept_id
+                )));
+            }
+        }
+        let id = Self::next_id(&self.next_proposal_id);
+        let created_at = now_seconds();
+        let proposal = ChatInferenceProposal {
+            id,
+            mode: STRUCTURAL_MODE.to_string(),
+            source_concept_id,
+            target_concept_id,
+            proposed_type,
+            evidence_path,
+            rationale,
+            status: STATUS_PENDING.to_string(),
+            created_at,
+            resolved_at: None,
+            snapshot: None,
+        };
+        self.chat_inference_proposals
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .push(proposal.clone());
+        Ok(proposal)
+    }
+
+    async fn propose_thematic_inference(
+        &self,
+        source_concept_id: i64,
+        target_concept_id: i64,
+        proposed_type: &str,
+        cluster_concept_ids: Vec<i64>,
+        rationale: Option<&str>,
+    ) -> Result<ChatInferenceProposal> {
+        let proposed_type = proposed_type.trim().to_string();
+        let mut cluster = cluster_concept_ids;
+        cluster.sort_unstable();
+        cluster.dedup();
+        let rationale = rationale
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let ontology = self
+            .ontology
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .iter()
+            .any(|(slug, _, _)| slug == &proposed_type);
+        if !ontology {
+            return Err(Error::BadRequest(format!(
+                "proposed type `{proposed_type}` is not in the ontology; \
+                 propose it via POST /ontology/propose and re-propose the \
+                 inference once approved"
+            )));
+        }
+        let concepts_exist: bool = {
+            let concepts = self
+                .concepts
+                .lock()
+                .expect("InMemoryGraphRepo mutex poisoned");
+            cluster.iter().all(|cid| concepts.contains_key(cid))
+        };
+        if !concepts_exist {
+            let missing = cluster.iter().find(|cid| {
+                !self
+                    .concepts
+                    .lock()
+                    .expect("InMemoryGraphRepo mutex poisoned")
+                    .contains_key(cid)
+            });
+            if let Some(cid) = missing {
+                return Err(Error::BadRequest(format!(
+                    "cluster concept id {cid} does not exist"
+                )));
+            }
+        }
+        let braindump_ids = self.compute_cluster_braindump_ids_in_memory(&cluster);
+        if braindump_ids.is_empty() {
+            return Err(Error::BadRequest(
+                "the motivating cluster has no braindump-backed edges between \
+                 its concepts — no thematic density from user thoughts"
+                    .into(),
+            ));
+        }
+        let snapshot_id = Self::next_id(&self.next_snapshot_id);
+        let snapshot = ThematicSnapshot {
+            id: snapshot_id,
+            braindump_ids: braindump_ids.clone(),
+            concept_ids: cluster.clone(),
+            captured_at: now_seconds(),
+        };
+        self.thematic_snapshots
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .insert(snapshot_id, snapshot.clone());
+        let id = Self::next_id(&self.next_proposal_id);
+        let created_at = now_seconds();
+        let proposal = ChatInferenceProposal {
+            id,
+            mode: THEMATIC_MODE.to_string(),
+            source_concept_id,
+            target_concept_id,
+            proposed_type,
+            evidence_path: Vec::new(),
+            rationale,
+            status: STATUS_PENDING.to_string(),
+            created_at,
+            resolved_at: None,
+            snapshot: Some(snapshot),
+        };
+        self.chat_inference_proposals
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .push(proposal.clone());
+        Ok(proposal)
+    }
+
+    async fn endorse_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal> {
+        let proposal = self
+            .get_inference_proposal(id)
+            .await?
+            .ok_or_else(|| Error::NotFound(format!("chat inference proposal {id} not found")))?;
+        if proposal.status != STATUS_PENDING {
+            return Err(Error::Conflict(format!(
+                "proposal {id} is `{}`, not `pending` — cannot endorse",
+                proposal.status
+            )));
+        }
+        let source = proposal.source_concept_id;
+        let target = proposal.target_concept_id;
+        let proposed_type = proposal.proposed_type.clone();
+        let mode = proposal.mode.clone();
+        let snapshot_id = proposal.snapshot.as_ref().map(|s| s.id);
+
+        let edge_id = {
+            let edges = self.edges.lock().expect("InMemoryGraphRepo mutex poisoned");
+            let existing = edges
+                .values()
+                .find(|e| {
+                    e.source_concept_id == source
+                        && e.original_type == proposed_type
+                        && e.target_concept_id == target
+                })
+                .map(|e| e.id);
+            drop(edges);
+            match existing {
+                Some(eid) => eid,
+                None => self.create_edge_in_memory(source, target, &proposed_type),
+            }
+        };
+        {
+            let mut prov = self
+                .edge_inference_provenance
+                .lock()
+                .expect("InMemoryGraphRepo mutex poisoned");
+            let entries = prov.entry(edge_id).or_default();
+            if !entries.iter().any(|a| a.chat_inference_id == id) {
+                entries.push(InferenceAssertion {
+                    chat_inference_id: id,
+                    mode,
+                    snapshot_id,
+                });
+            }
+        }
+        self.transition_proposal_status_in_memory(id, STATUS_ENDORSED);
+        self.get_inference_proposal(id)
+            .await?
+            .ok_or_else(|| Error::internal("proposal vanished after endorse"))
+    }
+
+    async fn reject_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal> {
+        {
+            let proposals = self
+                .chat_inference_proposals
+                .lock()
+                .expect("InMemoryGraphRepo mutex poisoned");
+            let p = proposals.iter().find(|p| p.id == id);
+            match p {
+                None => {
+                    return Err(Error::NotFound(format!(
+                        "chat inference proposal {id} not found"
+                    )));
+                }
+                Some(p) if p.status != STATUS_PENDING => {
+                    return Err(Error::Conflict(format!(
+                        "proposal {id} is `{}`, not `pending` — cannot reject",
+                        p.status
+                    )));
+                }
+                _ => {}
+            }
+        }
+        self.transition_proposal_status_in_memory(id, STATUS_REJECTED);
+        self.get_inference_proposal(id)
+            .await?
+            .ok_or_else(|| Error::internal("proposal vanished after reject"))
+    }
+
+    async fn list_inference_proposals(&self) -> Result<Vec<ChatInferenceProposal>> {
+        Ok(self
+            .chat_inference_proposals
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone())
+    }
+
+    async fn get_inference_proposal(&self, id: i64) -> Result<Option<ChatInferenceProposal>> {
+        Ok(self
+            .chat_inference_proposals
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .iter()
+            .find(|p| p.id == id)
+            .cloned())
+    }
+
+    async fn edge_inference_asserted_by(&self, edge_id: i64) -> Result<Vec<InferenceAssertion>> {
+        Ok(self
+            .edge_inference_provenance
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .get(&edge_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    // --- ontology governance + refactor (issue #47) ---
+
+    async fn list_type_proposals(&self) -> Result<Vec<TypeProposal>> {
+        Ok(self
+            .type_proposals
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone())
+    }
+
+    async fn get_type_proposal(&self, id: i64) -> Result<Option<TypeProposal>> {
+        Ok(self
+            .type_proposals
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .iter()
+            .find(|p| p.id == id)
+            .cloned())
+    }
+
+    async fn insert_type_proposal(
+        &self,
+        slug: String,
+        label: String,
+        description: String,
+        merge_of: Option<String>,
+        status: String,
+        near_match_slug: Option<String>,
+        near_match_similarity: Option<f32>,
+    ) -> Result<TypeProposal> {
+        let id = Self::next_id(&self.next_type_proposal_id);
+        let created_at = now_seconds();
+        let proposal = TypeProposal {
+            id,
+            slug,
+            label,
+            description,
+            merge_of,
+            status,
+            near_match_slug,
+            near_match_similarity,
+            created_at,
+            resolved_at: None,
+        };
+        self.type_proposals
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .push(proposal.clone());
+        Ok(proposal)
+    }
+
+    async fn approve_type_proposal(
+        &self,
+        id: i64,
+        slug: String,
+        label: String,
+        description: String,
+        type_vec: Vec<f32>,
+    ) -> Result<()> {
+        {
+            let proposals = self
+                .type_proposals
+                .lock()
+                .expect("InMemoryGraphRepo mutex poisoned");
+            let p = proposals.iter().find(|p| p.id == id);
+            match p {
+                None => {
+                    return Err(Error::NotFound(format!("type proposal {id} not found")));
+                }
+                Some(p) if p.status != "pending" => {
+                    return Err(Error::Conflict(format!(
+                        "proposal {id} is `{}`, not `pending` — cannot approve",
+                        p.status
+                    )));
+                }
+                _ => {}
+            }
+        }
+        let now = now_seconds();
+        self.ontology
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .push((slug.clone(), label.clone(), description.clone()));
+        self.set_type_embedding(&slug, type_vec);
+        {
+            let mut proposals = self
+                .type_proposals
+                .lock()
+                .expect("InMemoryGraphRepo mutex poisoned");
+            if let Some(p) = proposals.iter_mut().find(|p| p.id == id) {
+                p.status = "approved".to_string();
+                p.resolved_at = Some(now);
+            }
+        }
+        Ok(())
+    }
+
+    async fn reject_type_proposal(&self, id: i64) -> Result<()> {
+        {
+            let proposals = self
+                .type_proposals
+                .lock()
+                .expect("InMemoryGraphRepo mutex poisoned");
+            let p = proposals.iter().find(|p| p.id == id);
+            match p {
+                None => {
+                    return Err(Error::NotFound(format!("type proposal {id} not found")));
+                }
+                Some(p) if p.status != "pending" => {
+                    return Err(Error::Conflict(format!(
+                        "proposal {id} is `{}`, not `pending` — cannot reject",
+                        p.status
+                    )));
+                }
+                _ => {}
+            }
+        }
+        let now = now_seconds();
+        {
+            let mut proposals = self
+                .type_proposals
+                .lock()
+                .expect("InMemoryGraphRepo mutex poisoned");
+            if let Some(p) = proposals.iter_mut().find(|p| p.id == id) {
+                p.status = "rejected".to_string();
+                p.resolved_at = Some(now);
+            }
+        }
+        Ok(())
+    }
+
+    async fn current_edge_type(&self, edge_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .edge_type_history
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .get(&edge_id)
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .max_by_key(|h| h.seq_index)
+                    .map(|h| h.type_slug.clone())
+            }))
+    }
+
+    async fn edges_with_current_type(&self, slug: &str) -> Result<Vec<i64>> {
+        let slug = slug.to_string();
+        let history = self
+            .edge_type_history
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone();
+        let mut ids: Vec<i64> = self
+            .edges
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .values()
+            .filter(|e| {
+                history
+                    .get(&e.id)
+                    .and_then(|entries| {
+                        entries
+                            .iter()
+                            .max_by_key(|h| h.seq_index)
+                            .map(|h| h.type_slug == slug)
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|e| e.id)
+            .collect();
+        ids.sort_unstable();
+        Ok(ids)
+    }
+
+    async fn edge_endpoints_and_type(&self, edge_id: i64) -> Result<(String, String, String)> {
+        let (source_concept_id, target_concept_id) = {
+            let edges = self.edges.lock().expect("InMemoryGraphRepo mutex poisoned");
+            let edge = edges
+                .get(&edge_id)
+                .ok_or_else(|| Error::NotFound(format!("edge {edge_id} not found")))?;
+            (edge.source_concept_id, edge.target_concept_id)
+        };
+        let source_label = self
+            .concepts
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .get(&source_concept_id)
+            .map(|c| c.label.clone())
+            .unwrap_or_default();
+        let target_label = self
+            .concepts
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .get(&target_concept_id)
+            .map(|c| c.label.clone())
+            .unwrap_or_default();
+        let current_type = self.current_edge_type(edge_id).await?.unwrap_or_default();
+        Ok((source_label, target_label, current_type))
+    }
+
+    async fn run_refactor(
+        &self,
+        llm: &dyn Llm,
+        proposal: &TypeProposal,
+    ) -> Result<RefactorOutcome> {
+        let Some(merge_of) = proposal.merge_of.as_ref() else {
+            return Ok(RefactorOutcome::default());
+        };
+        let edge_ids = self.edges_with_current_type(merge_of).await?;
+        if edge_ids.is_empty() {
+            return Ok(RefactorOutcome::default());
+        }
+
+        let ontology = self.ontology_slugs().await?;
+        let new_slug = proposal.slug.clone();
+        let system = "You re-classify edges when the ontology evolves. \
+                      Given an edge and the new vocabulary, respond with the single slug \
+                      that best fits the edge now. Respond with only the slug, nothing else.";
+        let merge_of_for_prompt = merge_of.clone();
+        let label_for_prompt = proposal.label.clone();
+        let description_for_prompt = proposal.description.clone();
+
+        let mut retagged: Vec<(i64, String)> = Vec::with_capacity(edge_ids.len());
+        for edge_id in edge_ids {
+            let (source_label, target_label, current_type) =
+                self.edge_endpoints_and_type(edge_id).await?;
+            let user = format!(
+                "Edge: {source_label} —[{current_type}]→ {target_label}\n\
+                 The type `{merge_of_for_prompt}` has been merged into `{new_slug}` \
+                 (label: {label_for_prompt}; description: {description_for_prompt}).\n\
+                 Re-classify this edge. Respond with exactly one slug from: [{}].",
+                ontology.join(", ")
+            );
+            let response = llm.generate_pinned(system, &user).await?;
+            let slug = response.trim().to_string();
+            let chosen = if ontology.iter().any(|s| s == &slug) {
+                slug
+            } else {
+                tracing::warn!(
+                    edge_id,
+                    raw = %slug,
+                    "refactor LLM returned an unsanctioned slug; defaulting to the new type"
+                );
+                new_slug.clone()
+            };
+            retagged.push((edge_id, chosen));
+        }
+
+        let edges_retagged = retagged.len();
+        let now = now_seconds();
+        for (edge_id, slug) in &retagged {
+            self.append_edge_type_history(*edge_id, slug, now);
+        }
+
+        Ok(RefactorOutcome { edges_retagged })
+    }
+
+    // --- retrieval pipeline (issue #47) ---
+
+    async fn retrieve(&self, query_vec: &[f32]) -> Result<RetrievalResult> {
+        let candidates = self.knn_concepts(query_vec, SEED_TOP_K).await?;
+        let seeds: Vec<(i64, f32)> = candidates
+            .into_iter()
+            .filter(|(_, sim)| *sim >= SEED_SIMILARITY_FLOOR)
+            .collect();
+
+        if seeds.is_empty() {
+            return self.no_seed_fallback_in_memory(query_vec).await;
+        }
+
+        let concept_labels: HashMap<i64, String> = self
+            .concepts
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .iter()
+            .map(|(id, c)| (*id, c.label.clone()))
+            .collect();
+        let history = self
+            .edge_type_history
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone();
+        let edges: Vec<RetrievalEdgeInfo> = self
+            .edges
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .values()
+            .map(|e| RetrievalEdgeInfo {
+                edge_type: history
+                    .get(&e.id)
+                    .and_then(|entries| {
+                        entries
+                            .iter()
+                            .max_by_key(|h| h.seq_index)
+                            .map(|h| h.type_slug.clone())
+                    })
+                    .unwrap_or_default(),
+                source_concept_id: e.source_concept_id,
+                target_concept_id: e.target_concept_id,
+            })
+            .collect();
+        let (concept_hops, traversed_edges) = bfs_expand(&concept_labels, &edges, &seeds);
+        let subgraph = self.collect_subgraph_braindumps_in_memory(&concept_hops);
+        let backfill = self
+            .backfill_braindumps_in_memory(query_vec, &subgraph)
+            .await;
+
+        let mut all = subgraph;
+        all.extend(backfill);
+        all.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(RetrievalResult {
+            braindumps: all,
+            paths: traversed_edges,
+            mode: RetrievalMode::SeedThenExpand,
+        })
+    }
 }
 
 // --- InMemoryGraphRepo private write helpers (issue #46) ---
@@ -2199,6 +3893,189 @@ impl InMemoryGraphRepo {
             .lock()
             .expect("InMemoryGraphRepo mutex poisoned")
             .retain(|s| s.new_concept_id != fold_id && s.existing_concept_id != fold_id);
+    }
+
+    // --- issue #47: chat write-back + ontology + retrieval helpers ---
+
+    /// Whether `source —[type]→ target` exists wearing `type` as its current
+    /// projected type (ADR-0003) — the structural-inference traversability
+    /// check, in-memory.
+    fn edge_exists_with_current_type_in_memory(
+        &self,
+        source_id: i64,
+        type_slug: &str,
+        target_id: i64,
+    ) -> bool {
+        let edges = self.edges.lock().expect("InMemoryGraphRepo mutex poisoned");
+        let history = self
+            .edge_type_history
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned");
+        edges.values().any(|e| {
+            e.source_concept_id == source_id
+                && e.target_concept_id == target_id
+                && history
+                    .get(&e.id)
+                    .and_then(|entries| {
+                        entries
+                            .iter()
+                            .max_by_key(|h| h.seq_index)
+                            .map(|h| h.type_slug == type_slug)
+                    })
+                    .unwrap_or(false)
+        })
+    }
+
+    /// Compute the braindump ids whose edges formed the thematic density of a
+    /// cluster (ADR-0009): distinct braindumps that asserted edges where both
+    /// endpoints are in the cluster and the edge is not a self-edge.
+    fn compute_cluster_braindump_ids_in_memory(&self, cluster: &[i64]) -> Vec<i64> {
+        let cluster_set: std::collections::HashSet<i64> = cluster.iter().copied().collect();
+        let edges = self.edges.lock().expect("InMemoryGraphRepo mutex poisoned");
+        let edge_prov = self
+            .edge_provenance
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned");
+        let mut ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        for e in edges.values() {
+            if e.source_concept_id == e.target_concept_id {
+                continue;
+            }
+            if cluster_set.contains(&e.source_concept_id)
+                && cluster_set.contains(&e.target_concept_id)
+            {
+                if let Some(prov) = edge_prov.get(&e.id) {
+                    for bd in prov {
+                        ids.insert(*bd);
+                    }
+                }
+            }
+        }
+        let mut result: Vec<i64> = ids.into_iter().collect();
+        result.sort_unstable();
+        result
+    }
+
+    /// Transition a chat-inference proposal's status + resolved_at (in-memory).
+    fn transition_proposal_status_in_memory(&self, id: i64, new_status: &str) {
+        let now = now_seconds();
+        let mut proposals = self
+            .chat_inference_proposals
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned");
+        if let Some(p) = proposals.iter_mut().find(|p| p.id == id) {
+            p.status = new_status.to_string();
+            p.resolved_at = Some(now);
+        }
+    }
+
+    /// Collect braindumps from the traversed subgraph (in-memory): each visited
+    /// concept's extraction provenance (ADR-0010). Score decays with hop
+    /// distance.
+    fn collect_subgraph_braindumps_in_memory(
+        &self,
+        concept_hops: &HashMap<i64, usize>,
+    ) -> Vec<RetrievedBraindump> {
+        let mut best: HashMap<i64, f32> = HashMap::new();
+        let prov = self
+            .concept_provenance
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone();
+        for (cid, hops) in concept_hops {
+            let score = 1.0 / (1.0 + *hops as f32);
+            if let Some(bds) = prov.get(cid) {
+                for bd_id in bds {
+                    let entry = best.entry(*bd_id).or_insert(0.0);
+                    if score > *entry {
+                        *entry = score;
+                    }
+                }
+            }
+        }
+        let braindumps = self
+            .braindumps
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone();
+        let mut result = Vec::new();
+        for (bd_id, score) in &best {
+            if let Some(b) = braindumps.get(bd_id) {
+                result.push(RetrievedBraindump {
+                    id: b.id,
+                    verbatim: b.verbatim.clone(),
+                    cleaned: b.cleaned.clone(),
+                    created_at: b.created_at,
+                    score: *score,
+                    source: BraindumpSource::Subgraph,
+                });
+            }
+        }
+        result
+    }
+
+    /// No-seed fallback (ADR-0004): braindump-vector-direct (in-memory).
+    async fn no_seed_fallback_in_memory(&self, query_vec: &[f32]) -> Result<RetrievalResult> {
+        let hits = self.knn_braindumps(query_vec, BRAINDUMP_TOP_K).await?;
+        let braindumps = self
+            .braindumps
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone();
+        let mut result = Vec::new();
+        for (bd_id, sim) in &hits {
+            if let Some(b) = braindumps.get(bd_id) {
+                result.push(RetrievedBraindump {
+                    id: b.id,
+                    verbatim: b.verbatim.clone(),
+                    cleaned: b.cleaned.clone(),
+                    created_at: b.created_at,
+                    score: *sim,
+                    source: BraindumpSource::VectorDirect,
+                });
+            }
+        }
+        Ok(RetrievalResult {
+            braindumps: result,
+            paths: Vec::new(),
+            mode: RetrievalMode::NoSeedFallback,
+        })
+    }
+
+    /// Braindump-embedding KNN backfill for strays the graph missed
+    /// (ADR-0004), in-memory.
+    async fn backfill_braindumps_in_memory(
+        &self,
+        query_vec: &[f32],
+        subgraph: &[RetrievedBraindump],
+    ) -> Vec<RetrievedBraindump> {
+        let already: HashSet<i64> = subgraph.iter().map(|b| b.id).collect();
+        let hits = self
+            .knn_braindumps(query_vec, BRAINDUMP_TOP_K)
+            .await
+            .unwrap_or_default();
+        let braindumps = self
+            .braindumps
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone();
+        let mut result = Vec::new();
+        for (bd_id, sim) in &hits {
+            if already.contains(bd_id) {
+                continue;
+            }
+            if let Some(b) = braindumps.get(bd_id) {
+                result.push(RetrievedBraindump {
+                    id: b.id,
+                    verbatim: b.verbatim.clone(),
+                    cleaned: b.cleaned.clone(),
+                    created_at: b.created_at,
+                    score: *sim,
+                    source: BraindumpSource::Backfill,
+                });
+            }
+        }
+        result
     }
 }
 
