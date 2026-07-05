@@ -64,6 +64,27 @@ at a bad time — don't improvise.
     (swap the per-host Caddyfile in at GHA build time).
   - `VITE_DEEPGRAM_API_KEY` unset → voice capture won't work until wired.
 
+## Persistent artifacts
+
+Two named Docker volumes hold runtime state that survives `docker compose down`
+but is destroyed by `docker compose down -v`:
+
+- **`sqlite_data`** — the Brain File at `/data/second_brain.db`. The load-bearing
+  artifact; restored from the Brain Replica (R2) in step 3 below. Loss without a
+  restore is catastrophic data loss.
+- **`caddy_data`** — Caddy ACME state at `/data` (issued Let's Encrypt
+  certificates + ACME account keys), alongside **`caddy_config`** (Caddy's
+  autosaved config at `/config`). Persists so recreating the Edge reuses its
+  existing certificate instead of re-issuing (#55). Losing it — via `down -v` on
+  the VPS, or a fresh VPS — forces Caddy to re-issue from scratch, which
+  re-exposes the Let's Encrypt 5-issuances-per-168h rate limit that took HTTPS
+  down before this fix. **Recovery on a fresh VPS does NOT need to restore
+  `caddy_data`**: Caddy re-issues a fresh cert on first start; accept brief
+  HTTPS downtime (or wait for the cert handshake, ~seconds once LE is
+  reachable). There is no offsite copy to restore from — `caddy_data` is not the
+  Brain File; the trade is a one-time re-issuance vs. the cost of backing up ACME
+  state, which is not worth it for a single-user system.
+
 ## Recovery procedure
 
 Assume the VPS is gone (Hetzner host failure, accidental destroy, compromise).
@@ -101,6 +122,8 @@ ssh root@<new-vps> 'chown deploy:deploy /opt/second-brain/infrastructure/.env &&
 The Brain Replica is a Litestream-managed copy of `/data/second_brain.db` in R2
 (ADR-0002 / #32). Restore it into a fresh `sqlite_data` named volume BEFORE
 bringing the stack up, so the backend opens the restored brain on first start.
+(Only `sqlite_data` is restored here — `caddy_data` is NOT restored; see
+Persistent artifacts above: Caddy re-issues a fresh cert on first start.)
 
 ```sh
 # Run as root on the new VPS. --env-file injects the R2 creds from the .env you

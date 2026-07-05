@@ -12,8 +12,8 @@
 # required for local dev.
 #
 #   Local dev:  docker compose up
-#   Tear down:  docker compose down          # keeps the Brain File
-#               docker compose down -v       # destroys the Brain File
+#   Tear down:  docker compose down          # keeps the Brain File + Edge ACME state
+#               docker compose down -v       # destroys both (forces LE re-issuance)
 
 services:
   edge:
@@ -30,6 +30,18 @@ services:
       # in local dev where Caddyfile binds :80 only). The firewall in
       # bootstrap.sh already allows 443.
       - "443:443"
+    # Caddy ACME state — issued Let's Encrypt certificates + ACME account keys
+    # in /data, autosaved config in /config — is runtime state that must survive
+    # container recreations. Without /data, every `down/up` or deploy wipes ACME
+    # state and forces a fresh cert request, which trips Let's Encrypt's
+    # 5-issuances-per-168h rate limit and takes HTTPS down (#55). The Edge stays
+    # a disposable IMAGE (rebuilt per deploy, ADR-0001) and a Zero-Trust Image
+    # (ADR-0004): the volume is host-side runtime state, nothing is baked into
+    # the image — same host-disk trust boundary as the Brain File, not the
+    # Zero-Trust Image boundary.
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
     networks:
       - app_network
     depends_on:
@@ -105,3 +117,10 @@ networks:
 
 volumes:
   sqlite_data:
+  # Caddy ACME state (issued LE certs + account keys at /data, autosaved config
+  # at /config) — persists across `down/up` so recreating the Edge reuses its
+  # existing certificate instead of re-issuing (#55). Survives `down` but NOT
+  # `down -v` (see DISASTER_RECOVERY.md). Host-side runtime state, not baked
+  # into the Zero-Trust Image (ADR-0004).
+  caddy_data:
+  caddy_config:
