@@ -47,7 +47,7 @@ test('authenticated: /app renders the protected surface when /me returns the acc
 
 	await page.goto('/app');
 
-	await expect(page.getByTestId('graph-view')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('capture-section')).toBeVisible({ timeout: 10_000 });
 	await expect(page.getByTestId('user-id')).toContainText(USER_ID);
 });
 
@@ -56,11 +56,11 @@ test('reload stays authenticated (cookie-based session, not localStorage)', asyn
 	await mockGraph(page, 200, GRAPH_BODY);
 
 	await page.goto('/app');
-	await expect(page.getByTestId('graph-view')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('capture-section')).toBeVisible({ timeout: 10_000 });
 
 	await page.reload();
 
-	await expect(page.getByTestId('graph-view')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('capture-section')).toBeVisible({ timeout: 10_000 });
 });
 
 test('logout invalidates the session and redirects to /login; a later /app visit is rejected', async ({
@@ -84,7 +84,7 @@ test('logout invalidates the session and redirects to /login; a later /app visit
 	);
 
 	await page.goto('/app');
-	await expect(page.getByTestId('graph-view')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('capture-section')).toBeVisible({ timeout: 10_000 });
 
 	await page.getByTestId('logout-button').click();
 

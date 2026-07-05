@@ -48,11 +48,10 @@ test('Spatial View-Graph: fetches the Global Topology Snapshot and renders behin
 		})
 	);
 
-	await page.goto('/app');
+	await page.goto('/app/graph');
 
 	await expect(page.getByTestId('graph-view')).toBeVisible({ timeout: 10_000 });
 	await expect(page.getByTestId('graph-ready')).toBeVisible({ timeout: 20_000 });
-	await expect(page.getByTestId('user-id')).toContainText(USER_ID);
 });
 
 test('Viewport State: the selected node is restored on reload so the PWA feels native (no amnesia)', async ({
@@ -80,7 +79,7 @@ test('Viewport State: the selected node is restored on reload so the PWA feels n
 		);
 	});
 
-	await page.goto('/app');
+	await page.goto('/app/graph');
 
 	await expect(page.getByTestId('graph-ready')).toBeVisible({ timeout: 20_000 });
 	await expect(page.getByTestId('selected-node-label')).toContainText('sleep', { timeout: 10_000 });
@@ -100,7 +99,7 @@ test('Viewport State: the selected node is restored on reload so the PWA feels n
 			})
 		);
 
-		await page.goto('/app');
+		await page.goto('/app/graph');
 		await expect(page.getByTestId('graph-ready')).toBeVisible({ timeout: 20_000 });
 
 		graphOk = false;
@@ -126,7 +125,7 @@ test('Viewport State: the selected node is restored on reload so the PWA feels n
 				})
 			);
 
-			await page.goto('/app');
+			await page.goto('/app/graph');
 
 			await expect(page.getByTestId('graph-view')).toBeVisible({ timeout: 10_000 });
 			await expect(page.getByTestId('graph-ready')).toBeVisible({ timeout: 20_000 });
@@ -157,7 +156,7 @@ test('Viewport State: the selected node is restored on reload so the PWA feels n
 				);
 			});
 
-			await page.goto('/app');
+			await page.goto('/app/graph');
 			await expect(page.getByTestId('graph-ready')).toBeVisible({ timeout: 20_000 });
 			await expect(page.getByTestId('selected-node-label')).toContainText('sleep', { timeout: 10_000 });
 		});
