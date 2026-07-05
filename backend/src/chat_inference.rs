@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{now_seconds, Db};
 use crate::error::{Error, Result};
-use crate::graph::{
+use crate::graph_repo::{
     concept_exists_conn, edge_exists_with_current_type_conn, find_edge_id_conn,
     init_type_history_conn, insert_edge_conn,
 };
