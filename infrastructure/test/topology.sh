@@ -82,21 +82,16 @@ assert any(p.get("target") == 9090 and p.get("host_ip") == "127.0.0.1" for p in 
     f"litestream :9090 must bind 127.0.0.1 only (not external); got {lports}"
 assert not any(p.get("host_ip") in (None, "0.0.0.0", "::") for p in lports), \
     f"litestream must not publish on all interfaces; got {lports}"
-# env_file (ADR-0004): R2 creds come from infrastructure/.env, never baked in.
-def env_files(s):
-    out = []
-    for e in (s.get("env_file") or []):
-        out.append(e if isinstance(e, str) else e.get("path", ""))
-    return out
-assert "infrastructure/.env" in env_files(litestream), \
-    f"litestream must env_file infrastructure/.env (ADR-0004); got {env_files(litestream)}"
+# env_file (ADR-0004) is asserted by the raw-YAML grep below — NOT here. Compose
+# v2 resolves env_file into `environment` and returns env_file=[] in the JSON,
+# so a JSON-level check would always fail (the original test's convention).
 assert "app_network" in (litestream.get("networks") or []), "litestream must be on app_network"
 assert "backend" in (litestream.get("depends_on") or []), "litestream must depend_on backend"
 
 print("ok   - backend internal-only (expose 8080, no ports) per ADR-0006")
 print("ok   - Brain File on named volume sqlite_data at /data")
 print("ok   - edge sole published :80; all services on app_network")
-print("ok   - litestream sidecar: sqlite_data ro, /etc/litestream.yml, :9090 loopback, env_file (ADR-0002/#32)")
+print("ok   - litestream sidecar: sqlite_data ro, /etc/litestream.yml, :9090 loopback (ADR-0002/#32)")
 PY
 
 # --- raw YAML by grep: env_file (ADR-0004) + image-tag fallback (#31) --------
