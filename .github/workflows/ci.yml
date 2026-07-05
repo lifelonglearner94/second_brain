@@ -71,6 +71,7 @@ jobs:
           docker compose config >/dev/null
           bash infrastructure/test/topology.sh
           bash infrastructure/test/replica.sh
+          bash infrastructure/health-push.sh --self-test
 
   zero-trust:
     name: zero-trust (no secret baked into any Dockerfile)
