@@ -12,14 +12,22 @@
 //! index 0 is the immutable original assertion, the current type is the
 //! projection of the last entry). The refactor runs at Temperature=0 against a
 //! pinned model snapshot via [`crate::llm::Llm::generate_pinned`].
+//!
+//! After #47 the governance SQL (propose/approve/reject, current-type
+//! projection, edge selection, refactor retag) lives behind the [`GraphRepo`]
+//! trait — in [`SqliteGraphRepo`]'s impl — so the full flow is testable via
+//! [`InMemoryGraphRepo`] without SQLite. The free functions here are thin
+//! delegating wrappers: they own the LLM embedding computation and validation,
+//! then delegate the pure-DB storage work to the trait. `seed_type_embeddings`
+//! stays as direct SQL — it is a startup seed, not a governance operation.
 
 use std::sync::Arc;
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 
-use crate::db::{now_seconds, Db};
+use crate::db::Db;
 use crate::error::{Error, Result};
-use crate::graph_repo::{current_type_subquery, vec_to_blob, GraphRepo, SqliteGraphRepo};
+use crate::graph_repo::{vec_to_blob, GraphRepo, SqliteGraphRepo};
 use crate::llm::Llm;
 
 /// Cosine similarity at or above which a proposed type is deemed a 1:1
@@ -72,6 +80,9 @@ pub struct RefactorOutcome {
 /// the proposal is `auto_merged` (the duplicate is not added to the ontology);
 /// otherwise it is `pending` and queued for human review. If no type-embeddings
 /// exist yet (empty ontology at first run), the proposal is `pending`.
+///
+/// Wrapper: the LLM embedding and KNN run here; the INSERT is delegated to
+/// [`GraphRepo::insert_type_proposal`] (issue #47).
 pub async fn propose_type(
     db: &Db,
     llm: &dyn Llm,
@@ -118,100 +129,33 @@ pub async fn propose_type(
         }
     };
 
-    let created_at = now_seconds();
-    let proposal = db
-        .run(move |conn| {
-            conn.execute(
-                "INSERT INTO type_proposals
-                    (slug, label, description, merge_of, status,
-                     near_match_slug, near_match_similarity, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    slug,
-                    label,
-                    description,
-                    merge_of,
-                    status,
-                    near_match_slug,
-                    near_match_similarity,
-                    created_at
-                ],
-            )?;
-            Ok(TypeProposal {
-                id: conn.last_insert_rowid(),
-                slug,
-                label,
-                description,
-                merge_of,
-                status,
-                near_match_slug,
-                near_match_similarity,
-                created_at,
-                resolved_at: None,
-            })
-        })
+    let proposal = SqliteGraphRepo::new(db.clone())
+        .insert_type_proposal(
+            slug,
+            label,
+            description,
+            merge_of,
+            status,
+            near_match_slug,
+            near_match_similarity,
+        )
         .await?;
 
     Ok(ProposeOutcome { proposal })
 }
 
 /// List all proposals, oldest first.
+///
+/// Wrapper: delegates to [`GraphRepo::list_type_proposals`] (issue #47).
 pub async fn list_proposals(db: &Db) -> Result<Vec<TypeProposal>> {
-    db.run(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, slug, label, description, merge_of, status,
-                    near_match_slug, near_match_similarity, created_at, resolved_at
-             FROM type_proposals ORDER BY id",
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(TypeProposal {
-                    id: r.get(0)?,
-                    slug: r.get(1)?,
-                    label: r.get(2)?,
-                    description: r.get(3)?,
-                    merge_of: r.get(4)?,
-                    status: r.get(5)?,
-                    near_match_slug: r.get(6)?,
-                    near_match_similarity: r.get::<_, Option<f64>>(7)?.map(|f| f as f32),
-                    created_at: r.get(8)?,
-                    resolved_at: r.get(9)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(rows)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone()).list_type_proposals().await
 }
 
 /// Look up a single proposal by id. `None` if no row matches.
+///
+/// Wrapper: delegates to [`GraphRepo::get_type_proposal`] (issue #47).
 pub async fn get_proposal(db: &Db, id: i64) -> Result<Option<TypeProposal>> {
-    db.run(move |conn| {
-        let row = conn
-            .query_row(
-                "SELECT id, slug, label, description, merge_of, status,
-                        near_match_slug, near_match_similarity, created_at, resolved_at
-                 FROM type_proposals WHERE id = ?1",
-                params![id],
-                |r| {
-                    Ok(TypeProposal {
-                        id: r.get(0)?,
-                        slug: r.get(1)?,
-                        label: r.get(2)?,
-                        description: r.get(3)?,
-                        merge_of: r.get(4)?,
-                        status: r.get(5)?,
-                        near_match_slug: r.get(6)?,
-                        near_match_similarity: r.get::<_, Option<f64>>(7)?.map(|f| f as f32),
-                        created_at: r.get(8)?,
-                        resolved_at: r.get(9)?,
-                    })
-                },
-            )
-            .optional()?;
-        Ok(row)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone()).get_type_proposal(id).await
 }
 
 /// Approve a pending proposal: add the type to the ontology, store its
@@ -219,6 +163,9 @@ pub async fn get_proposal(db: &Db, id: i64) -> Result<Option<TypeProposal>> {
 /// enqueue an async refactor to retag existing edges of the merged type.
 /// Returns the updated proposal. Errors with `Conflict` if the proposal is
 /// not pending (already resolved or auto-merged).
+///
+/// Wrapper: the LLM embedding runs here; the atomic INSERT+UPDATE is delegated
+/// to [`GraphRepo::approve_type_proposal`] (issue #47).
 pub async fn approve_proposal(db: &Db, llm: &dyn Llm, id: i64) -> Result<TypeProposal> {
     // Load first so we can validate status and compute the embedding text
     // outside the transaction (the network call cannot live in a sync SQLite
@@ -239,44 +186,15 @@ pub async fn approve_proposal(db: &Db, llm: &dyn Llm, id: i64) -> Result<TypePro
             &proposal.description,
         ))
         .await?;
-    let now = now_seconds();
-    let slug = proposal.slug.clone();
-    let label = proposal.label.clone();
-    let description = proposal.description.clone();
-    db.run(move |conn| {
-        conn.execute_batch("BEGIN")?;
-        match (|| -> Result<()> {
-            conn.execute(
-                "INSERT INTO ontology (slug, label, description, created_at)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![slug, label, description, now],
-            )?;
-            let ontology_id: i64 = conn.query_row(
-                "SELECT id FROM ontology WHERE slug = ?1",
-                params![slug],
-                |r| r.get(0),
-            )?;
-            conn.execute(
-                "INSERT INTO type_embeddings (ontology_id, embedding) VALUES (?1, ?2)",
-                params![ontology_id, vec_to_blob(&vec)],
-            )?;
-            conn.execute(
-                "UPDATE type_proposals SET status = 'approved', resolved_at = ?1 WHERE id = ?2",
-                params![now, id],
-            )?;
-            Ok(())
-        })() {
-            Ok(()) => {
-                conn.execute_batch("COMMIT")?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
-        }
-    })
-    .await?;
+    SqliteGraphRepo::new(db.clone())
+        .approve_type_proposal(
+            id,
+            proposal.slug.clone(),
+            proposal.label.clone(),
+            proposal.description.clone(),
+            vec,
+        )
+        .await?;
     // Return the refreshed row.
     get_proposal(db, id)
         .await?
@@ -285,31 +203,16 @@ pub async fn approve_proposal(db: &Db, llm: &dyn Llm, id: i64) -> Result<TypePro
 
 /// Reject a pending proposal. Errors with `Conflict` if the proposal is not
 /// pending. Idempotent over rejection: a second reject is a conflict.
+///
+/// Wrapper: delegates to [`GraphRepo::reject_type_proposal`] (issue #47) which
+/// owns the pending-guard and the NotFound/Conflict distinction.
 pub async fn reject_proposal(db: &Db, id: i64) -> Result<TypeProposal> {
-    let now = now_seconds();
-    let updated = db
-        .run(move |conn| {
-            Ok(conn.execute(
-                "UPDATE type_proposals SET status = 'rejected', resolved_at = ?1
-                 WHERE id = ?2 AND status = 'pending'",
-                params![now, id],
-            )?)
-        })
+    SqliteGraphRepo::new(db.clone())
+        .reject_type_proposal(id)
         .await?;
-    if updated == 0 {
-        // Either no such proposal, or it exists but isn't pending. Distinguish.
-        match get_proposal(db, id).await? {
-            None => Err(Error::NotFound(format!("type proposal {id} not found"))),
-            Some(p) => Err(Error::Conflict(format!(
-                "proposal {id} is `{}`, not `pending` — cannot reject",
-                p.status
-            ))),
-        }
-    } else {
-        get_proposal(db, id)
-            .await?
-            .ok_or_else(|| Error::internal("proposal vanished after reject"))
-    }
+    get_proposal(db, id)
+        .await?
+        .ok_or_else(|| Error::internal("proposal vanished after reject"))
 }
 
 // --- read helpers (current type projection, edge selection for refactor) ---
@@ -317,36 +220,22 @@ pub async fn reject_proposal(db: &Db, id: i64) -> Result<TypeProposal> {
 /// The projected current type of an edge: the last entry of its append-only
 /// type history (ADR-0003). `None` if the edge has no type history (should not
 /// happen for a real edge — index 0 is initialised at creation).
+///
+/// Wrapper: delegates to [`GraphRepo::current_edge_type`] (issue #47).
 pub async fn current_edge_type(db: &Db, edge_id: i64) -> Result<Option<String>> {
-    db.run(move |conn| {
-        let slug = conn
-            .query_row(
-                "SELECT type_slug FROM edge_type_history
-                 WHERE edge_id = ?1 ORDER BY seq_index DESC LIMIT 1",
-                params![edge_id],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?;
-        Ok(slug)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .current_edge_type(edge_id)
+        .await
 }
 
 /// Every edge id whose projected current type is `slug`. The refactor targets
 /// these edges when `slug` is the `merge_of` of an approved proposal.
+///
+/// Wrapper: delegates to [`GraphRepo::edges_with_current_type`] (issue #47).
 pub async fn edges_with_current_type(db: &Db, slug: &str) -> Result<Vec<i64>> {
-    let slug = slug.to_string();
-    db.run(move |conn| {
-        let mut stmt = conn.prepare(&format!(
-            "SELECT e.id FROM edges e WHERE ({}) = ?1 ORDER BY e.id",
-            current_type_subquery()
-        ))?;
-        let ids = stmt
-            .query_map(params![slug], |r| r.get::<_, i64>(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(ids)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .edges_with_current_type(slug)
+        .await
 }
 
 // --- type-embedding KNN ---
@@ -367,22 +256,14 @@ pub async fn knn_type(db: &Db, query_vec: &[f32]) -> Result<Option<(String, f32)
     SqliteGraphRepo::new(db.clone()).knn_type(query_vec).await
 }
 
-/// Whether a slug already exists in the ontology (connection-scoped helper
-/// for use inside `db.run` closures).
-pub(crate) fn ontology_slug_exists_conn(conn: &rusqlite::Connection, slug: &str) -> Result<bool> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM ontology WHERE slug = ?1",
-        params![slug],
-        |r| r.get(0),
-    )?;
-    Ok(n > 0)
-}
-
 /// Whether a slug already exists in the ontology.
+///
+/// Wrapper: delegates to [`GraphRepo::ontology_slugs`] (issue #45) and checks
+/// membership — a governance read, not a hot path.
 pub async fn ontology_slug_exists(db: &Db, slug: &str) -> Result<bool> {
     let slug = slug.to_string();
-    db.run(move |conn| ontology_slug_exists_conn(conn, &slug))
-        .await
+    let slugs = SqliteGraphRepo::new(db.clone()).ontology_slugs().await?;
+    Ok(slugs.contains(&slug))
 }
 
 /// All ontology types as `(slug, label, description)`, ordered by `id`. Used
@@ -401,6 +282,10 @@ pub async fn ontology_types(db: &Db) -> Result<Vec<(String, String, String)>> {
 /// store the result. Idempotent: types already embedded are skipped. Called at
 /// startup so the seeded day-zero vocabulary has embeddings for dedup before
 /// the first proposal arrives.
+///
+/// Stays as direct SQL — it is a startup seed, not a governance operation;
+/// the trait owns governance writes (propose/approve/reject/refactor), not
+/// the one-off embedding backfill at boot.
 pub async fn seed_type_embeddings(db: &Db, llm: &dyn Llm) -> Result<usize> {
     // Load all (id, slug, label, description) for types missing an embedding.
     let missing: Vec<(i64, String, String, String)> = db
@@ -458,133 +343,19 @@ pub async fn seed_type_embeddings(db: &Db, llm: &dyn Llm) -> Result<usize> {
 ///
 /// Public so tests can drive it synchronously; the route spawns it via
 /// `tokio::spawn` so ingest is not blocked while it runs.
+///
+/// Wrapper: delegates to [`GraphRepo::run_refactor`] (issue #47). The trait
+/// method takes `&dyn Llm` (allowed deviation: the LLM-per-edge interleaving
+/// can't be split without duplicating logic); the InMemoryGraphRepo impl
+/// works with FakeLlm so tests are hermetic.
 pub async fn run_refactor(
     db: &Db,
     llm: &dyn Llm,
     proposal: &TypeProposal,
 ) -> Result<RefactorOutcome> {
-    let Some(merge_of) = proposal.merge_of.as_ref() else {
-        return Ok(RefactorOutcome::default());
-    };
-    let edge_ids = edges_with_current_type(db, merge_of).await?;
-    if edge_ids.is_empty() {
-        return Ok(RefactorOutcome::default());
-    }
-
-    let ontology = crate::graph::ontology_slugs(db).await?;
-    let new_slug = proposal.slug.clone();
-    let system = "You re-classify edges when the ontology evolves. \
-                  Given an edge and the new vocabulary, respond with the single slug \
-                  that best fits the edge now. Respond with only the slug, nothing else.";
-    let merge_of_for_prompt = merge_of.clone();
-    let label_for_prompt = proposal.label.clone();
-    let description_for_prompt = proposal.description.clone();
-
-    // Re-classify each affected edge. The LLM call is a network round-trip, so
-    // it runs outside the SQLite transaction; the resulting type-history
-    // appends commit atomically together (ADR-0003: a partial refactor would
-    // leave the graph mid-migration).
-    let mut retagged: Vec<(i64, String)> = Vec::with_capacity(edge_ids.len());
-    for edge_id in edge_ids {
-        let (source_label, target_label, current_type) =
-            edge_endpoints_and_type(db, edge_id).await?;
-        let user = format!(
-            "Edge: {source_label} —[{current_type}]→ {target_label}\n\
-             The type `{merge_of_for_prompt}` has been merged into `{new_slug}` \
-             (label: {label_for_prompt}; description: {description_for_prompt}).\n\
-             Re-classify this edge. Respond with exactly one slug from: [{}].",
-            ontology.join(", ")
-        );
-        let response = llm.generate_pinned(system, &user).await?;
-        let slug = response.trim().to_string();
-        // Default to the new slug if the LLM hallucinated; only sanctioned slugs
-        // may be written to the type history (ADR-0002: the LLM never invents a
-        // type).
-        let chosen = if ontology.iter().any(|s| s == &slug) {
-            slug
-        } else {
-            tracing::warn!(
-                edge_id,
-                raw = %slug,
-                "refactor LLM returned an unsanctioned slug; defaulting to the new type"
-            );
-            new_slug.clone()
-        };
-        retagged.push((edge_id, chosen));
-    }
-
-    let edges_retagged = retagged.len();
-    db.run(move |conn| {
-        conn.execute_batch("BEGIN")?;
-        match (|| -> Result<()> {
-            for (edge_id, slug) in &retagged {
-                append_type_history_conn(conn, *edge_id, slug)?;
-            }
-            Ok(())
-        })() {
-            Ok(()) => {
-                conn.execute_batch("COMMIT")?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
-        }
-    })
-    .await?;
-
-    Ok(RefactorOutcome { edges_retagged })
-}
-
-/// Append a new type-history entry to an edge (ADR-0003). `seq_index` is
-/// `max(existing) + 1`, so refactors stack without overwriting.
-fn append_type_history_conn(
-    conn: &rusqlite::Connection,
-    edge_id: i64,
-    type_slug: &str,
-) -> Result<()> {
-    let created_at = now_seconds();
-    let next_seq: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(seq_index), -1) + 1 FROM edge_type_history WHERE edge_id = ?1",
-            params![edge_id],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    conn.execute(
-        "INSERT INTO edge_type_history (edge_id, seq_index, type_slug, created_at)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![edge_id, next_seq, type_slug, created_at],
-    )?;
-    Ok(())
-}
-
-/// The (source label, target label, current type) for an edge — the prompt
-/// payload for the refactor LLM.
-async fn edge_endpoints_and_type(db: &Db, edge_id: i64) -> Result<(String, String, String)> {
-    db.run(move |conn| {
-        let row = conn.query_row(
-            &format!(
-                "SELECT sc.label, tc.label, ({})
-                 FROM edges e
-                 JOIN concepts sc ON sc.id = e.source_concept_id
-                 JOIN concepts tc ON tc.id = e.target_concept_id
-                 WHERE e.id = ?1",
-                current_type_subquery()
-            ),
-            params![edge_id],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            },
-        )?;
-        Ok(row)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .run_refactor(llm, proposal)
+        .await
 }
 
 // --- the background refactor runner ---
@@ -596,6 +367,10 @@ async fn edge_endpoints_and_type(db: &Db, edge_id: i64) -> Result<(String, Strin
 /// Uses `std::sync::Mutex` (not `tokio::sync::Mutex`) because the lock is only
 /// held briefly to push a `JoinHandle` and never across an `.await` — so a
 /// sync lock is correct and never blocks the async runtime meaningfully.
+///
+/// After #47, `spawn` takes `Arc<dyn GraphRepo>` (not `Db`) so the refactor
+/// runs against any adapter — production wires `SqliteGraphRepo`, tests wire
+/// `InMemoryGraphRepo`.
 #[derive(Clone, Default)]
 pub struct RefactorRunner {
     inner: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<Result<RefactorOutcome>>>>>,
@@ -608,9 +383,9 @@ impl RefactorRunner {
 
     /// Spawn a refactor in the background. The route returns immediately; the
     /// job commits its type-history appends when it completes.
-    pub fn spawn(&self, db: Db, llm: Arc<dyn Llm>, proposal: TypeProposal) {
+    pub fn spawn(&self, repo: Arc<dyn GraphRepo>, llm: Arc<dyn Llm>, proposal: TypeProposal) {
         let handle = tokio::spawn(async move {
-            let outcome = run_refactor(&db, llm.as_ref(), &proposal).await;
+            let outcome = repo.run_refactor(llm.as_ref(), &proposal).await;
             if let Err(e) = &outcome {
                 tracing::error!(error = %e, "ontology refactor failed");
             }

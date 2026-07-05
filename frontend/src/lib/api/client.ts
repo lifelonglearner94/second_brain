@@ -21,7 +21,10 @@ export interface ApiClientOptions {
 const DEFAULT_BASE_URL = '/api';
 
 export type RegistrationBegin = {
-	challenge: PublicKeyCredentialCreationOptionsJSON;
+	// The backend returns the WebAuthn-spec `CreationChallengeResponse`,
+	// which wraps the bare creation options under `publicKey`. The frontend
+	// unwraps before handing the bare options to `startRegistration`.
+	challenge: { publicKey: PublicKeyCredentialCreationOptionsJSON };
 	state: string;
 };
 
@@ -33,7 +36,10 @@ export type RegistrationFinishBody = {
 export type RegistrationFinishOk = { registered: true };
 
 export type LoginBegin = {
-	challenge: PublicKeyCredentialRequestOptionsJSON;
+	// The backend returns the WebAuthn-spec `RequestChallengeResponse`,
+	// which wraps the bare request options under `publicKey`. The frontend
+	// unwraps before handing the bare options to `startAuthentication`.
+	challenge: { publicKey: PublicKeyCredentialRequestOptionsJSON };
 	state: string;
 };
 
