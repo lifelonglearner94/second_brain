@@ -19,7 +19,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::db::{now_seconds, Db};
 use crate::error::{Error, Result};
-use crate::graph::{current_type_subquery, vec_to_blob};
+use crate::graph_repo::{current_type_subquery, vec_to_blob, GraphRepo, SqliteGraphRepo};
 use crate::llm::Llm;
 
 /// Cosine similarity at or above which a proposed type is deemed a 1:1
@@ -357,31 +357,14 @@ pub async fn edges_with_current_type(db: &Db, slug: &str) -> Result<Vec<i64>> {
 /// The KNN runs against the vec0 table directly (sqlite-vec's MATCH planner
 /// requires the vec0 table be the query's FROM source, not hidden behind a
 /// JOIN); the slug is looked up by the returned `ontology_id` afterwards.
+///
+/// Delegates to the [`GraphRepo`] trait (issue #45); the SQL lives in
+/// [`SqliteGraphRepo`]'s trait impl so the read model stays hermetic. Stays
+/// as a free function so `propose_type` (which takes `&Db`, not a repo) and
+/// the integration tests under `backend/tests/` keep compiling; #48 removes
+/// it once every caller is migrated.
 pub async fn knn_type(db: &Db, query_vec: &[f32]) -> Result<Option<(String, f32)>> {
-    let blob = vec_to_blob(query_vec);
-    db.run(move |conn| {
-        let row = conn
-            .prepare(
-                "SELECT ontology_id, distance FROM type_embeddings
-                 WHERE embedding MATCH ?1 ORDER BY distance LIMIT 1",
-            )?
-            .query_row(params![blob], |r| {
-                Ok((r.get::<_, i64>(0)?, 1.0 - r.get::<_, f64>(1)? as f32))
-            })
-            .optional()?;
-        match row {
-            Some((ontology_id, sim)) => {
-                let slug: String = conn.query_row(
-                    "SELECT slug FROM ontology WHERE id = ?1",
-                    params![ontology_id],
-                    |r| r.get(0),
-                )?;
-                Ok(Some((slug, sim)))
-            }
-            None => Ok(None),
-        }
-    })
-    .await
+    SqliteGraphRepo::new(db.clone()).knn_type(query_vec).await
 }
 
 /// Whether a slug already exists in the ontology (connection-scoped helper
@@ -404,15 +387,14 @@ pub async fn ontology_slug_exists(db: &Db, slug: &str) -> Result<bool> {
 
 /// All ontology types as `(slug, label, description)`, ordered by `id`. Used
 /// to seed type-embeddings and by tests to construct `type_text` for dedup.
+///
+/// Delegates to the [`GraphRepo`] trait (issue #45); the SQL lives in
+/// [`SqliteGraphRepo`]'s trait impl — the duplicated `SELECT slug, label,
+/// description FROM ontology ORDER BY id` query exists in exactly one place
+/// now (the Sqlite adapter). Stays as a free function so the integration
+/// tests under `backend/tests/` keep compiling; #48 removes it.
 pub async fn ontology_types(db: &Db) -> Result<Vec<(String, String, String)>> {
-    db.run(|conn| {
-        let mut stmt = conn.prepare("SELECT slug, label, description FROM ontology ORDER BY id")?;
-        let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?)))?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(rows)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone()).ontology_types().await
 }
 
 /// Embed every ontology type not yet in the `type_embeddings` collection and

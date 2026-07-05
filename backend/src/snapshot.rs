@@ -11,7 +11,8 @@ use serde::Serialize;
 
 use crate::db::Db;
 use crate::error::Result;
-use crate::graph::{self, Concept, EdgeProjection};
+use crate::graph::{Concept, EdgeProjection};
+use crate::graph_repo::GraphRepo;
 use crate::thematic;
 
 /// The Global Topology Snapshot: every concept, every typed edge with its
@@ -35,14 +36,19 @@ pub struct PartitionAssignment {
     pub partition_id: u32,
 }
 
-/// Build the Global Topology Snapshot: all concepts (via [`graph::all_concepts`]),
-/// all typed edges with their projected current type (via
-/// [`graph::all_edges_with_current_type`], ADR-0003), and the current Louvain
-/// partition assignment for every concept (via [`thematic::partition`],
-/// ADR-0008). Pure read; nothing is persisted.
-pub async fn topology_snapshot(db: &Db) -> Result<TopologySnapshot> {
-    let concepts = graph::all_concepts(db).await?;
-    let edges = graph::all_edges_with_current_type(db).await?;
+/// Build the Global Topology Snapshot: all concepts, all typed edges with
+/// their projected current type (ADR-0003), and the current Louvain partition
+/// assignment for every concept (via [`thematic::partition`], ADR-0008).
+/// Pure read; nothing is persisted.
+///
+/// Issue #45 routed the graph reads through the [`GraphRepo`] trait so the
+/// snapshot builder depends on the interface, not the storage adapter. The
+/// partition computation still touches `Db` directly (`thematic::partition`
+/// builds the graph from a `Db::run` closure — #47's scope to migrate); the
+/// concept + edge reads go through `repo`.
+pub async fn topology_snapshot(repo: &dyn GraphRepo, db: &Db) -> Result<TopologySnapshot> {
+    let concepts = repo.all_concepts().await?;
+    let edges = repo.all_edges_with_current_type().await?;
     let partitions = partition_assignments(db).await?;
     Ok(TopologySnapshot {
         concepts,
@@ -79,6 +85,7 @@ mod tests {
     use crate::braindump::insert_braindump;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::{concept_id_for_label, find_edge, ingest_extraction};
+    use crate::graph_repo::SqliteGraphRepo;
     use crate::llm::{FakeLlm, Llm};
     use rusqlite::params;
 
@@ -184,7 +191,9 @@ mod tests {
         )
         .await;
 
-        let snap = topology_snapshot(&db).await.unwrap();
+        let snap = topology_snapshot(&SqliteGraphRepo::new(db.clone()), &db)
+            .await
+            .unwrap();
         assert_eq!(snap.concepts.len(), 4, "all four concepts");
         assert_eq!(snap.edges.len(), 2, "both edges");
         for e in &snap.edges {
@@ -240,7 +249,9 @@ mod tests {
             .expect("edge created");
         append_retag(&db, edge.id, "supports").await;
 
-        let snap = topology_snapshot(&db).await.unwrap();
+        let snap = topology_snapshot(&SqliteGraphRepo::new(db.clone()), &db)
+            .await
+            .unwrap();
         let e = snap
             .edges
             .iter()
@@ -260,7 +271,9 @@ mod tests {
     #[tokio::test]
     async fn topology_snapshot_on_empty_graph_returns_empty() {
         let db = test_db();
-        let snap = topology_snapshot(&db).await.unwrap();
+        let snap = topology_snapshot(&SqliteGraphRepo::new(db.clone()), &db)
+            .await
+            .unwrap();
         assert!(snap.concepts.is_empty(), "no concepts");
         assert!(snap.edges.is_empty(), "no edges");
         assert!(
@@ -287,7 +300,9 @@ mod tests {
         .await;
         ingest(&db, "a lonely concept", extraction(&["Lonely"], &[])).await;
 
-        let snap = topology_snapshot(&db).await.unwrap();
+        let snap = topology_snapshot(&SqliteGraphRepo::new(db.clone()), &db)
+            .await
+            .unwrap();
         let mut concept_ids: Vec<i64> = snap.concepts.iter().map(|c| c.id).collect();
         concept_ids.sort_unstable();
         let mut assigned: Vec<i64> = snap.partitions.iter().map(|p| p.concept_id).collect();

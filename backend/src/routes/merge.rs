@@ -18,7 +18,7 @@ use crate::state::AppState;
 
 /// `GET /merge-suggestions` — the pending borderline concept pairs (ADR-0001).
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<MergeSuggestion>>> {
-    let suggestions = graph::merge_suggestions(&state.db).await?;
+    let suggestions = state.graph_repo.merge_suggestions().await?;
     Ok(Json(suggestions))
 }
 

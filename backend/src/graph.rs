@@ -28,6 +28,7 @@ use serde::Serialize;
 use crate::db::{now_seconds, Db};
 use crate::error::{Error, Result};
 use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
+use crate::graph_repo::{current_type_subquery, vec_to_blob, GraphRepo, SqliteGraphRepo};
 use crate::llm::Llm;
 
 /// Cosine similarity at or above which a newly-extracted concept is deemed the
@@ -309,18 +310,15 @@ fn create_concept(
 /// sqlite-vec KNN: nearest concept by cosine. Returns `(concept_id,
 /// similarity)` where similarity = 1 − distance (cosine metric on the vec0
 /// table). `None` if no concepts exist yet.
+///
+/// Delegates to [`crate::graph_repo::knn_concept_conn`] (issue #45) so the
+/// SQL lives in one place — the Sqlite adapter's home. Stays a sync
+/// `*_conn`-style helper because it runs inside the accretion `Db::run`
+/// closure where the KNN must see the post-retraction state (embeddings for
+/// vanished concepts are deleted before identity resolution runs); #46 lifts
+/// the accretion KNN call site to the trait and #48 removes this helper.
 fn knn_concept(conn: &rusqlite::Connection, query_vec: &[f32]) -> Result<Option<(i64, f32)>> {
-    let blob = vec_to_blob(query_vec);
-    let row = conn
-        .prepare(
-            "SELECT concept_id, distance FROM concept_embeddings
-             WHERE embedding MATCH ?1 ORDER BY distance LIMIT 1",
-        )?
-        .query_row(params![blob], |r| {
-            Ok((r.get::<_, i64>(0)?, 1.0 - r.get::<_, f64>(1)? as f32))
-        })
-        .optional()?;
-    Ok(row)
+    crate::graph_repo::knn_concept_conn(conn, query_vec)
 }
 
 fn store_braindump_embedding(
@@ -557,26 +555,19 @@ fn tombstone_orphan_concepts(conn: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-/// The canonical current-type projection SQL fragment (ADR-0003): the last
-/// `edge_type_history` entry, correlated on the outer edges alias `e`.
-pub(crate) fn current_type_subquery() -> &'static str {
-    "SELECT type_slug FROM edge_type_history WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1"
-}
-
-/// f32 slice → little-endian byte blob, the on-disk format sqlite-vec expects.
-pub(crate) fn vec_to_blob(v: &[f32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(v.len() * 4);
-    for f in v {
-        bytes.extend_from_slice(&f.to_le_bytes());
-    }
-    bytes
-}
-
 // --- read helpers (public; the future GET /graph surface + test seam) ---
+//
+// These free functions remain as one-line delegators to the [`GraphRepo`]
+// trait (issue #45) so existing callers — including the integration tests
+// under `backend/tests/` and the unit tests in this module — keep compiling
+// without taking a `&dyn GraphRepo` directly. The raw SQL that used to live
+// here moved into [`SqliteGraphRepo`]'s trait impl (one source of truth);
+// #48 removes these delegators once every caller is migrated to pass the
+// repo through.
 
 /// Load the governed edge-type slugs (the LLM draws from these).
 pub async fn ontology_slugs(db: &Db) -> Result<Vec<String>> {
-    db.run(ontology_slugs_conn).await
+    SqliteGraphRepo::new(db.clone()).ontology_slugs().await
 }
 
 fn ontology_slugs_conn(conn: &rusqlite::Connection) -> Result<Vec<String>> {
@@ -588,38 +579,14 @@ fn ontology_slugs_conn(conn: &rusqlite::Connection) -> Result<Vec<String>> {
 }
 
 pub async fn get_concept(db: &Db, id: i64) -> Result<Option<Concept>> {
-    db.run(move |conn| {
-        let row = conn
-            .query_row(
-                "SELECT id, label, created_at FROM concepts WHERE id = ?1",
-                params![id],
-                |r| {
-                    Ok(Concept {
-                        id: r.get(0)?,
-                        label: r.get(1)?,
-                        created_at: r.get(2)?,
-                    })
-                },
-            )
-            .optional()?;
-        Ok(row)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone()).get_concept(id).await
 }
 
 /// The braindump ids that extracted a concept (ADR-0010 extraction provenance).
 pub async fn concept_provenance(db: &Db, concept_id: i64) -> Result<Vec<i64>> {
-    db.run(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT braindump_id FROM concept_provenance
-             WHERE concept_id = ?1 ORDER BY braindump_id",
-        )?;
-        let ids = stmt
-            .query_map(params![concept_id], |r| r.get::<_, i64>(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(ids)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .concept_provenance(concept_id)
+        .await
 }
 
 pub async fn find_edge(
@@ -628,122 +595,43 @@ pub async fn find_edge(
     original_type: &str,
     target_id: i64,
 ) -> Result<Option<Edge>> {
-    let original_type = original_type.to_string();
-    db.run(move |conn| {
-        let row = conn
-            .query_row(
-                "SELECT id, source_concept_id, target_concept_id, original_type, created_at
-                 FROM edges
-                 WHERE source_concept_id = ?1 AND original_type = ?2 AND target_concept_id = ?3",
-                params![source_id, original_type, target_id],
-                |r| {
-                    Ok(Edge {
-                        id: r.get(0)?,
-                        source_concept_id: r.get(1)?,
-                        target_concept_id: r.get(2)?,
-                        original_type: r.get(3)?,
-                        created_at: r.get(4)?,
-                    })
-                },
-            )
-            .optional()?;
-        Ok(row)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .find_edge(source_id, original_type, target_id)
+        .await
 }
 
 /// The braindump ids asserting an edge (ADR-0002 `asserted_by`).
 pub async fn edge_provenance(db: &Db, edge_id: i64) -> Result<Vec<i64>> {
-    db.run(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT braindump_id FROM edge_provenance
-             WHERE edge_id = ?1 ORDER BY braindump_id",
-        )?;
-        let ids = stmt
-            .query_map(params![edge_id], |r| r.get::<_, i64>(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(ids)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .edge_provenance(edge_id)
+        .await
 }
 
 /// The append-only type history of an edge (ADR-0003). Index 0 is the original
 /// assertion; the last entry is the current (projected) type.
 pub async fn edge_type_history(db: &Db, edge_id: i64) -> Result<Vec<TypeHistoryEntry>> {
-    db.run(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT seq_index, type_slug, created_at FROM edge_type_history
-             WHERE edge_id = ?1 ORDER BY seq_index",
-        )?;
-        let entries = stmt
-            .query_map(params![edge_id], |r| {
-                Ok(TypeHistoryEntry {
-                    seq_index: r.get(0)?,
-                    type_slug: r.get(1)?,
-                    created_at: r.get(2)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(entries)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .edge_type_history(edge_id)
+        .await
 }
 
 pub async fn merge_suggestions(db: &Db) -> Result<Vec<MergeSuggestion>> {
-    db.run(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, kind, braindump_id, new_concept_label, new_concept_id,
-                    existing_concept_id, similarity, status, created_at
-             FROM merge_suggestions ORDER BY id",
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(MergeSuggestion {
-                    id: r.get(0)?,
-                    kind: r.get(1)?,
-                    braindump_id: r.get(2)?,
-                    new_concept_label: r.get(3)?,
-                    new_concept_id: r.get(4)?,
-                    existing_concept_id: r.get(5)?,
-                    similarity: r.get::<_, f64>(6)? as f32,
-                    status: r.get(7)?,
-                    created_at: r.get(8)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(rows)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone()).merge_suggestions().await
 }
 
 /// Look up a concept id by exact label. Identity is by embedding (ADR-0001),
 /// not label, so this is a test/inspection helper — not the identity path.
 pub async fn concept_id_for_label(db: &Db, label: &str) -> Result<Option<i64>> {
-    let label = label.to_string();
-    db.run(move |conn| {
-        let id = conn
-            .query_row(
-                "SELECT id FROM concepts WHERE label = ?1 ORDER BY id LIMIT 1",
-                params![label],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()?;
-        Ok(id)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .concept_id_for_label(label)
+        .await
 }
 
 /// Whether a braindump-embedding is stored (retrieval backfill, ADR-0004).
 pub async fn braindump_embedding_stored(db: &Db, braindump_id: i64) -> Result<bool> {
-    db.run(move |conn| {
-        let exists: i64 = conn.query_row(
-            "SELECT count(*) FROM braindump_embeddings WHERE braindump_id = ?1",
-            params![braindump_id],
-            |r| r.get(0),
-        )?;
-        Ok(exists > 0)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .braindump_embedding_stored(braindump_id)
+        .await
 }
 
 /// An edge paired with its projected current type (ADR-0003) — the last entry
@@ -762,48 +650,16 @@ pub struct EdgeProjection {
 /// Every concept, ordered by id — the full node set for whole-graph reads
 /// (issue #27's Global Topology Snapshot).
 pub async fn all_concepts(db: &Db) -> Result<Vec<Concept>> {
-    db.run(|conn| {
-        let mut stmt = conn.prepare("SELECT id, label, created_at FROM concepts ORDER BY id")?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(Concept {
-                    id: r.get(0)?,
-                    label: r.get(1)?,
-                    created_at: r.get(2)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(rows)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone()).all_concepts().await
 }
 
 /// Every edge with its projected current type (ADR-0003), ordered by id. The
 /// current type is the last `edge_type_history` entry; for a freshly-created
 /// edge it equals the original assertion.
 pub async fn all_edges_with_current_type(db: &Db) -> Result<Vec<EdgeProjection>> {
-    db.run(|conn| {
-        let mut stmt = conn.prepare(&format!(
-            "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
-                    e.created_at, ({}) AS current_type
-             FROM edges e ORDER BY e.id",
-            current_type_subquery()
-        ))?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(EdgeProjection {
-                    id: r.get(0)?,
-                    source_concept_id: r.get(1)?,
-                    target_concept_id: r.get(2)?,
-                    original_type: r.get(3)?,
-                    created_at: r.get(4)?,
-                    current_type: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(rows)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .all_edges_with_current_type()
+        .await
 }
 
 // --- issue #7: braindump deletion + merge-suggestion queue ---

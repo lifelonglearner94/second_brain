@@ -25,7 +25,8 @@ use serde::Serialize;
 
 use crate::db::{now_seconds, Db};
 use crate::error::Result;
-use crate::graph::{current_type_subquery, Concept};
+use crate::graph::Concept;
+use crate::graph_repo::current_type_subquery;
 
 /// The delta-sync response: every change since the client's cursor, plus a
 /// fresh cursor for the next pull.
