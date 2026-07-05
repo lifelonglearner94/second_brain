@@ -268,7 +268,6 @@ mod tests {
     use crate::db::now_seconds;
     use crate::error::Error;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
-    use crate::graph_repo::{current_type_subquery, vec_to_blob};
     use crate::llm::{FakeLlm, Llm};
     use rusqlite::params;
 
@@ -322,7 +321,7 @@ mod tests {
         new_concept_id: i64,
         existing_concept_id: i64,
     ) -> i64 {
-        db.run(move |conn| {
+        db.with_conn(move |conn| {
             let created_at = now_seconds();
             conn.execute(
                 "INSERT INTO merge_suggestions
@@ -346,7 +345,7 @@ mod tests {
     /// (simulates a future chat-inference asserter, ADR-0006 — used to exercise
     /// the endpoint-vanishing cascade, ADR-0010 addendum).
     async fn seed_edge_provenance(db: &Db, edge_id: i64, braindump_id: i64) {
-        db.run(move |conn| {
+        db.with_conn(move |conn| {
             conn.execute(
                 "INSERT OR IGNORE INTO edge_provenance (edge_id, braindump_id)
                  VALUES (?1, ?2)",
@@ -1053,7 +1052,7 @@ mod tests {
     }
 
     async fn tombstoned_concept_ids(db: &Db) -> Vec<i64> {
-        db.run(|conn| {
+        db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT entity_id FROM graph_tombstones WHERE kind = 'concept' ORDER BY entity_id",
             )?;
@@ -1067,7 +1066,7 @@ mod tests {
     }
 
     async fn tombstoned_edge_ids(db: &Db) -> Vec<i64> {
-        db.run(|conn| {
+        db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT entity_id FROM graph_tombstones WHERE kind = 'edge' ORDER BY entity_id",
             )?;
@@ -1280,30 +1279,6 @@ mod tests {
 
     // --- issue #36: shared graph-mutation vocabulary (characterization) ---
 
-    #[test]
-    fn current_type_subquery_returns_the_projection_fragment() {
-        // ADR-0003: the current type is the last entry of the append-only
-        // edge_type_history, correlated on the outer edges alias `e`. One
-        // fragment, seven former call sites route through it.
-        assert_eq!(
-            current_type_subquery(),
-            "SELECT type_slug FROM edge_type_history WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1"
-        );
-    }
-
-    #[test]
-    fn vec_to_blob_encodes_f32_slice_as_little_endian_bytes() {
-        // The on-disk format sqlite-vec expects (issue #36: one vec_to_blob,
-        // not two). Pin the exact byte layout so the shared helper never
-        // drifts from what sqlite-vec reads.
-        let vec = vec![1.0_f32, 0.0, -0.5];
-        let blob = vec_to_blob(&vec);
-        assert_eq!(blob.len(), 12, "4 bytes per f32");
-        assert_eq!(&blob[0..4], &1.0_f32.to_le_bytes());
-        assert_eq!(&blob[4..8], &0.0_f32.to_le_bytes());
-        assert_eq!(&blob[8..12], &(-0.5_f32).to_le_bytes());
-    }
-
     // --- test helpers ---
 
     async fn db_concept_id_for_label(db: &Db, label: &str) -> i64 {
@@ -1311,13 +1286,13 @@ mod tests {
     }
 
     async fn count_concepts(db: &Db) -> i64 {
-        db.run(|conn| Ok(conn.query_row("SELECT count(*) FROM concepts", [], |r| r.get(0))?))
+        db.with_conn(|conn| Ok(conn.query_row("SELECT count(*) FROM concepts", [], |r| r.get(0))?))
             .await
             .unwrap()
     }
 
     async fn count_edges(db: &Db) -> i64 {
-        db.run(|conn| Ok(conn.query_row("SELECT count(*) FROM edges", [], |r| r.get(0))?))
+        db.with_conn(|conn| Ok(conn.query_row("SELECT count(*) FROM edges", [], |r| r.get(0))?))
             .await
             .unwrap()
     }
@@ -1325,7 +1300,7 @@ mod tests {
     /// Insert a concept with a hand-rolled label + its fake embedding, no
     /// provenance — used to seed a near-match for the borderline test.
     async fn concept_embedding_stored(db: &Db, concept_id: i64) -> bool {
-        db.run(move |conn| {
+        db.with_conn(move |conn| {
             let n: i64 = conn.query_row(
                 "SELECT count(*) FROM concept_embeddings WHERE concept_id = ?1",
                 params![concept_id],

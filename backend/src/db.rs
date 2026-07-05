@@ -74,9 +74,14 @@ impl Db {
 
     /// Run `f` against the connection on a blocking thread.
     ///
+    /// This is the internal connection-access mechanism for the
+    /// [`SqliteGraphRepo`](crate::graph_repo::SqliteGraphRepo) adapter, the
+    /// auth modules, and the health check — NOT for domain modules, which go
+    /// through the [`GraphRepo`](crate::graph_repo::GraphRepo) trait.
+    ///
     /// The closure owns everything it needs (it must be `'static`); borrow
     /// nothing from the caller — clone owned data into the closure instead.
-    pub async fn run<F, T>(&self, f: F) -> Result<T>
+    pub(crate) async fn with_conn<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&Connection) -> Result<T> + Send + 'static,
         T: Send + 'static,
@@ -88,6 +93,20 @@ impl Db {
         })
         .await
         .map_err(|e| Error::Internal(e.to_string()))?
+    }
+
+    /// Raw connection access for test setup/assertion (issue #48). Production
+    /// code uses [`with_conn`](Self::with_conn); domain modules use the
+    /// [`GraphRepo`](crate::graph_repo::GraphRepo) trait. Available under
+    /// `cfg(test)` and the `test-support` feature so integration-test crates
+    /// under `backend/tests/` can run raw SQL for seeding and assertions.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn with_conn_test<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.with_conn(f).await
     }
 }
 
@@ -410,13 +429,15 @@ mod tests {
     async fn migrate_is_idempotent() {
         let db = Db::open_in_memory().unwrap();
         // Opening already migrated; migrating again should not error.
-        db.run(|conn| migrate(conn).map(|_| ())).await.unwrap();
+        db.with_conn(|conn| migrate(conn).map(|_| ()))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn migrations_create_expected_tables() {
         let db = Db::open_in_memory().unwrap();
-        db.run(|conn| {
+        db.with_conn(|conn| {
             let mut stmt =
                 conn.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")?;
             let names: Vec<String> = stmt
@@ -454,7 +475,7 @@ mod tests {
     #[tokio::test]
     async fn ontology_table_is_seeded_with_edge_types() {
         let db = Db::open_in_memory().unwrap();
-        db.run(|conn| {
+        db.with_conn(|conn| {
             let mut stmt =
                 conn.prepare("SELECT slug, label, description FROM ontology ORDER BY id")?;
             let rows: Vec<(String, String, String)> = stmt
@@ -505,14 +526,16 @@ mod tests {
     async fn ontology_seed_is_idempotent() {
         let db = Db::open_in_memory().unwrap();
         let count_first = db
-            .run(|conn| {
+            .with_conn(|conn| {
                 Ok(conn.query_row("SELECT COUNT(*) FROM ontology", [], |r| r.get::<_, i64>(0))?)
             })
             .await
             .unwrap();
-        db.run(|conn| migrate(conn).map(|_| ())).await.unwrap();
+        db.with_conn(|conn| migrate(conn).map(|_| ()))
+            .await
+            .unwrap();
         let count_second = db
-            .run(|conn| {
+            .with_conn(|conn| {
                 Ok(conn.query_row("SELECT COUNT(*) FROM ontology", [], |r| r.get::<_, i64>(0))?)
             })
             .await
@@ -527,7 +550,7 @@ mod tests {
     #[tokio::test]
     async fn migrations_create_extraction_tables() {
         let db = Db::open_in_memory().unwrap();
-        db.run(|conn| {
+        db.with_conn(|conn| {
             let mut stmt =
                 conn.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")?;
             let names: Vec<String> = stmt
@@ -562,7 +585,7 @@ mod tests {
     async fn ensure_vec_tables_creates_knn_virtual_tables() {
         let db = Db::open_in_memory().unwrap();
         db.ensure_vec_tables(8).unwrap();
-        db.run(|conn| {
+        db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT name FROM sqlite_master
                  WHERE type='table' AND name IN (?, ?, ?)

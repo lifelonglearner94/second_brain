@@ -44,7 +44,7 @@ pub struct PartitionAssignment {
 /// Issue #45 routed the graph reads through the [`GraphRepo`] trait so the
 /// snapshot builder depends on the interface, not the storage adapter. The
 /// partition computation still touches `Db` directly (`thematic::partition`
-/// builds the graph from a `Db::run` closure — #47's scope to migrate); the
+/// builds the graph from a `Db::with_conn` closure — #47's scope to migrate); the
 /// concept + edge reads go through `repo`.
 pub async fn topology_snapshot(repo: &dyn GraphRepo, db: &Db) -> Result<TopologySnapshot> {
     let concepts = repo.all_concepts().await?;
@@ -149,7 +149,7 @@ mod tests {
     /// the governance pipeline.
     async fn append_retag(db: &Db, edge_id: i64, type_slug: &str) {
         let type_slug = type_slug.to_string();
-        db.run(move |conn| {
+        db.with_conn(move |conn| {
             let next_seq: i64 = conn.query_row(
                 "SELECT COALESCE(MAX(seq_index), -1) + 1 FROM edge_type_history WHERE edge_id = ?1",
                 params![edge_id],

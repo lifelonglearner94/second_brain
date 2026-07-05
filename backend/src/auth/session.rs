@@ -92,7 +92,7 @@ fn encode_id(bytes: &[u8]) -> String {
 /// it is never looked up by anything but the cookie value.
 pub async fn mint_session(db: &Db, user_id: &str) -> Result<SessionInfo> {
     let user_id = user_id.to_string();
-    db.run(move |conn| {
+    db.with_conn(move |conn| {
         let mut rng = OsRng;
         let mut bytes = vec![0u8; SESSION_ID_BYTES];
         rng.fill_bytes(&mut bytes);
@@ -124,7 +124,7 @@ pub async fn mint_session(db: &Db, user_id: &str) -> Result<SessionInfo> {
 /// is missing — the middleware turns that into a 401.
 pub async fn lookup_session(db: &Db, id: SessionId) -> Result<Option<SessionInfo>> {
     let id = id.0;
-    db.run(move |conn| {
+    db.with_conn(move |conn| {
         let row = conn
             .query_row(
                 "SELECT session_id, user_id, created_at, expires_at
@@ -149,7 +149,7 @@ pub async fn lookup_session(db: &Db, id: SessionId) -> Result<Option<SessionInfo
 /// already gone affected zero rows and is still a success.
 pub async fn invalidate_session(db: &Db, id: &SessionId) -> Result<()> {
     let id = id.as_str().to_string();
-    db.run(move |conn| {
+    db.with_conn(move |conn| {
         conn.execute("DELETE FROM sessions WHERE session_id = ?1", params![id])?;
         Ok(())
     })

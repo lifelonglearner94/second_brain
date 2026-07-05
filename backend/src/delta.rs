@@ -20,13 +20,12 @@
 //! same-second change lands in the next pull rather than this one (brief
 //! staleness, accepted by the design).
 
-use rusqlite::params;
 use serde::Serialize;
 
-use crate::db::{now_seconds, Db};
+use crate::db::Db;
 use crate::error::Result;
 use crate::graph::Concept;
-use crate::graph_repo::current_type_subquery;
+use crate::graph_repo::{GraphRepo, SqliteGraphRepo};
 
 /// The delta-sync response: every change since the client's cursor, plus a
 /// fresh cursor for the next pull.
@@ -80,115 +79,22 @@ pub struct RetaggedEdge {
 /// `concepts`/`edges` (filtered by `created_at`), deletions from
 /// `graph_tombstones`, and retags from `edge_type_history` (entries with
 /// `seq_index > 0`). The cursor is `now_seconds()` at query time.
+///
+/// Delegates to [`GraphRepo::graph_delta`] (issue #48); the SQL lives in the
+/// Sqlite adapter's trait impl.
 pub async fn graph_delta(db: &Db, since: i64) -> Result<GraphDelta> {
-    db.run(move |conn| {
-        let added_concepts = added_concepts_since(conn, since)?;
-        let added_edges = added_edges_since(conn, since)?;
-        let deleted_concept_ids = tombstoned_since(conn, "concept", since)?;
-        let deleted_edge_ids = tombstoned_since(conn, "edge", since)?;
-        let retagged_edges = retagged_edges_since(conn, since)?;
-        let cursor = now_seconds();
-        Ok(GraphDelta {
-            cursor,
-            added_concepts,
-            added_edges,
-            deleted_concept_ids,
-            deleted_edge_ids,
-            retagged_edges,
-        })
-    })
-    .await
-}
-
-fn added_concepts_since(conn: &rusqlite::Connection, since: i64) -> Result<Vec<Concept>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, label, created_at FROM concepts
-         WHERE created_at > ?1 ORDER BY id",
-    )?;
-    let rows = stmt
-        .query_map(params![since], |r| {
-            Ok(Concept {
-                id: r.get(0)?,
-                label: r.get(1)?,
-                created_at: r.get(2)?,
-            })
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(rows)
-}
-
-fn added_edges_since(conn: &rusqlite::Connection, since: i64) -> Result<Vec<DeltaEdge>> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
-                e.created_at, ({}) AS current_type
-         FROM edges e WHERE e.created_at > ?1 ORDER BY e.id",
-        current_type_subquery()
-    ))?;
-    let rows = stmt
-        .query_map(params![since], |r| {
-            Ok(DeltaEdge {
-                id: r.get(0)?,
-                source_concept_id: r.get(1)?,
-                target_concept_id: r.get(2)?,
-                original_type: r.get(3)?,
-                created_at: r.get(4)?,
-                current_type: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
-            })
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(rows)
-}
-
-/// Concept/edge ids tombstoned (vanished via the deletion cascade) since the
-/// cursor. `kind` is 'concept' or 'edge'.
-fn tombstoned_since(conn: &rusqlite::Connection, kind: &str, since: i64) -> Result<Vec<i64>> {
-    let mut stmt = conn.prepare(
-        "SELECT entity_id FROM graph_tombstones
-         WHERE kind = ?1 AND created_at > ?2 ORDER BY entity_id",
-    )?;
-    let ids = stmt
-        .query_map(params![kind, since], |r| r.get::<_, i64>(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(ids)
-}
-
-/// Edges whose projected current type changed since the cursor: a refactor
-/// appended a `seq_index > 0` entry to `edge_type_history` after the cursor.
-/// Edges created after the cursor are excluded — they arrive as additions
-/// carrying their current type, so including them here would double-report.
-/// `current_type` is the projection of the last history entry (ADR-0003).
-fn retagged_edges_since(conn: &rusqlite::Connection, since: i64) -> Result<Vec<RetaggedEdge>> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
-                ({}) AS current_type
-         FROM edges e
-         WHERE e.created_at <= ?1 AND EXISTS (
-             SELECT 1 FROM edge_type_history eth
-             WHERE eth.edge_id = e.id AND eth.seq_index > 0 AND eth.created_at > ?1)
-         ORDER BY e.id",
-        current_type_subquery()
-    ))?;
-    let rows = stmt
-        .query_map(params![since], |r| {
-            Ok(RetaggedEdge {
-                id: r.get(0)?,
-                source_concept_id: r.get(1)?,
-                target_concept_id: r.get(2)?,
-                original_type: r.get(3)?,
-                current_type: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-            })
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(rows)
+    SqliteGraphRepo::new(db.clone()).graph_delta(since).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
+    use crate::db::now_seconds;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::{concept_id_for_label, delete_braindump, find_edge, ingest_extraction};
     use crate::llm::{FakeLlm, Llm};
+    use rusqlite::params;
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
@@ -233,7 +139,7 @@ mod tests {
     /// real `now_seconds()` has second-level granularity, which would make
     /// same-second boundary tests flaky).
     async fn backdate_graph(db: &Db, ts: i64) {
-        db.run(move |conn| {
+        db.with_conn(move |conn| {
             conn.execute("UPDATE concepts SET created_at = ?1", params![ts])?;
             conn.execute("UPDATE edges SET created_at = ?1", params![ts])?;
             conn.execute("UPDATE edge_type_history SET created_at = ?1", params![ts])?;
@@ -248,7 +154,7 @@ mod tests {
     /// standing up the governance pipeline.
     async fn append_retag(db: &Db, edge_id: i64, type_slug: &str, ts: i64) {
         let type_slug = type_slug.to_string();
-        db.run(move |conn| {
+        db.with_conn(move |conn| {
             let next_seq: i64 = conn.query_row(
                 "SELECT COALESCE(MAX(seq_index), -1) + 1 FROM edge_type_history WHERE edge_id = ?1",
                 params![edge_id],

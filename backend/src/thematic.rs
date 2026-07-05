@@ -25,6 +25,7 @@ use serde::Serialize;
 
 use crate::db::Db;
 use crate::error::Result;
+use crate::graph_repo::GraphRepo;
 
 /// One cluster in the current partition: an ephemeral session label plus the
 /// concept ids and labels it contains. The label is a throwaway "Group N for
@@ -145,39 +146,46 @@ impl WeightedGraph {
 /// or reinforcing edges) accumulate into a stronger link. Self-edges
 /// (`source == target`) are skipped — they carry no community signal. Edges
 /// whose endpoints are not live concepts are skipped defensively.
+///
+/// Delegates the reads to [`GraphRepo::all_concepts`] +
+/// [`GraphRepo::all_edge_endpoints`] (issue #48); the weight accumulation runs
+/// here.
 async fn load_topology(db: &Db) -> Result<Topology> {
-    db.run(|conn| {
-        let mut concepts: Vec<(i64, String)> = Vec::new();
-        {
-            let mut stmt = conn.prepare("SELECT id, label FROM concepts ORDER BY id")?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
-            for row in rows {
-                concepts.push(row?);
-            }
+    let repo = crate::graph_repo::SqliteGraphRepo::new(db.clone());
+    let concepts: Vec<(i64, String)> = repo
+        .all_concepts()
+        .await?
+        .into_iter()
+        .map(|c| (c.id, c.label))
+        .collect();
+    let endpoints = repo.all_edge_endpoints().await?;
+    load_topology_from(&concepts, &endpoints)
+}
+
+/// Build the [`Topology`] from concept labels + edge endpoints. Pure (no I/O)
+/// so it is hermetically testable. Self-edges are skipped; edges whose
+/// endpoints are not live concepts are skipped defensively.
+fn load_topology_from(concepts: &[(i64, String)], endpoints: &[(i64, i64)]) -> Result<Topology> {
+    let mut id_to_idx: HashMap<i64, usize> = HashMap::new();
+    for (idx, (id, _)) in concepts.iter().enumerate() {
+        id_to_idx.insert(*id, idx);
+    }
+    let mut weights: HashMap<(usize, usize), f64> = HashMap::new();
+    for &(s, t) in endpoints {
+        if s == t {
+            continue;
         }
-        let mut id_to_idx: HashMap<i64, usize> = HashMap::new();
-        for (idx, (id, _)) in concepts.iter().enumerate() {
-            id_to_idx.insert(*id, idx);
-        }
-        let mut weights: HashMap<(usize, usize), f64> = HashMap::new();
-        let mut stmt =
-            conn.prepare("SELECT source_concept_id, target_concept_id FROM edges ORDER BY id")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
-        for row in rows {
-            let (s, t) = row?;
-            if s == t {
-                continue;
-            }
-            let (Some(&si), Some(&ti)) = (id_to_idx.get(&s), id_to_idx.get(&t)) else {
-                continue;
-            };
-            let key = (si.min(ti), si.max(ti));
-            *weights.entry(key).or_insert(0.0) += 1.0;
-        }
-        let graph = WeightedGraph::from_accumulated(concepts.len(), &weights);
-        Ok(Topology { concepts, graph })
+        let (Some(&si), Some(&ti)) = (id_to_idx.get(&s), id_to_idx.get(&t)) else {
+            continue;
+        };
+        let key = (si.min(ti), si.max(ti));
+        *weights.entry(key).or_insert(0.0) += 1.0;
+    }
+    let graph = WeightedGraph::from_accumulated(concepts.len(), &weights);
+    Ok(Topology {
+        concepts: concepts.to_vec(),
+        graph,
     })
-    .await
 }
 
 /// Run Louvain community detection. Returns communities as vecs of original
@@ -674,19 +682,19 @@ mod tests {
     }
 
     async fn count_concepts(db: &Db) -> i64 {
-        db.run(|conn| Ok(conn.query_row("SELECT count(*) FROM concepts", [], |r| r.get(0))?))
+        db.with_conn(|conn| Ok(conn.query_row("SELECT count(*) FROM concepts", [], |r| r.get(0))?))
             .await
             .unwrap()
     }
 
     async fn count_edges(db: &Db) -> i64 {
-        db.run(|conn| Ok(conn.query_row("SELECT count(*) FROM edges", [], |r| r.get(0))?))
+        db.with_conn(|conn| Ok(conn.query_row("SELECT count(*) FROM edges", [], |r| r.get(0))?))
             .await
             .unwrap()
     }
 
     async fn clusters_table_exists(db: &Db) -> bool {
-        db.run(|conn| {
+        db.with_conn(|conn| {
             let n: i64 = conn.query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='clusters'",
                 [],

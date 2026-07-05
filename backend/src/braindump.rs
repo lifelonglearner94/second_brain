@@ -14,7 +14,6 @@
 //! [`crate::graph::ingest_extraction`] (identity + provenance + type history +
 //! embeddings, ADR-0001/0002/0003/0010).
 
-use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
@@ -45,64 +44,27 @@ pub async fn insert_braindump(db: &Db, verbatim: &str, cleaned: &str) -> Result<
 }
 
 /// Look up a braindump by id. `None` if no row matches.
+///
+/// Delegates to [`GraphRepo::get_braindump`] (issue #48).
 pub async fn get_braindump(db: &Db, id: i64) -> Result<Option<Braindump>> {
-    db.run(move |conn| {
-        let row = conn
-            .query_row(
-                "SELECT id, verbatim, cleaned, created_at
-                 FROM braindumps WHERE id = ?1",
-                params![id],
-                |row| {
-                    Ok(Braindump {
-                        id: row.get(0)?,
-                        verbatim: row.get(1)?,
-                        cleaned: row.get(2)?,
-                        created_at: row.get(3)?,
-                    })
-                },
-            )
-            .optional()?;
-        Ok(row)
-    })
-    .await
+    SqliteGraphRepo::new(db.clone()).get_braindump(id).await
 }
 
 /// Overwrite the verbatim in place (error-correction, ADR-0007) and store the
 /// re-cleaned rendering. The id and created_at are untouched — a braindump's
 /// timestamp is its original submit instant, not its last edit. Returns the
 /// updated row, or `None` if no braindump with `id` exists.
+///
+/// Delegates to [`GraphRepo::update_braindump`] (issue #48).
 pub async fn overwrite_verbatim(
     db: &Db,
     id: i64,
     verbatim: &str,
     cleaned: &str,
 ) -> Result<Option<Braindump>> {
-    let verbatim = verbatim.to_string();
-    let cleaned = cleaned.to_string();
-    db.run(move |conn| {
-        let updated = conn.execute(
-            "UPDATE braindumps SET verbatim = ?1, cleaned = ?2 WHERE id = ?3",
-            params![verbatim, cleaned, id],
-        )?;
-        if updated == 0 {
-            return Ok(None);
-        }
-        let row = conn.query_row(
-            "SELECT id, verbatim, cleaned, created_at
-                 FROM braindumps WHERE id = ?1",
-            params![id],
-            |row| {
-                Ok(Braindump {
-                    id: row.get(0)?,
-                    verbatim: row.get(1)?,
-                    cleaned: row.get(2)?,
-                    created_at: row.get(3)?,
-                })
-            },
-        )?;
-        Ok(Some(row))
-    })
-    .await
+    SqliteGraphRepo::new(db.clone())
+        .update_braindump(id, verbatim.to_string(), cleaned.to_string())
+        .await
 }
 
 /// The Braindump ingest pipeline for the submit path (ADR-0007): clean the

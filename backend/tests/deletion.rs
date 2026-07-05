@@ -273,7 +273,7 @@ async fn delete_braindump_cascade_deletes_edge_when_endpoint_vanishes() {
     );
     // Back the edge with bd2 (which did not extract Q3) so it still has an
     // asserter after bd1 is removed.
-    db.run(move |conn| {
+    db.with_conn_test(move |conn| {
         conn.execute(
             "INSERT OR IGNORE INTO edge_provenance (edge_id, braindump_id) VALUES (?1, ?2)",
             rusqlite::params![edge.id, bd2],

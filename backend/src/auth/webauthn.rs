@@ -14,7 +14,7 @@
 //! passkey exists, registration is closed. Enforced at `register_begin`
 //! (best-effort, so a second caller gets a clean 409 before the WebAuthn
 //! dance) and authoritatively inside `store_first_passkey` — count + insert
-//! share one `db.run` closure, so under the single-connection mutex the gate
+//! share one `db.with_conn` closure, so under the single-connection mutex the gate
 //! is race-proof even if two begins both succeed before either finish lands.
 
 use std::collections::HashMap;
@@ -192,7 +192,7 @@ impl AuthService {
         // one DB-closure hold); this one only closes the door early for UX.
         let count = {
             let user_id = SINGLE_USER_ID.to_string();
-            db.run(move |conn| count_passkeys_sync(conn, &user_id))
+            db.with_conn(move |conn| count_passkeys_sync(conn, &user_id))
                 .await?
         };
         if count > 0 {
@@ -259,9 +259,9 @@ impl AuthService {
 
 /// Count registered passkeys for `user_id`. Drives the deploy-time singleton
 /// lock (issue #2): once a passkey exists, registration is closed. Synchronous
-/// so it can be folded into a `db.run` closure alongside the insert — the
+/// so it can be folded into a `db.with_conn` closure alongside the insert — the
 /// single-connection mutex makes the count + insert atomic w.r.t. other
-/// `db.run` calls, which is what makes the lock race-proof.
+/// `db.with_conn` calls, which is what makes the lock race-proof.
 fn count_passkeys_sync(conn: &Connection, user_id: &str) -> Result<i64> {
     Ok(conn.query_row(
         "SELECT COUNT(*) FROM passkeys WHERE user_id = ?1",
@@ -271,7 +271,7 @@ fn count_passkeys_sync(conn: &Connection, user_id: &str) -> Result<i64> {
 }
 
 /// Persist the first registered passkey, gated by the singleton lock. The
-/// count check and the insert share one `db.run` closure so no second
+/// count check and the insert share one `db.with_conn` closure so no second
 /// `register_finish` can slip between them — the authoritative gate, as
 /// opposed to the best-effort check in [`AuthService::register_begin`]. A
 /// plain `INSERT` (no `ON CONFLICT`) is correct here: count == 0 means the
@@ -282,7 +282,7 @@ async fn store_first_passkey(db: &Db, user_id: &str, passkey: &Passkey) -> Resul
     let passkey_json = serde_json::to_string(passkey)
         .map_err(|e| Error::Internal(format!("passkey serialization: {e}")))?;
     let user_id = user_id.to_string();
-    db.run(move |conn| {
+    db.with_conn(move |conn| {
         if count_passkeys_sync(conn, &user_id)? > 0 {
             return Err(Error::Conflict(
                 "registration is closed: a passkey already exists".into(),
@@ -309,7 +309,7 @@ async fn upsert_passkey(db: &Db, user_id: &str, passkey: &Passkey) -> Result<()>
     let passkey_json = serde_json::to_string(passkey)
         .map_err(|e| Error::Internal(format!("passkey serialization: {e}")))?;
     let user_id = user_id.to_string();
-    db.run(move |conn| {
+    db.with_conn(move |conn| {
         conn.execute(
             "INSERT INTO passkeys (cred_id, user_id, passkey_json, created_at)
              VALUES (?1, ?2, ?3, ?4)
@@ -328,7 +328,7 @@ async fn upsert_passkey(db: &Db, user_id: &str, passkey: &Passkey) -> Result<()>
 async fn load_passkeys(db: &Db, user_id: &str) -> Result<Vec<Passkey>> {
     let user_id = user_id.to_string();
     let jsons: Vec<String> = db
-        .run(move |conn| {
+        .with_conn(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT passkey_json FROM passkeys WHERE user_id = ?1 ORDER BY created_at",
             )?;
