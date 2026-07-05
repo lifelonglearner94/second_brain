@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Bootstrap a fresh Debian VPS for the Second Brain two-service stack.
-# Idempotent: safe to re-run. Automates the deterministic drudge work from
-# ADR-0008 (infrastructure/DISASTER_RECOVERY.md is the human source of truth).
+# Bootstrap a fresh Debian VPS for the Second Brain stack (edge + backend +
+# the Litestream Brain Replica sidecar). Idempotent: safe to re-run. Automates
+# the deterministic drudge work from ADR-0008 (infrastructure/DISASTER_RECOVERY.md
+# is the human source of truth for the why and the exact command sequence).
 #
 # Run from a checkout of the repo on the VPS:
 #   git clone https://github.com/lifelonglearner94/second_brain.git
 #   cd second_brain && bash infrastructure/bootstrap.sh
 #
-# Does NOT handle secrets — .env is placed manually (ADR-0004). Does NOT handle
-# the Brain Replica (R2/Litestream) or ntfy Health Push — deferred (slices
-# #32 / #33); see DISASTER_RECOVERY.md.
+# Handles everything reproducible: swap, Docker, nftables firewall, the deploy
+# user + command-restricted key, the stack files (docker-compose.yml,
+# litestream.yml, deploy.sh), and the ntfy Health Push cron (ADR-0005, #33).
+# Does NOT handle secrets — .env (R2 creds + NTFY_WEBHOOK_URL + Gemini key) is
+# placed manually (ADR-0004). The Brain Replica itself runs as the litestream
+# sidecar in docker-compose.yml; bootstrap only installs its config file.
 set -euo pipefail
 
 DEPLOY_USER="deploy"
@@ -110,8 +114,14 @@ getent group docker >/dev/null 2>&1 && usermod -aG docker "$DEPLOY_USER"
 echo ">>> installing stack files to $INSTALL_DIR"
 install -d -o root          -g root          -m 755 "$INSTALL_DIR"
 install -d -o "$DEPLOY_USER" -g "$DEPLOY_USER" -m 700 "$INSTALL_DIR/infrastructure"
-install -m 644 -o root -g root "$REPO_ROOT/docker-compose.yml"       "$INSTALL_DIR/docker-compose.yml"
-install -m 755 -o root -g root "$REPO_ROOT/infrastructure/deploy.sh" "$INSTALL_DIR/deploy.sh"
+install -m 644 -o root -g root "$REPO_ROOT/docker-compose.yml"        "$INSTALL_DIR/docker-compose.yml"
+install -m 755 -o root -g root "$REPO_ROOT/infrastructure/deploy.sh"  "$INSTALL_DIR/deploy.sh"
+# Brain Replica config (ADR-0002, #32): mounted read-only by the litestream
+# sidecar via docker-compose's ./infrastructure/litestream.yml bind mount.
+install -m 644 -o root -g root "$REPO_ROOT/infrastructure/litestream.yml" "$INSTALL_DIR/infrastructure/litestream.yml"
+# Health Push script (ADR-0005, #33): run by the /etc/cron.d entry below; reads
+# NTFY_WEBHOOK_URL from the manually-placed infrastructure/.env (ADR-0004).
+install -m 755 -o root -g root "$REPO_ROOT/infrastructure/health-push.sh" "$INSTALL_DIR/infrastructure/health-push.sh"
 touch "$INSTALL_DIR/deploy.log"
 chown "$DEPLOY_USER":"$DEPLOY_USER" "$INSTALL_DIR/deploy.log"
 chmod 644 "$INSTALL_DIR/deploy.log"
@@ -130,7 +140,25 @@ EOF
   chmod 600 "$INSTALL_DIR/deploy.env"
 fi
 
-# --- 6. Command-restricted deploy SSH key (ADR-0003) ------------------------
+# --- 6. Health Push cron (ADR-0005, #33) -------------------------------------
+# Zero-RAM survival check: a /etc/cron.d entry runs health-push.sh every 5 min
+# to push to ntfy when the Brain Replica stops replicating or the volume nears
+# capacity. The script ships no secrets (NTFY_WEBHOOK_URL comes from .env).
+install -d -o root -g root -m 0755 /var/lib/second-brain           # health-push state dir
+if [[ -f "$REPO_ROOT/infrastructure/health-push.cron" ]]; then
+  install -m 0644 -o root -g root "$REPO_ROOT/infrastructure/health-push.cron" /etc/cron.d/second-brain-health-push
+  # /etc/cron.d requires a cron daemon. Install + enable one if absent.
+  if ! command -v crontab >/dev/null 2>&1; then
+    echo ">>> installing cron (for the Health Push /etc/cron.d entry)"
+    apt-get update -qq && apt-get install -y -qq cron
+  fi
+  systemctl enable --now cron >/dev/null 2>&1 || true
+  echo ">>> health-push cron installed (/etc/cron.d/second-brain-health-push, every 5 min)"
+else
+  echo ">>> WARNING: infrastructure/health-push.cron missing — Health Push cron NOT installed"
+fi
+
+# --- 7. Command-restricted deploy SSH key (ADR-0003) ------------------------
 PUBKEY_FILE="$REPO_ROOT/infrastructure/keys/deploy.pub"
 ssh_dir="/home/$DEPLOY_USER/.ssh"
 install -d -o "$DEPLOY_USER" -g "$DEPLOY_USER" -m 700 "$ssh_dir"
@@ -164,6 +192,11 @@ fi
 echo
 echo ">>> bootstrap complete."
 echo ">>> NEXT (manual — secrets, ADR-0004):"
-echo ">>>   1. scp infrastructure/.env root@<vps>:$INSTALL_DIR/infrastructure/.env"
-echo ">>>   2. ssh root@<vps> 'chown $DEPLOY_USER:$DEPLOY_USER $INSTALL_DIR/infrastructure/.env; chmod 600 $INSTALL_DIR/infrastructure/.env'"
-echo ">>>   3. Push to main — GHA builds, pushes GHCR, SSHes here to pull + up."
+echo ">>>   1. Fill infrastructure/.env on your machine: GEMINI_API_KEY + the"
+echo ">>>      Brain Replica R2 keys (LITESTREAM_*) + NTFY_WEBHOOK_URL."
+echo ">>>   2. scp infrastructure/.env root@<vps>:$INSTALL_DIR/infrastructure/.env"
+echo ">>>   3. ssh root@<vps> 'chown $DEPLOY_USER:$DEPLOY_USER $INSTALL_DIR/infrastructure/.env; chmod 600 $INSTALL_DIR/infrastructure/.env'"
+echo ">>>   4. Push to main — GHA builds, pushes GHCR, SSHes here to pull + up."
+echo ">>> The Health Push cron (/etc/cron.d/second-brain-health-push) is already"
+echo ">>> installed and will alert via ntfy once NTFY_WEBHOOK_URL is in .env."
+echo ">>> To RESTORE from R2 after a VPS loss, see DISASTER_RECOVERY.md."

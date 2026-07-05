@@ -94,89 +94,100 @@ if [[ $LIVE -eq 0 ]]; then
   exit 0
 fi
 
-# --- live: replicate -> restore round-trip with MinIO (the #32 DR dry run) ----
+# --- live: replicate -> restore round-trip with MinIO (R2 stand-in) ----------
+# Verifies the core Brain Replica mechanism (#32) and the exact restore command
+# from DISASTER_RECOVERY.md (#34): create a Brain-File-shaped sqlite db with a
+# marker row, stream it to MinIO via litestream, destroy the local copy, restore
+# from the replica, and confirm the marker survived. No backend/auth/HTTPS
+# needed (POST /braindumps is session-gated and WebAuthn needs a secure context),
+# so this tests the replica mechanism in isolation; the full-stack braindump
+# round-trip is the manual DR exercise in DISASTER_RECOVERY.md.
 need curl
-echo ">> live round-trip: MinIO (R2 stand-in) + stack + braindump + restore"
-echo ">> (slow: builds the backend, pulls litestream + minio)"
+echo ">> live round-trip: litestream replicate -> restore via MinIO (R2 stand-in)"
+echo ">> (pulls litestream + minio + alpine; no backend build)"
 
-# MinIO as a local, throwaway R2 stand-in on an isolated network. Credentials are
-# fixed defaults — this is a local test network, never production.
-MINIO_NET="sb-replica-test"
+PROJECT="sb-replica-test"
 MINIO_BUCKET="brain-replica-test"
-docker network create "$MINIO_NET" >/dev/null 2>&1 || true
-docker rm -f sb-minio >/dev/null 2>&1 || true
-docker run -d --name sb-minio --network "$MINIO_NET" \
-  -p 19090:9000 \
-  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-  -e MINIO_DOMAIN=minio \
-  minio/minio server /data >/dev/null
-trap 'docker rm -f sb-minio >/dev/null 2>&1 || true; docker network rm "$MINIO_NET" >/dev/null 2>&1 || true' EXIT
+VOL="sb-test-data"
+TMPDIR_LIVE="$(mktemp -d)"
+# shellcheck disable=SC2064
+trap 'docker rm -f sb-minio sb-ls >/dev/null 2>&1 || true; docker volume rm "$VOL" >/dev/null 2>&1 || true; docker network rm "$PROJECT" >/dev/null 2>&1 || true; rm -rf "$TMPDIR_LIVE"' EXIT
+docker volume create "$VOL" >/dev/null 2>&1 || true
+docker network create "$PROJECT" >/dev/null 2>&1 || true
+docker rm -f sb-minio sb-ls >/dev/null 2>&1 || true
 
-# Wait for MinIO, create the bucket.
+# MinIO as a throwaway R2 stand-in. Credentials are fixed defaults — local test
+# network only, never production.
+docker run -d --name sb-minio --network "$PROJECT" -p 19090:9000 \
+  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+  minio/minio server /data >/dev/null
 for i in $(seq 1 30); do
-  if curl -fsS -o /dev/null http://127.0.0.1:19090/minio/health/live; then break; fi
+  curl -fsS -o /dev/null http://127.0.0.1:19090/minio/health/live && break
   sleep 1
 done
 curl -fsS -o /dev/null http://127.0.0.1:19090/minio/health/live || die "MinIO never became healthy"
-docker run --rm --network "$MINIO_NET" minio/mc:latest \
+docker run --rm --network "$PROJECT" minio/mc:latest \
   alias set local http://sb-minio:9000 minioadmin minioadmin >/dev/null 2>&1
-docker run --rm --network "$MINIO_NET" minio/mc:latest \
+docker run --rm --network "$PROJECT" minio/mc:latest \
   mb "local/$MINIO_BUCKET" >/dev/null 2>&1 || true
 
-# Point litestream at MinIO via a throwaway env, then bring the stack up.
-TEST_ENV="$(mktemp)"
-trap 'rm -f "$TEST_ENV"; docker rm -f sb-minio >/dev/null 2>&1 || true; docker network rm "$MINIO_NET" >/dev/null 2>&1 || true; docker compose down -v >/dev/null 2>&1 || true' EXIT
-cat > "$TEST_ENV" <<EOF
-GEMINI_API_KEY=
-LITESTREAM_ACCESS_KEY_ID=minioadmin
-LITESTREAM_SECRET_ACCESS_KEY=minioadmin
-LITESTREAM_ENDPOINT=http://sb-minio:9000
-LITESTREAM_BUCKET=$MINIO_BUCKET
+# litestream config pointed at MinIO (endpoint is NOT a s3:// URL query param, so
+# a config file is required for S3-compatible targets — same shape as the
+# committed infrastructure/litestream.yml, just MinIO instead of R2).
+LSCONF="$TMPDIR_LIVE/litestream.yml"
+cat > "$LSCONF" <<EOF
+dbs:
+  - path: /data/second_brain.db
+    replica:
+      type: s3
+      bucket: $MINIO_BUCKET
+      endpoint: http://sb-minio:9000
+      path: second_brain.db
+      region: us-east-1
+      sync-interval: 1s
 EOF
-# Override env_file path by copying the test env into place (restored on EXIT).
-cp "$TEST_ENV" infrastructure/.env.live-test
-trap 'rm -f "$TEST_ENV" infrastructure/.env.live-test; docker rm -f sb-minio >/dev/null 2>&1 || true; docker network rm "$MINIO_NET" >/dev/null 2>&1 || true; docker compose down -v >/dev/null 2>&1 || true' EXIT
 
-echo ">> building + bringing up the stack against MinIO (slow on first build)..."
-LITESTREAM_ENDPOINT=http://sb-minio:9000 LITESTREAM_BUCKET=$MINIO_BUCKET \
-  docker compose up -d --build
-wait_http() { local url="$1" i; for i in $(seq 1 120); do curl -fsS -o /dev/null "$url" && return 0; sleep 1; done; return 1; }
-wait_http http://localhost:80/api/health || die "backend never came up behind the Edge"
-
-# Submit a braindump (no Gemini key -> backend fake-LLM fallback, still ingests).
+# 1. Create a Brain-File-shaped sqlite db with a marker row on the volume.
 MARK="replica-test-$(date +%s)"
-curl -fsS -X POST http://localhost:80/api/braindumps \
-  -H 'Content-Type: application/json' \
-  -d "{\"text\":\"replica round-trip marker $MARK\"}" \
-  || die "could not submit braindump for the round-trip"
+docker run --rm -v "$VOL":/data alpine:3 sh -c \
+  "apk add --no-cache sqlite >/dev/null 2>&1 && sqlite3 /data/second_brain.db \"CREATE TABLE IF NOT EXISTS braindumps(id INTEGER PRIMARY KEY, verbatim TEXT); INSERT INTO braindumps(verbatim) VALUES('$MARK');\"" \
+  || die "could not create the marker sqlite db"
 
-# Let Litestream sync (RPO ~1s; give it margin + a checkpoint).
-echo ">> waiting for Litestream to sync the WAL to MinIO..."
-sleep 5
-docker compose exec -T litestream litestream sync /data/second_brain.db >/dev/null 2>&1 || true
-# Confirm frames landed in the bucket.
-docker run --rm --network "$MINIO_NET" minio/mc:latest \
+# 2. Stream the WAL to MinIO (litestream snapshots the existing db on start).
+docker run -d --name sb-ls --network "$PROJECT" \
+  -v "$VOL":/data -v "$LSCONF":/etc/litestream.yml:ro \
+  -e LITESTREAM_ACCESS_KEY_ID=minioadmin -e LITESTREAM_SECRET_ACCESS_KEY=minioadmin \
+  litestream/litestream:0.5.13 replicate >/dev/null \
+  || die "could not start litestream replicate"
+echo ">> waiting for Litestream to sync the WAL to MinIO (RPO ~1s + margin)..."
+sleep 6
+docker stop sb-ls >/dev/null
+
+# Confirm replica objects landed in the bucket.
+docker run --rm --network "$PROJECT" minio/mc:latest \
   find "local/$MINIO_BUCKET" --recursive >/dev/null 2>&1 \
   || die "no replica objects in MinIO bucket — replication did not land"
 
-# Stop the backend, destroy the local volume, restore from the replica, restart.
+# 3. Destroy the local Brain File, then restore it from the replica (the exact
+#    command shape from DISASTER_RECOVERY.md step 3, #34).
 echo ">> destroying local Brain File and restoring from the replica..."
-docker compose stop backend >/dev/null
-docker volume rm second_brain_sqlite_data >/dev/null 2>&1 || true
-docker compose run --rm --no-deps -v second_brain_sqlite_data:/data \
-  litestream litestream restore -o /data/second_brain.db \
-  "s3://${MINIO_BUCKET}/second_brain.db" >/dev/null \
+docker run --rm -v "$VOL":/data alpine:3 sh -c \
+  'rm -f /data/second_brain.db /data/second_brain.db-wal /data/second_brain.db-shm' || true
+docker run --rm --network "$PROJECT" \
+  -v "$VOL":/data -v "$LSCONF":/etc/litestream.yml:ro \
+  -e LITESTREAM_ACCESS_KEY_ID=minioadmin -e LITESTREAM_SECRET_ACCESS_KEY=minioadmin \
+  litestream/litestream:0.5.13 restore -config /etc/litestream.yml /data/second_brain.db \
   || die "litestream restore from MinIO failed"
 
-docker compose up -d backend >/dev/null
-wait_http http://localhost:80/api/health || die "backend did not come back after restore"
-# The restored brain must contain the marker braindump.
-if curl -fsS http://localhost:80/api/braindumps | grep -q "$MARK"; then
-  pass "restored Brain File contains the marker braindump (replicate->restore round-trip ok)"
+# 4. The restored brain must contain the marker row.
+OUT="$(docker run --rm -v "$VOL":/data alpine:3 sh -c \
+  'apk add --no-cache sqlite >/dev/null 2>&1 && sqlite3 /data/second_brain.db "SELECT verbatim FROM braindumps"')"
+if [[ "$OUT" == *"$MARK"* ]]; then
+  pass "replicate -> restore round-trip: marker row survived (R2 stand-in via MinIO)"
 else
-  die "restored Brain File is missing the marker braindump — replica restore failed"
+  die "restored Brain File is missing the marker row — replica round-trip failed (got: $OUT)"
 fi
 
-docker compose down -v >/dev/null
 echo
 echo "replica live round-trip passed"
+
