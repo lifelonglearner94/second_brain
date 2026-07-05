@@ -14,6 +14,44 @@ at a bad time — don't improvise.
 > VPS as the sole copy. When slice #32 lands, the restore step below becomes
 > real; update this runbook then.
 
+## Current operational status
+
+> Snapshot last confirmed: 2026-07-05. The deploy pipeline is **live and
+> verified end-to-end** — a push to `main` triggers GHA (CI gate → build → GHCR
+> push → command-restricted SSH → VPS `pull && up -d`). First fully-automated
+> green run: commit `6c07f23`, GHA run `28720104235`.
+
+- **VPS**: `89.58.14.42` (Debian 13, 4 GB RAM + 4 GB swap). Stack lives at
+  `/opt/second-brain/` — `docker-compose.yml`, `deploy.sh`, `deploy.env`
+  (SHA tags, GHA-written), `infrastructure/.env` (secrets, hand-placed).
+  Health check: `curl http://89.58.14.42/api/health` →
+  `{"db":true,"ok":true,"sqlite_vec":true}`.
+- **Deploy key (manual rollback)**: `~/.ssh/sb_deploy_key` on the operator's
+  machine (private, `chmod 600`). Public half is committed at
+  `infrastructure/keys/deploy.pub` and installed on the VPS `deploy` user as a
+  *command-restricted* authorized key (no shell, no pty — can only run
+  `deploy.sh`). The only other private copy is the `SSH_DEPLOY_KEY` GitHub
+  secret (for GHA). Rollback command is in the "Rollback" section below.
+- **GHCR access**: images are pullable **anonymously** — the repo is public, so
+  GHCR packages are public by default. No PAT on the VPS, no manual visibility
+  flip was needed. (If the repo is ever taken private, the VPS will need a
+  read-only `docker login` to GHCR.)
+- **Firewall gotcha (load-bearing)**: `bootstrap.sh` applies an **INPUT-only**
+  nftables ruleset, restarts Docker *after* the flush, and orders
+  `docker.service After=nftables`. Do **not** add a `FORWARD`/`OUTPUT` flush to
+  the firewall. Docker owns the `FORWARD` chain — container published ports
+  traverse `FORWARD` after DNAT, not `INPUT`. Flushing `FORWARD` breaks
+  `docker compose up -d` with `No chain/target/match by that name`. This was a
+  real production fire on the first GHA deploy.
+- **Deferred / known gaps**:
+  - No domain or HTTPS yet → HTTP on the raw IP. WebAuthn login needs a secure
+    context, so auth is blocked until a domain + Caddy auto-HTTPS are wired
+    (swap the per-host Caddyfile in at GHA build time).
+  - No Brain Replica yet (R2/Litestream, slice #32) → see "Current replication
+    status" above; **VPS loss = total data loss today**.
+  - No ntfy Health Push yet (slice #33).
+  - `VITE_DEEPGRAM_API_KEY` unset → voice capture won't work until wired.
+
 ## Recovery procedure
 
 Assume the VPS is gone (Hetzner host failure, accidental destroy, compromise).
