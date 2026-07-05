@@ -1,0 +1,37 @@
+# Brain Replica config (ADR-0002, slice #32).
+#
+# Litestream tails the Brain File's WAL at /data/second_brain.db and streams it
+# to Cloudflare R2 (S3-compatible, zero egress), reducing the Recovery Point
+# Objective to ~1 second — the trust contract of a Second Brain forbids losing a
+# day's worth of braindumps to a VPS fire. Run by the `litestream` sidecar in
+# docker-compose.yml, which mounts this file at /etc/litestream.yml (Litestream's
+# default config path) and the `sqlite_data` named volume READ-ONLY at /data.
+#
+# Zero-Trust (ADR-0004): this file is committed and carries NO secrets. R2
+# credentials are deliberately NOT referenced here — Litestream auto-reads
+# LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY from the environment
+# (injected via env_file: infrastructure/.env in docker-compose.yml). Only the
+# [config] bucket/endpoint are ${VAR}-expanded from the same .env. If this file
+# leaked tomorrow, only the bucket *name* and *endpoint host* would be exposed —
+# never the keys. (infrastructure/test/replica.sh asserts no secret reference
+# appears here.)
+#
+# `addr: ":9090"` serves Prometheus metrics so replication health is observable
+# (ADR-0005): the Health Push (slice #33) curls /metrics from a host cron to
+# detect a stopped or erroring replica. Compose binds :9090 to 127.0.0.1 on the
+# host (loopback-only) and the nftables firewall drops :9090 externally too.
+
+addr: ":9090"
+logging:
+  level: info
+  type: text
+
+dbs:
+  - path: /data/second_brain.db        # the Brain File (DATABASE_URL, backend/Dockerfile)
+    replica:
+      type: s3
+      bucket: ${LITESTREAM_BUCKET}
+      endpoint: ${LITESTREAM_ENDPOINT}
+      path: second_brain.db            # object-key prefix inside the R2 bucket
+      region: auto                     # R2 ignores region; "auto" is its canonical value
+      sync-interval: 1s                # RPO ~1s (ADR-0002 trust contract)

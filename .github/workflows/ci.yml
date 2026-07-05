@@ -70,6 +70,7 @@ jobs:
           touch infrastructure/.env
           docker compose config >/dev/null
           bash infrastructure/test/topology.sh
+          bash infrastructure/test/replica.sh
 
   zero-trust:
     name: zero-trust (no secret baked into any Dockerfile)

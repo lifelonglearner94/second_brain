@@ -36,8 +36,11 @@ repo = sys.argv[1]
 cfg = json.loads(subprocess.check_output(
     ["docker", "compose", "config", "--format", "json"], cwd=repo, text=True))
 svc = cfg["services"]
-assert set(svc) == {"edge", "backend"}, f"expected edge+backend, got {set(svc)}"
-be, edge = svc["backend"], svc["edge"]
+# Two user-facing services (ADR-0001) + one infra sidecar: the Litestream Brain
+# Replica (ADR-0002 / #32). It tails the Brain File WAL, it is not user-facing.
+assert set(svc) == {"edge", "backend", "litestream"}, \
+    f"expected edge+backend+litestream, got {set(svc)}"
+be, edge, litestream = svc["backend"], svc["edge"], svc["litestream"]
 
 # ADR-0006: Backend internal-only — no published host ports, expose 8080.
 assert not be.get("ports"), f"backend must NOT publish ports (ADR-0006); got {be.get('ports')}"
@@ -59,16 +62,50 @@ assert "app_network" in (be.get("networks") or []), "backend must be on app_netw
 assert "app_network" in (edge.get("networks") or []), "edge must be on app_network"
 assert "app_network" in cfg.get("networks", {}), "app_network must be declared"
 
+# --- Litestream Brain Replica sidecar (ADR-0002, #32) ------------------------
+# Shares sqlite_data READ-ONLY at /data for WAL tailing (never writes the brain).
+lsvols = [v for v in litestream.get("volumes", []) if isinstance(v, dict) and v.get("target") == "/data"]
+assert lsvols, f"litestream must mount sqlite_data at /data; got {litestream.get('volumes')}"
+lm = lsvols[0]
+assert lm.get("type") == "volume" and lm.get("source") == "sqlite_data", \
+    f"litestream /data must be the sqlite_data named volume; got {lm}"
+assert lm.get("read_only") is True, f"litestream must mount sqlite_data READ-ONLY; got {lm}"
+# Litestream config mounted at the default /etc/litestream.yml (read-only).
+lscfg = [v for v in litestream.get("volumes", []) if isinstance(v, dict) and v.get("target") == "/etc/litestream.yml"]
+assert lscfg, f"litestream must mount litestream.yml at /etc/litestream.yml; got {litestream.get('volumes')}"
+assert lscfg[0].get("read_only") is True, "litestream config must be mounted read-only"
+# Metrics published on 127.0.0.1 ONLY (loopback) — never 0.0.0.0 — so the host
+# cron Health Push (#33) can curl /metrics without exposing it externally.
+lports = litestream.get("ports", [])
+assert lports, "litestream must publish :9090 (metrics) for the Health Push (#33)"
+assert any(p.get("target") == 9090 and p.get("host_ip") == "127.0.0.1" for p in lports), \
+    f"litestream :9090 must bind 127.0.0.1 only (not external); got {lports}"
+assert not any(p.get("host_ip") in (None, "0.0.0.0", "::") for p in lports), \
+    f"litestream must not publish on all interfaces; got {lports}"
+# env_file (ADR-0004): R2 creds come from infrastructure/.env, never baked in.
+def env_files(s):
+    out = []
+    for e in (s.get("env_file") or []):
+        out.append(e if isinstance(e, str) else e.get("path", ""))
+    return out
+assert "infrastructure/.env" in env_files(litestream), \
+    f"litestream must env_file infrastructure/.env (ADR-0004); got {env_files(litestream)}"
+assert "app_network" in (litestream.get("networks") or []), "litestream must be on app_network"
+assert "backend" in (litestream.get("depends_on") or []), "litestream must depend_on backend"
+
 print("ok   - backend internal-only (expose 8080, no ports) per ADR-0006")
 print("ok   - Brain File on named volume sqlite_data at /data")
-print("ok   - edge sole published :80; both on app_network")
+print("ok   - edge sole published :80; all services on app_network")
+print("ok   - litestream sidecar: sqlite_data ro, /etc/litestream.yml, :9090 loopback, env_file (ADR-0002/#32)")
 PY
 
 # --- raw YAML by grep: env_file (ADR-0004) + image-tag fallback (#31) --------
+# env_file is asserted against the raw YAML by grep (never against resolved
+# values, so no secret is ever printed). backend AND litestream both declare it.
 grep -qE '^[[:space:]]*env_file:' docker-compose.yml \
-  || die "backend must declare an env_file directive (ADR-0004)"
+  || die "a service must declare an env_file directive (ADR-0004)"
 grep -qE '^[[:space:]]*-[[:space:]]+infrastructure/\.env[[:space:]]*$' docker-compose.yml \
-  || die "backend env_file must list infrastructure/.env (ADR-0004)"
+  || die "env_file must list infrastructure/.env (ADR-0004)"
 grep -F 'second-brain-edge:${EDGE_TAG:-latest}' docker-compose.yml >/dev/null \
   || die "edge image must use \${EDGE_TAG:-latest} (ADR-0007 / #31)"
 grep -F 'second-brain-backend:${BACKEND_TAG:-latest}' docker-compose.yml >/dev/null \

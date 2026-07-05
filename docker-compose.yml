@@ -1,7 +1,9 @@
-# Two-service Compose topology (ADR-0001):
+# Two-service Compose topology (ADR-0001) + one infra sidecar:
 #   Edge    — custom Caddy image: terminates TLS, serves the baked PWA Bundle
 #             via file_server, reverse-proxies /api/* to the Backend.
 #   Backend — Rust/Axum; internal-only (ADR-0006): expose, no host ports.
+#   Litestream — Brain Replica sidecar (ADR-0002): tails the Brain File WAL on
+#             sqlite_data and streams to Cloudflare R2. Infra, not user-facing.
 #
 # The Brain File lives on the named volume `sqlite_data` mounted at /data
 # (never a bind mount, never baked into an image). Runtime secrets come from
@@ -51,6 +53,35 @@ services:
       - infrastructure/.env
     networks:
       - app_network
+    restart: unless-stopped
+
+  litestream:
+    # Brain Replica sidecar (ADR-0002, slice #32). Tails the Brain File WAL on
+    # the shared sqlite_data volume (read-only) and streams to Cloudflare R2,
+    # cutting the Recovery Point Objective to ~1 second. NOT a user-facing
+    # service — an infra sidecar alongside edge/backend. The backend already
+    # runs in WAL mode with busy_timeout=5000 (backend/src/db.rs), so Litestream's
+    # PASSIVE checkpoints do not contend with writes.
+    image: litestream/litestream:0.5.13
+    command: ["replicate"]
+    volumes:
+      # Read-only WAL tailing: Litestream only reads the Brain File + -wal/-shm.
+      - sqlite_data:/data:ro
+      - ./infrastructure/litestream.yml:/etc/litestream.yml:ro
+    env_file:
+      # R2 credentials are auto-read by Litestream from LITESTREAM_ACCESS_KEY_ID
+      # / LITESTREAM_SECRET_ACCESS_KEY in infrastructure/.env (ADR-0004). The
+      # committed litestream.yml references no secret — Zero-Trust (ADR-0004).
+      - infrastructure/.env
+    ports:
+      # Prometheus metrics for the Health Push (#33) — loopback-only so the
+      # host cron can curl /metrics without exposing it externally. The nftables
+      # firewall (bootstrap.sh) drops :9090 from outside as defense-in-depth.
+      - "127.0.0.1:9090:9090"
+    networks:
+      - app_network
+    depends_on:
+      - backend
     restart: unless-stopped
 
 networks:

@@ -15,5 +15,5 @@ target/
 *.db-wal
 
 # Env
-.env
+.env*
 !.env.example
