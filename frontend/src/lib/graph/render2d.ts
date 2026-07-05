@@ -47,7 +47,7 @@ export async function renderSpatialViewGraph2D(
 	const sigma = await factory(graph, container, {
 		labelDensity: 0.07,
 		labelGridCellSize: 60,
-		labelRenderedSizeThreshold: 6,
+		labelRenderedSizeThreshold: 3,
 		defaultEdgeColor: '#46506a',
 		defaultEdgeType: 'arrow',
 		renderEdgeLabels: true,

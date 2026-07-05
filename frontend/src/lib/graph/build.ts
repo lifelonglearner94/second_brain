@@ -34,6 +34,7 @@ export const EDGE_COLOR = '#46506a';
 
 const DEFAULT_ITERATIONS = 50;
 const DEFAULT_Z_STEP = 40;
+const NODE_RENDER_SIZE = 8;
 
 export type BuildGraphDataOptions = {
 	iterations?: number;
@@ -61,7 +62,8 @@ export function buildSpatialViewGraph(
 			label: concept.label,
 			group,
 			partition: group,
-			color: partitionColor(group)
+			color: partitionColor(group),
+			size: NODE_RENDER_SIZE
 		});
 	}
 
