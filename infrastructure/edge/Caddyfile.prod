@@ -1,0 +1,29 @@
+{
+	# Production Caddyfile (ADR-0001). The site address is a real hostname, so
+	# Caddy auto-provisions a Let's Encrypt certificate (ACME HTTP-01 on :80),
+	# serves HTTPS on :443, and redirects 80→443. Selected at image-build time
+	# via the Dockerfile's CADDYFILE build arg: CI passes CADDYFILE=Caddyfile.prod;
+	# local dev uses the default Caddyfile (:80, no TLS). The hostname below must
+	# match WEBAUTHN_RP_ID in infrastructure/.env (WebAuthn relies on the same
+	# effective domain). `admin off` keeps the Edge a Zero-Trust Image (ADR-0004):
+	# no control-plane listener.
+	admin off
+}
+
+the-second-brain-knowledge.duckdns.org {
+	# /api/* -> Backend (ADR-0006: internal-only, no host port). handle_path
+	# strips the /api prefix: the PWA calls /api/health, the Backend serves
+	# /health (routes are mounted at the Backend's root, not under /api).
+	handle_path /api/* {
+		reverse_proxy http://backend:8080
+	}
+
+	# PWA Bundle (ADR-0001): baked into the image at /srv, served by
+	# file_server. try_files falls back to /index.html for client-side
+	# routes not materialized as static files.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

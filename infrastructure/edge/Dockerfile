@@ -21,8 +21,13 @@ RUN npm run build
 # --- Edge stage --------------------------------------------------------------
 FROM caddy:2-alpine AS edge
 # The Caddyfile is configuration, not state — bake it in so the Edge remains a
-# disposable image rebuilt per deploy.
-COPY infrastructure/edge/Caddyfile /etc/caddy/Caddyfile
+# disposable image rebuilt per deploy. The CADDYFILE build arg selects which
+# Caddyfile to bake in: the default (Caddyfile) binds :80 with no TLS for local
+# dev; CI passes CADDYFILE=Caddyfile.prod to get auto-HTTPS on the real domain.
+# Zero-Trust (ADR-0004): neither Caddyfile contains a secret — the domain is
+# public config, not a credential.
+ARG CADDYFILE=Caddyfile
+COPY infrastructure/edge/${CADDYFILE} /etc/caddy/Caddyfile
 # Bake the PWA Bundle into the serve root.
 COPY --from=bundle /app/frontend/build /srv
 EXPOSE 80 443

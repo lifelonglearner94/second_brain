@@ -134,6 +134,11 @@ jobs:
           tags: ghcr.io/lifelonglearner94/second-brain-edge:${{ steps.tag.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max,scope=edge
+          # CADDYFILE=Caddyfile.prod selects the production Caddyfile with the
+          # real hostname (auto-HTTPS on :443). Local dev uses the default
+          # Caddyfile (:80, no TLS) — see infrastructure/edge/Dockerfile.
+          build-args: |
+            CADDYFILE=Caddyfile.prod
       - name: Configure SSH for the deploy key
         env:
           SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}

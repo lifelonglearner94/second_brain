@@ -1,9 +1,11 @@
 {
 	# Local-dev Caddyfile (ADR-0001). Auto-HTTPS is OFF: the site address is
 	# `:80` (no hostname), so Caddy does not attempt ACME / TLS — `docker
-	# compose up` is demoable on a laptop. On the VPS a per-host Caddyfile with
-	# auto-HTTPS is swapped in at deploy time (#31). `admin off` keeps the
-	# Edge a Zero-Trust Image (ADR-0004): no control-plane listener.
+	# compose up` is demoable on a laptop. Production uses Caddyfile.prod
+	# (a real hostname, auto-HTTPS on :443), selected at image-build time via
+	# the Dockerfile's CADDYFILE build arg — CI passes CADDYFILE=Caddyfile.prod.
+	# `admin off` keeps the Edge a Zero-Trust Image (ADR-0004): no control-plane
+	# listener.
 	admin off
 }
 

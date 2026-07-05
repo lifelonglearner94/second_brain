@@ -55,9 +55,13 @@ assert m.get("type") == "volume", f"/data must be a named volume; got type={m.ge
 assert m.get("source") == "sqlite_data", f"/data must use sqlite_data; got {m.get('source')}"
 assert "sqlite_data" in cfg.get("volumes", {}), "top-level volume sqlite_data must be declared"
 
-# Edge is the sole published port (:80); both services on one internal network.
-assert edge.get("ports"), "edge must publish :80"
+# Edge is the sole published service (:80 + :443); both services on one
+# internal network. :443 is for HTTPS (Caddy auto-HTTPS in production via
+# Caddyfile.prod; present in local dev too but unused — the local Caddyfile
+# binds :80 only).
+assert edge.get("ports"), "edge must publish :80 and :443"
 assert any(p.get("target") == 80 for p in edge["ports"]), f"edge must publish :80; got {edge['ports']}"
+assert any(p.get("target") == 443 for p in edge["ports"]), f"edge must publish :443 (HTTPS); got {edge['ports']}"
 assert "app_network" in (be.get("networks") or []), "backend must be on app_network"
 assert "app_network" in (edge.get("networks") or []), "edge must be on app_network"
 assert "app_network" in cfg.get("networks", {}), "app_network must be declared"
@@ -90,7 +94,7 @@ assert "backend" in (litestream.get("depends_on") or []), "litestream must depen
 
 print("ok   - backend internal-only (expose 8080, no ports) per ADR-0006")
 print("ok   - Brain File on named volume sqlite_data at /data")
-print("ok   - edge sole published :80; all services on app_network")
+print("ok   - edge sole published :80+:443; all services on app_network")
 print("ok   - litestream sidecar: sqlite_data ro, /etc/litestream.yml, :9090 loopback (ADR-0002/#32)")
 PY
 
@@ -113,19 +117,33 @@ DF="$REPO_ROOT/infrastructure/edge/Dockerfile"
 grep -qE '^FROM node:' "$DF" || die "Edge Dockerfile must have a Node (PWA Bundle) stage"
 grep -qE '^FROM caddy:' "$DF" || die "Edge Dockerfile must have a Caddy stage"
 grep -qE 'COPY --from=bundle' "$DF" || die "Edge Dockerfile must COPY the PWA Bundle from the build stage"
+grep -q 'ARG CADDYFILE=Caddyfile' "$DF" \
+  || die "Edge Dockerfile must ARG CADDYFILE=Caddyfile (local-dev default, CI overrides with Caddyfile.prod)"
+grep -q 'COPY infrastructure/edge/${CADDYFILE}' "$DF" \
+  || die "Edge Dockerfile must COPY \${CADDYFILE} (build arg selects which Caddyfile is baked in)"
 if grep -iEn '\.env|COPY[^E]*[Ss]ecret|ENV.*[A-Z0-9_]*(KEY|SECRET|TOKEN|PASSWORD)|ARG.*[A-Z0-9_]*(KEY|SECRET|TOKEN|PASSWORD)' "$DF"; then
   die "Edge Dockerfile bakes a secret — Zero-Trust Image violation (ADR-0004)"
 fi
-pass "Edge Dockerfile: multi-stage, PWA Bundle baked in, Zero-Trust (no secrets)"
+pass "Edge Dockerfile: multi-stage, PWA Bundle baked in, CADDYFILE build arg, Zero-Trust (no secrets)"
 
-# --- Caddyfile: :80 (auto-HTTPS off), /api/* -> backend, file_server --------
+# --- Caddyfiles: local-dev :80 + production hostname (auto-HTTPS) ------------
 CF="$REPO_ROOT/infrastructure/edge/Caddyfile"
-[[ -f "$CF" ]] || die "missing $CF"
+[[ -f "$CF" ]] || die "missing $CF (local-dev Caddyfile)"
 grep -qE '^:80\b' "$CF" || die "Caddyfile must bind :80 (auto-HTTPS off for local dev)"
 grep -qE 'handle_path[[:space:]]+/api/\*' "$CF" || die "Caddyfile must handle_path /api/* (strip prefix)"
 grep -q 'http://backend:8080' "$CF" || die "Caddyfile must reverse_proxy http://backend:8080 (ADR-0006)"
 grep -q 'file_server' "$CF" || die "Caddyfile must serve the PWA Bundle via file_server"
-pass "Caddyfile: :80, handle_path /api/* -> http://backend:8080, file_server"
+pass "Caddyfile (local-dev): :80, handle_path /api/* -> http://backend:8080, file_server"
+
+CFP="$REPO_ROOT/infrastructure/edge/Caddyfile.prod"
+[[ -f "$CFP" ]] || die "missing $CFP (production Caddyfile with auto-HTTPS)"
+# Production Caddyfile must use a hostname (not :80) so Caddy auto-provisions
+# a Let's Encrypt cert and serves HTTPS on :443 with an 80→443 redirect.
+! grep -qE '^:80\b' "$CFP" || die "Caddyfile.prod must use a hostname (not :80) for auto-HTTPS"
+grep -qE 'handle_path[[:space:]]+/api/\*' "$CFP" || die "Caddyfile.prod must handle_path /api/* (strip prefix)"
+grep -q 'http://backend:8080' "$CFP" || die "Caddyfile.prod must reverse_proxy http://backend:8080 (ADR-0006)"
+grep -q 'file_server' "$CFP" || die "Caddyfile.prod must serve the PWA Bundle via file_server"
+pass "Caddyfile.prod (production): hostname, handle_path /api/* -> http://backend:8080, file_server"
 
 if [[ $LIVE -eq 0 ]]; then
   echo

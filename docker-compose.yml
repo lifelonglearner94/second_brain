@@ -26,6 +26,10 @@ services:
       dockerfile: infrastructure/edge/Dockerfile
     ports:
       - "80:80"
+      # 443 for HTTPS (Caddy auto-HTTPS in production via Caddyfile.prod; unused
+      # in local dev where Caddyfile binds :80 only). The firewall in
+      # bootstrap.sh already allows 443.
+      - "443:443"
     networks:
       - app_network
     depends_on:
