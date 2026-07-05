@@ -4,7 +4,7 @@
 # A host cron (NOT a container) fires this script at a sensible interval. It
 # checks the two failure classes a pull model cannot catch:
 #   1. Brain Replica lag  — Litestream replication stopped or erroring (silent
-#      drift: the user only discovers a stale replica by opening the admin tab,
+#      drift: the user only discovers a stale Brain Replica by opening the admin tab,
 #      by which point the ADR-0002 trust contract is already broken).
 #   2. Brain File volume  — sqlite_data nearing capacity (about to fill).
 # On a breach it pushes to the ntfy.sh webhook so the alert finds the user, not
@@ -84,13 +84,19 @@ push_ntfy() {
     printf '[%s] %s | %s\n' "$(date -u +%FT%TZ)" "$title" "$body" >> "$SB_MOCK_NTFY_FILE"
     return 0
   fi
-  [[ -n "${NTFY_WEBHOOK_URL:-}" ]] || {
+  # cron redirects stdout+stderr to /dev/null, so a failed push would be silent.
+  # Surface it to syslog so the operator can find it: journalctl -t second-brain-health-push
+  if [[ -z "${NTFY_WEBHOOK_URL:-}" ]]; then
     echo "health-push: NTFY_WEBHOOK_URL unset — cannot push alert: $body" >&2
+    logger -t second-brain-health-push "NTFY_WEBHOOK_URL unset — alert NOT pushed: $body" 2>/dev/null || true
     return 1
-  }
-  curl -fsS --max-time 10 \
-    -H "Title: $title" -H "Tags: warning" -H "Priority: high" \
-    -d "$body" "$NTFY_WEBHOOK_URL"
+  fi
+  if ! curl -fsS --max-time 10 \
+      -H "Title: $title" -H "Tags: warning" -H "Priority: high" \
+      -d "$body" "$NTFY_WEBHOOK_URL"; then
+    logger -t second-brain-health-push "ntfy push failed — alert NOT delivered: $body" 2>/dev/null || true
+    return 1
+  fi
 }
 
 # --- state (carries last error count + alert timestamps across cron runs) -----
@@ -147,7 +153,7 @@ run_check() {
     # stopped => lag = infinity. This is the primary survival signal.
     WAS_DOWN=1
     if (( now - LAST_ALERT_DOWN >= ALERT_COOLDOWN_SECS )); then
-      messages+=("Litestream replication DOWN — metrics endpoint $LITESTREAM_METRICS_URL unreachable; the replica is NOT being updated")
+      messages+=("Litestream replication DOWN — metrics endpoint $LITESTREAM_METRICS_URL unreachable; the Brain Replica is NOT being updated")
       LAST_ALERT_DOWN="$now"
     fi
   fi

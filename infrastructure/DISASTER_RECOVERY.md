@@ -15,8 +15,9 @@ at a bad time — don't improvise.
 > the volume nears capacity — the alert finds the operator, not the reverse.
 > Both ship in the next deploy to `main` (GHA build -> GHCR -> VPS pull); until
 > that deploy lands on the VPS, treat the VPS as the sole copy. The restore
-> step below is real and matches `infrastructure/test/replica.sh --live` (a
-> local MinIO round-trip that exercises the same replicate -> restore path).
+> step below is real; `infrastructure/test/replica.sh --live` exercises the same
+> command shape against a local MinIO stand-in for R2 (not real R2 — see
+> "Testing this procedure" for the periodic throwaway-VPS re-exercise).
 
 ## Current operational status
 

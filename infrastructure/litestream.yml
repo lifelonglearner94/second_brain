@@ -18,7 +18,7 @@
 #
 # `addr: ":9090"` serves Prometheus metrics so replication health is observable
 # (ADR-0005): the Health Push (slice #33) curls /metrics from a host cron to
-# detect a stopped or erroring replica. Compose binds :9090 to 127.0.0.1 on the
+# detect a stopped or erroring Brain Replica. Compose binds :9090 to 127.0.0.1 on the
 # host (loopback-only) and the nftables firewall drops :9090 externally too.
 
 addr: ":9090"
