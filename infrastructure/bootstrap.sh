@@ -10,7 +10,10 @@
 #
 # Handles everything reproducible: swap, Docker, nftables firewall, the deploy
 # user + command-restricted key, the stack files (docker-compose.yml,
-# litestream.yml, deploy.sh), and the ntfy Health Push cron (ADR-0005, #33).
+# litestream.yml, deploy.sh, health-push.sh), and the ntfy Health Push cron
+# (ADR-0005, #33). deploy.sh re-syncs the three non-secret config files
+# (docker-compose.yml, litestream.yml, health-push.sh) from the public repo on
+# every deploy (ADR-0010); bootstrap installs them once to bootstrap the sync.
 # Does NOT handle secrets — .env (R2 creds + NTFY_WEBHOOK_URL + Gemini key) is
 # placed manually (ADR-0004). The Brain Replica itself runs as the litestream
 # sidecar in docker-compose.yml; bootstrap only installs its config file.
@@ -111,17 +114,31 @@ fi
 getent group docker >/dev/null 2>&1 && usermod -aG docker "$DEPLOY_USER"
 
 # --- 5. Install dir + stack files --------------------------------------------
+# Ownership split (ADR-0010): the three sync-eligible config files are owned by
+# $DEPLOY_USER so deploy.sh (which runs as $DEPLOY_USER via the forced command)
+# can `cp` over them in place on every deploy. deploy.sh ITSELF stays root-owned
+# and $INSTALL_DIR stays root-owned — so the deploy key (no shell, forced
+# command) cannot create new files in $INSTALL_DIR and cannot replace the
+# deploy.sh gate that validates its input. Overwriting an existing file you own
+# needs write perm on the FILE only (not the dir), so deploy can update these
+# deploy-owned files but not delete/rename them or touch deploy.sh.
 echo ">>> installing stack files to $INSTALL_DIR"
 install -d -o root          -g root          -m 755 "$INSTALL_DIR"
 install -d -o "$DEPLOY_USER" -g "$DEPLOY_USER" -m 700 "$INSTALL_DIR/infrastructure"
-install -m 644 -o root -g root "$REPO_ROOT/docker-compose.yml"        "$INSTALL_DIR/docker-compose.yml"
-install -m 755 -o root -g root "$REPO_ROOT/infrastructure/deploy.sh"  "$INSTALL_DIR/deploy.sh"
+# Sync-eligible (deploy-owned): deploy.sh overwrites these from the public repo
+# at the deployed SHA on every deploy (ADR-0010).
+install -m 644 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$REPO_ROOT/docker-compose.yml"        "$INSTALL_DIR/docker-compose.yml"
 # Brain Replica config (ADR-0002, #32): mounted read-only by the litestream
 # sidecar via docker-compose's ./infrastructure/litestream.yml bind mount.
-install -m 644 -o root -g root "$REPO_ROOT/infrastructure/litestream.yml" "$INSTALL_DIR/infrastructure/litestream.yml"
+install -m 644 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$REPO_ROOT/infrastructure/litestream.yml" "$INSTALL_DIR/infrastructure/litestream.yml"
 # Health Push script (ADR-0005, #33): run by the /etc/cron.d entry below; reads
 # NTFY_WEBHOOK_URL from the manually-placed infrastructure/.env (ADR-0004).
-install -m 755 -o root -g root "$REPO_ROOT/infrastructure/health-push.sh" "$INSTALL_DIR/infrastructure/health-push.sh"
+install -m 755 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$REPO_ROOT/infrastructure/health-push.sh" "$INSTALL_DIR/infrastructure/health-push.sh"
+# The gate: root-owned, NOT deploy-writable. deploy.sh validates stdin against
+# the ADR-0007 whitelist before writing anything — if deploy could replace it,
+# a leaked key could neuter the validation. Updated manually like .env (one-time
+# scp), not via the sync it gates.
+install -m 755 -o root -g root "$REPO_ROOT/infrastructure/deploy.sh"  "$INSTALL_DIR/deploy.sh"
 touch "$INSTALL_DIR/deploy.log"
 chown "$DEPLOY_USER":"$DEPLOY_USER" "$INSTALL_DIR/deploy.log"
 chmod 644 "$INSTALL_DIR/deploy.log"

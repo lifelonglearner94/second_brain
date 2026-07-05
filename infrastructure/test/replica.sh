@@ -83,14 +83,32 @@ assert rw and rw[0].get("read_only") is not True and rw[0].get("source") == "sql
 ports = ls.get("ports", [])
 assert any(p.get("target") == 9090 and p.get("host_ip") == "127.0.0.1" for p in ports), \
     f"litestream :9090 must bind 127.0.0.1 only; got {ports}"
-# No secret in the image's environment — only env_file (ADR-0004). A literal
-# LITESTREAM_* key=value in `environment:` would be a baked secret.
-env = ls.get("environment") or {}
-bad = [k for k in env if "LITESTREAM" in k.upper() or "SECRET" in k.upper() or "ACCESS_KEY" in k.upper()]
-assert not bad, f"litestream environment bakes a secret ({bad}); use env_file only (ADR-0004)"
-print("ok   - compose litestream: upstream pinned image, sqlite_data rw, :9090 loopback, no baked secret")
+# No secret in the image's environment — checked against the RAW yaml below (not
+# the resolved `docker compose config`, which folds env_file keys into
+# `environment` and would false-positive on any dev machine whose .env carries
+# the real LITESTREAM_* keys). A literal `environment:` block on the litestream
+# service is the only way a secret could be baked; env_file is the sole allowed
+# channel (ADR-0004).
+print("ok   - compose litestream: upstream pinned image, sqlite_data rw, :9090 loopback")
 PY
 pass "Brain Replica structural shape (ADR-0002 / #32)"
+
+# No literal `environment:` block on the litestream service (ADR-0004) — checked
+# against the RAW docker-compose.yml so a real .env on the dev machine (whose
+# LITESTREAM_* keys `docker compose config` would merge into `environment`) does
+# not false-positive. env_file is the only allowed secret channel. awk exits 0
+# (failure) iff an `environment:` line appears inside the litestream service block.
+if awk '
+  /^  litestream:/                              { in_ls=1 }
+  in_ls && /^  [a-z]/ && !/^  litestream:/      { in_ls=0 }
+  in_ls && /^[a-z]/                             { in_ls=0 }
+  in_ls && /^[[:space:]]+environment:/          { found=1 }
+  END { exit found ? 0 : 1 }
+' "$REPO_ROOT/docker-compose.yml"; then
+  die "litestream must NOT declare an environment: block — use env_file only (ADR-0004); a literal LITESTREAM_* there would be a baked secret"
+else
+  pass "litestream: no literal environment: block (env_file only, ADR-0004) — raw-yaml check, no .env false-positive"
+fi
 
 if [[ $LIVE -eq 0 ]]; then
   echo

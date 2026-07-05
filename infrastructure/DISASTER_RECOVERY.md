@@ -29,7 +29,11 @@ at a bad time — don't improvise.
 - **VPS**: `89.58.14.42` (Debian 13, 4 GB RAM + 4 GB swap). Stack lives at
   `/opt/second-brain/` — `docker-compose.yml`, `deploy.sh`, `deploy.env`
   (SHA tags, GHA-written), `infrastructure/.env` (secrets, hand-placed).
-  Health check: `curl http://89.58.14.42/api/health` →
+  `deploy.sh` re-syncs `docker-compose.yml` + `infrastructure/litestream.yml` +
+  `infrastructure/health-push.sh` from the public repo at the deployed SHA on
+  every deploy (ADR-0010), so the running config always matches the images;
+  `deploy.sh` itself is root-owned and updated manually. Health check:
+  `curl http://89.58.14.42/api/health` →
   `{"db":true,"ok":true,"sqlite_vec":true}`.
 - **Deploy key (manual rollback)**: `~/.ssh/sb_deploy_key` on the operator's
   machine (private, `chmod 600`). Public half is committed at
@@ -78,7 +82,10 @@ key-only), lays down `/opt/second-brain/{docker-compose.yml,deploy.sh,
 infrastructure/litestream.yml,infrastructure/health-push.sh}`, installs the
 command-restricted deploy key from `infrastructure/keys/deploy.pub`, and places
 the ntfy Health Push cron at `/etc/cron.d/second-brain-health-push` (every 5 min
-— alerting once `NTFY_WEBHOOK_URL` is in `.env`).
+— alerting once `NTFY_WEBHOOK_URL` is in `.env`). The three config files
+(docker-compose.yml, litestream.yml, health-push.sh) are installed deploy-owned
+so `deploy.sh` can overwrite them on every deploy; `deploy.sh` itself is
+root-owned and is updated manually like `.env` (ADR-0010).
 
 ### 2. Place the runtime secrets manually (ADR-0004)
 
@@ -150,7 +157,10 @@ printf 'REGISTRY=ghcr.io/lifelonglearner94/\nEDGE_TAG=sha-<good>\nBACKEND_TAG=sh
 ```
 
 The previous image is cached on the VPS; `pull` is a no-op and `up -d` reverts.
-Find prior SHAs in the GHCR package history or the Actions deploy logs.
+`deploy.sh` also re-syncs the infra config from the repo at that SHA (ADR-0010),
+so a rollback now reverts BOTH the images AND the compose/litestream/health-push
+config to the known-good commit — not just the images. Find prior SHAs in the
+GHCR package history or the Actions deploy logs.
 
 ## Testing this procedure
 

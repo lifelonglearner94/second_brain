@@ -71,7 +71,9 @@ jobs:
           docker compose config >/dev/null
           bash infrastructure/test/topology.sh
           bash infrastructure/test/replica.sh
+          bash infrastructure/test/deploy.sh
           bash infrastructure/health-push.sh --self-test
+          bash infrastructure/deploy.sh --self-test
 
   zero-trust:
     name: zero-trust (no secret baked into any Dockerfile)
@@ -89,14 +91,17 @@ jobs:
       - name: self-test (planted secret fails · .env.example legend · real Dockerfiles pass)
         run: bash infrastructure/test/zero-trust.sh --self-test
 
-  # --- deploy (ADR-0003 / ADR-0007) ------------------------------------------
+  # --- deploy (ADR-0003 / ADR-0007 / ADR-0010) --------------------------------
   # Runs only on push to main, after all CI jobs pass. Builds the two Zero-Trust
   # images on the GHA runner (a Rust release build spikes >2GB RAM and would
   # OOM the running brain if built on the VPS — ADR-0003), pushes them to GHCR
   # tagged by commit SHA, then SSHes into the VPS with the command-restricted
-  # deploy key. The VPS only ever executes `docker compose pull && up -d`.
-  # GHA writes only non-secret Deploy State (deploy.env: SHA tags + REGISTRY);
-  # runtime secrets (.env) are placed manually and never touched by CI (ADR-0004).
+  # deploy key. The VPS only ever executes deploy.sh, which writes deploy.env
+  # (SHA tags, ADR-0007), syncs the non-secret infra config from the PUBLIC repo
+  # at that SHA (ADR-0010 — so the running config always matches the images;
+  # fetch-not-pipe keeps a leaked key replay-only), then `pull && up -d`.
+  # GHA writes only non-secret Deploy State (deploy.env); runtime secrets (.env)
+  # are placed manually and never touched by CI (ADR-0004).
   deploy:
     name: deploy (build → GHCR → VPS pull)
     needs: [backend, frontend, compose, zero-trust]
@@ -147,8 +152,11 @@ jobs:
           printf '%s\n' "$SSH_DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H 89.58.14.42 >> ~/.ssh/known_hosts 2>/dev/null
-      - name: Write deploy.env to VPS and pull + up (command-restricted SSH)
+      - name: Pipe deploy.env to VPS (deploy.sh syncs config + pull + up)
         run: |
+          # deploy.env over stdin; deploy.sh fetches docker-compose.yml +
+          # litestream.yml + health-push.sh from this repo at $GITHUB_SHA itself
+          # (ADR-0010), so no config is piped — only the SHA tags.
           printf 'REGISTRY=ghcr.io/lifelonglearner94/\nEDGE_TAG=%s\nBACKEND_TAG=%s\n' \
             "${{ steps.tag.outputs.sha }}" "${{ steps.tag.outputs.sha }}" \
             | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes deploy@89.58.14.42
