@@ -4,7 +4,7 @@ A single-user, voice-first **Progressive Web App** that turns your stream of tho
 
 Speak or type a thought (a *braindump*); a hosted LLM extracts *concepts* and typed *edges* out of it, the graph accretes over time, and you navigate it as an interactive 3D/2D force-directed visualization or query it through grounded, cited chat. The graph is load-bearing; vectors are seed and backfill. Nothing the LLM deduces enters the graph silently — every inference is a human-gated proposal.
 
-> **Personal-Scale, Single-User.** One brain, one user, one 8 GB Hetzner VPS. The entire persistent state of the system is a single SQLite file — the **Brain File** — streamed second-by-second to offsite object storage. The architecture is deliberately sized to one human's decade of thinking, not to a fleet.
+> **Personal-Scale, Single-User.** One brain, one user, one 8 GB VPS. The entire persistent state of the system is a single SQLite file — the **Brain File** — streamed second-by-second to offsite object storage. The architecture is deliberately sized to one human's decade of thinking, not to a fleet.
 
 ---
 
@@ -17,7 +17,7 @@ Speak or type a thought (a *braindump*); a hosted LLM extracts *concepts* and ty
 | **AI** | Hosted **Gemini** for LLM (clean / extract / synthesize) and embeddings — no self-hosted models. One `Llm` trait seam; `FakeLlm` stands in for dev/CI |
 | **Infra** | Docker Compose: **Edge** (custom Caddy image: TLS, baked PWA, `/api` reverse-proxy) + **Backend** (Rust) + **Litestream** sidecar (WAL → Cloudflare R2) |
 | **CI/CD** | GitHub Actions → build on runners → push to GHCR → VPS pulls via command-restricted SSH key. SHA-pinned image tags, 30-second rollback |
-| **VPS** | Single Hetzner Debian box (4 GB RAM + 4 GB swap); nftables firewall; host-cron Health Push to ntfy |
+| **VPS** | Single Debian box (4 GB RAM + 4 GB swap); nftables firewall; host-cron Health Push to ntfy |
 
 ---
 
@@ -25,7 +25,7 @@ Speak or type a thought (a *braindump*); a hosted LLM extracts *concepts* and ty
 
 ```
                         ┌──────────────────────────────────────────────┐
-                        │                   VPS (Hetzner)              │
+                        │                     VPS                      │
    browser (PWA) ──HTTPS──▶  Edge (Caddy)  ──/api/*──▶  Backend (Axum)  │
    voice · graph · chat     · TLS + file_server     · Rust orchestrator │
                             · baked PWA Bundle      · petgraph + SQLite │
@@ -126,7 +126,7 @@ A deliberately **dumb service worker** caches only the app shell and never inter
 
 ## Infrastructure — deployment & runtime topology
 
-`infrastructure/` + root `docker-compose.yml` — a **two-service + one-sidecar** Compose topology on a single Hetzner VPS ([infra ADR-0001][in-0001]).
+`infrastructure/` + root `docker-compose.yml` — a **two-service + one-sidecar** Compose topology on a single VPS ([infra ADR-0001][in-0001]).
 
 | Service | Role |
 |---|---|
