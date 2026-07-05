@@ -150,7 +150,7 @@
 				.height(graphContainer.clientHeight)
 				.backgroundColor('#0b0d12')
 				.graphData(data)
-				.nodeRelSize(2.5)
+				.nodeRelSize(7)
 				.nodeOpacity(0.95)
 				.nodeColor((n) => (n.id === selectedNodeId ? HIGHLIGHT : n.color))
 				.nodeLabel((n) => n.label)
