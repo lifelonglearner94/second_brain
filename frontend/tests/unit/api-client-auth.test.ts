@@ -58,14 +58,16 @@ describe('apiClient — passkey auth surface against backend #2', () => {
 	});
 
 	it('POST /auth/register/begin returns the creation challenge + opaque state token', async () => {
-		fetchMock.mockResolvedValue(okResponse({ challenge: CREATION_OPTIONS, state: 'state-1' }));
+		fetchMock.mockResolvedValue(
+			okResponse({ challenge: { publicKey: CREATION_OPTIONS }, state: 'state-1' })
+		);
 		const api = createApiClient({ fetch: fetchMock });
 		const begin = await api.registerBegin();
 		const [url, init] = fetchMock.mock.calls[0];
 		expect(url).toBe('/api/auth/register/begin');
 		expect(init?.method).toBe('POST');
 		expect(init?.credentials).toBe('include');
-		expect(begin).toEqual({ challenge: CREATION_OPTIONS, state: 'state-1' });
+		expect(begin).toEqual({ challenge: { publicKey: CREATION_OPTIONS }, state: 'state-1' });
 	});
 
 	it('POST /auth/register/finish posts the credential + state as JSON', async () => {
@@ -85,11 +87,13 @@ describe('apiClient — passkey auth surface against backend #2', () => {
 	});
 
 	it('POST /auth/login/begin returns the request challenge + opaque state token', async () => {
-		fetchMock.mockResolvedValue(okResponse({ challenge: REQUEST_OPTIONS, state: 'state-2' }));
+		fetchMock.mockResolvedValue(
+			okResponse({ challenge: { publicKey: REQUEST_OPTIONS }, state: 'state-2' })
+		);
 		const api = createApiClient({ fetch: fetchMock });
 		const begin = await api.loginBegin();
 		expect(fetchMock.mock.calls[0][0]).toBe('/api/auth/login/begin');
-		expect(begin).toEqual({ challenge: REQUEST_OPTIONS, state: 'state-2' });
+		expect(begin).toEqual({ challenge: { publicKey: REQUEST_OPTIONS }, state: 'state-2' });
 	});
 
 	it('POST /auth/login/finish posts the assertion + state and returns user_id', async () => {

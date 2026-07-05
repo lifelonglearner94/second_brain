@@ -68,8 +68,11 @@ function flowApiStub() {
 	};
 }
 
-const REGISTRATION_BEGIN: RegistrationBegin = { challenge: CREATION_OPTIONS, state: 'state-1' };
-const LOGIN_BEGIN: LoginBegin = { challenge: REQUEST_OPTIONS, state: 'state-2' };
+const REGISTRATION_BEGIN: RegistrationBegin = {
+	challenge: { publicKey: CREATION_OPTIONS },
+	state: 'state-1'
+};
+const LOGIN_BEGIN: LoginBegin = { challenge: { publicKey: REQUEST_OPTIONS }, state: 'state-2' };
 const REGISTRATION_FINISH_OK = { registered: true } as const;
 const LOGIN_OK: LoginOk = { user_id: '00000000-0000-0000-0000-000000000001' };
 const RECOVER_RES: RecoverResponse = {

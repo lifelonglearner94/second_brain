@@ -25,13 +25,13 @@ export type RecoverApi = {
 
 export async function registerPasskey(api: RegisterApi): Promise<void> {
 	const begin = await api.registerBegin();
-	const credential = await startRegistration({ optionsJSON: begin.challenge });
+	const credential = await startRegistration({ optionsJSON: begin.challenge.publicKey });
 	await api.registerFinish({ credential, state: begin.state });
 }
 
 export async function loginPasskey(api: LoginApi): Promise<LoginOk> {
 	const begin = await api.loginBegin();
-	const credential = await startAuthentication({ optionsJSON: begin.challenge });
+	const credential = await startAuthentication({ optionsJSON: begin.challenge.publicKey });
 	return api.loginFinish({ credential, state: begin.state });
 }
 
