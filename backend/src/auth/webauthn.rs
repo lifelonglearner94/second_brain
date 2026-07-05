@@ -9,12 +9,19 @@
 //! opaque, single-use token the client echoes back. Personal-scale, single
 //! user: a process-local map is the right shape. If the server restarts mid
 //! flow the user simply re-starts — no session is poisoned.
+//!
+//! Registration is gated by a deploy-time singleton lock (issue #2): once one
+//! passkey exists, registration is closed. Enforced at `register_begin`
+//! (best-effort, so a second caller gets a clean 409 before the WebAuthn
+//! dance) and authoritatively inside `store_first_passkey` — count + insert
+//! share one `db.run` closure, so under the single-connection mutex the gate
+//! is race-proof even if two begins both succeed before either finish lands.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use webauthn_rs::prelude::{
     Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential,
     RegisterPublicKeyCredential, Url, Uuid, Webauthn, WebauthnBuilder,
@@ -178,7 +185,21 @@ impl AuthService {
         SINGLE_USER_ID
     }
 
-    pub async fn register_begin(&self) -> Result<RegistrationBegin> {
+    pub async fn register_begin(&self, db: &Db) -> Result<RegistrationBegin> {
+        // Deploy-time singleton lock — best-effort check at begin so a second
+        // caller gets a clean 409 before the WebAuthn dance. The authoritative,
+        // race-proof gate lives in `store_first_passkey` (count + insert under
+        // one DB-closure hold); this one only closes the door early for UX.
+        let count = {
+            let user_id = SINGLE_USER_ID.to_string();
+            db.run(move |conn| count_passkeys_sync(conn, &user_id))
+                .await?
+        };
+        if count > 0 {
+            return Err(Error::Conflict(
+                "registration is closed: a passkey already exists".into(),
+            ));
+        }
         let user_unique_id = Uuid::parse_str(SINGLE_USER_ID)
             .map_err(|e| Error::Internal(format!("bad SINGLE_USER_ID: {e}")))?;
         // Show no already-registered credentials to exclude — we want each
@@ -204,7 +225,7 @@ impl AuthService {
         // park on the calling task. It's not Send in a way that needs
         // spawn_blocking — it's pure computation on already-received data.
         let passkey = webauthn.finish_passkey_registration(&body.credential, &state)?;
-        store_passkey(db, SINGLE_USER_ID, &passkey).await
+        store_first_passkey(db, SINGLE_USER_ID, &passkey).await
     }
 
     pub async fn login_begin(&self, db: &Db) -> Result<LoginBegin> {
@@ -236,11 +257,54 @@ impl AuthService {
     }
 }
 
-/// Persist a freshly-registered passkey keyed by `cred_id`. The begin/finish
-/// state token is single-use, so a double-finish can't reach here from the
-/// normal flow; the `ON CONFLICT DO UPDATE` makes a stray re-store (e.g. a
-/// counter update on re-auth) idempotent rather than erroring.
-async fn store_passkey(db: &Db, user_id: &str, passkey: &Passkey) -> Result<()> {
+/// Count registered passkeys for `user_id`. Drives the deploy-time singleton
+/// lock (issue #2): once a passkey exists, registration is closed. Synchronous
+/// so it can be folded into a `db.run` closure alongside the insert — the
+/// single-connection mutex makes the count + insert atomic w.r.t. other
+/// `db.run` calls, which is what makes the lock race-proof.
+fn count_passkeys_sync(conn: &Connection, user_id: &str) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM passkeys WHERE user_id = ?1",
+        params![user_id],
+        |row| row.get(0),
+    )?)
+}
+
+/// Persist the first registered passkey, gated by the singleton lock. The
+/// count check and the insert share one `db.run` closure so no second
+/// `register_finish` can slip between them — the authoritative gate, as
+/// opposed to the best-effort check in [`AuthService::register_begin`]. A
+/// plain `INSERT` (no `ON CONFLICT`) is correct here: count == 0 means the
+/// cred_id cannot already exist. Used only by `register_finish`; counter
+/// updates on re-auth go through [`upsert_passkey`].
+async fn store_first_passkey(db: &Db, user_id: &str, passkey: &Passkey) -> Result<()> {
+    let cred_id = passkey.cred_id().to_vec();
+    let passkey_json = serde_json::to_string(passkey)
+        .map_err(|e| Error::Internal(format!("passkey serialization: {e}")))?;
+    let user_id = user_id.to_string();
+    db.run(move |conn| {
+        if count_passkeys_sync(conn, &user_id)? > 0 {
+            return Err(Error::Conflict(
+                "registration is closed: a passkey already exists".into(),
+            ));
+        }
+        conn.execute(
+            "INSERT INTO passkeys (cred_id, user_id, passkey_json, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![cred_id, user_id, passkey_json, now_seconds()],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+/// Re-persist a passkey after its counter advanced on re-auth (the cloned-
+/// credential defence in [`update_passkey_counter`]). An upsert, not a first
+/// insert: the cred_id already exists, so `ON CONFLICT … DO UPDATE` refreshes
+/// the JSON. Deliberately does **not** re-check the singleton lock — the
+/// credential is already registered; this is a counter refresh, not a new
+/// registration.
+async fn upsert_passkey(db: &Db, user_id: &str, passkey: &Passkey) -> Result<()> {
     let cred_id = passkey.cred_id().to_vec();
     let passkey_json = serde_json::to_string(passkey)
         .map_err(|e| Error::Internal(format!("passkey serialization: {e}")))?;
@@ -304,7 +368,7 @@ async fn update_passkey_counter(
     for mut pk in passkeys {
         if let Some(changed) = pk.update_credential(result) {
             if changed {
-                store_passkey(db, user_id, &pk).await?;
+                upsert_passkey(db, user_id, &pk).await?;
             } else {
                 tracing::warn!(
                     cred_id = ?pk.cred_id(),
