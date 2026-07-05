@@ -9,6 +9,7 @@ use second_brain_backend::{
     config::{Config, LogFormat},
     db::Db,
     gemini::GeminiClient,
+    graph_repo::{GraphRepo, SqliteGraphRepo},
     llm::{FakeLlm, Llm},
     logs::LogBuffer,
     ontology::RefactorRunner,
@@ -64,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(count = seeded, "seeded type embeddings for ontology dedup");
     }
 
+    let graph_repo: Arc<dyn GraphRepo> = Arc::new(SqliteGraphRepo::new(db.clone()));
     let state = AppState {
         db,
         config: Arc::new(config.clone()),
@@ -71,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
         auth: auth::AuthService::new(webauthn),
         log_buffer,
         refactor_runner: RefactorRunner::new(),
+        graph_repo,
     };
     let app = routes::router(state);
 

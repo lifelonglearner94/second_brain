@@ -169,7 +169,9 @@ mod tests {
     use super::*;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph;
+    use crate::graph_repo::{GraphRepo, SqliteGraphRepo};
     use crate::llm::Llm;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn insert_then_get_returns_stored_braindump() {
@@ -332,10 +334,12 @@ mod tests {
             1,
             "type history seeded at index 0 (ADR-0003)"
         );
+        // The braindump-embedding check goes through the GraphRepo seam
+        // (issue #44) rather than the direct DB closure call, proving the
+        // adapter is reachable from a cross-module caller.
+        let repo: Arc<dyn GraphRepo> = Arc::new(SqliteGraphRepo::new(db.clone()));
         assert!(
-            graph::braindump_embedding_stored(&db, braindump.id)
-                .await
-                .unwrap(),
+            repo.braindump_embedding_stored(braindump.id).await.unwrap(),
             "braindump embedding stored (retrieval backfill)"
         );
     }

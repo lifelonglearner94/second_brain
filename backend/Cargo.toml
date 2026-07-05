@@ -42,6 +42,13 @@ http-body-util = "0.1"
 tower = { version = "0.5", default-features = false, features = ["util"] }
 webauthn-authenticator-rs = { version = "0.5", features = ["softpasskey"] }
 
+[features]
+# Enables the in-memory graph-repo adapter so integration-test crates under
+# `backend/tests/` can exercise the seam without SQLite. The lib's own
+# `#[cfg(test)]` unit tests get the adapter for free; this feature is for the
+# separate test crates that opt in.
+test-support = []
+
 [profile.release]
 lto = "thin"
 strip = true

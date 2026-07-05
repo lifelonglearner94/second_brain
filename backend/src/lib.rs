@@ -16,6 +16,7 @@ pub mod error;
 pub mod extractor;
 pub mod gemini;
 pub mod graph;
+pub mod graph_repo;
 pub mod llm;
 pub mod logs;
 pub mod ontology;
