@@ -23,11 +23,9 @@
 
 use std::sync::Arc;
 
-use rusqlite::params;
-
 use crate::db::Db;
 use crate::error::{Error, Result};
-use crate::graph_repo::{vec_to_blob, GraphRepo, SqliteGraphRepo};
+use crate::graph_repo::{GraphRepo, SqliteGraphRepo};
 use crate::llm::Llm;
 
 /// Cosine similarity at or above which a proposed type is deemed a 1:1
@@ -283,48 +281,20 @@ pub async fn ontology_types(db: &Db) -> Result<Vec<(String, String, String)>> {
 /// startup so the seeded day-zero vocabulary has embeddings for dedup before
 /// the first proposal arrives.
 ///
-/// Stays as direct SQL — it is a startup seed, not a governance operation;
-/// the trait owns governance writes (propose/approve/reject/refactor), not
-/// the one-off embedding backfill at boot.
+/// Delegates the DB reads/writes to [`GraphRepo::missing_type_rows`] +
+/// [`GraphRepo::store_type_embedding`] (issue #48); the LLM embedding
+/// computation runs here (same pattern as `ingest_extraction`: LLM in the
+/// wrapper, trait is pure-DB).
 pub async fn seed_type_embeddings(db: &Db, llm: &dyn Llm) -> Result<usize> {
-    // Load all (id, slug, label, description) for types missing an embedding.
-    let missing: Vec<(i64, String, String, String)> = db
-        .run(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT o.id, o.slug, o.label, o.description FROM ontology o
-                 WHERE NOT EXISTS
-                     (SELECT 1 FROM type_embeddings t WHERE t.ontology_id = o.id)
-                 ORDER BY o.id",
-            )?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<_>>()?;
-            Ok(rows)
-        })
-        .await?;
+    let repo = SqliteGraphRepo::new(db.clone());
+    let missing = repo.missing_type_rows().await?;
 
     let mut count = 0;
     for (ontology_id, slug, label, description) in missing {
         let vec = llm
             .embed_document(&type_text(&slug, &label, &description))
             .await?;
-        let ontology_id_capture = ontology_id;
-        db.run(move |conn| {
-            conn.execute(
-                "INSERT OR IGNORE INTO type_embeddings (ontology_id, embedding)
-                 VALUES (?1, ?2)",
-                params![ontology_id_capture, vec_to_blob(&vec)],
-            )?;
-            Ok(())
-        })
-        .await?;
+        repo.store_type_embedding(ontology_id, vec).await?;
         count += 1;
     }
     Ok(count)
@@ -420,6 +390,7 @@ pub async fn await_pending_refactors(state: &crate::state::AppState) {
 mod tests {
     use super::*;
     use crate::llm::{FakeLlm, Llm};
+    use rusqlite::params;
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
@@ -553,7 +524,7 @@ mod tests {
         // projects the second one as its current type.
         let db = test_db();
         // Build a minimal edge + history by hand.
-        db.run(|conn| {
+        db.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO braindumps (verbatim, cleaned, created_at) VALUES ('v', 'c', 0)",
                 [],
@@ -584,7 +555,7 @@ mod tests {
             current_edge_type(&db, 1).await.unwrap().as_deref(),
             Some("helps")
         );
-        db.run(|conn| {
+        db.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO edge_type_history (edge_id, seq_index, type_slug, created_at)
                  VALUES (1, 1, 'nurtures', 0)",
@@ -604,7 +575,7 @@ mod tests {
     #[tokio::test]
     async fn edges_with_current_type_finds_only_edges_wearing_that_type() {
         let db = test_db();
-        db.run(|conn| {
+        db.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO braindumps (verbatim, cleaned, created_at) VALUES ('v', 'c', 0)",
                 [],

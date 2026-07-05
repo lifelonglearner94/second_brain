@@ -990,7 +990,7 @@ mod tests {
 
         // Structural mode writes no snapshot rows.
         let snapshot_rows: i64 = db
-            .run(|conn| {
+            .with_conn(|conn| {
                 Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?)
             })
             .await
@@ -1024,7 +1024,7 @@ mod tests {
     async fn seed_cluster(db: &Db) -> (i64, i64, i64, i64) {
         let (maria, q3, beta) = seed_path(db).await;
         let bd: i64 = db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 Ok(conn.query_row(
                     "SELECT ep.braindump_id
                      FROM edge_provenance ep
@@ -1104,7 +1104,7 @@ mod tests {
         );
         // The snapshot row is in the table (frozen receipt).
         let snapshot_rows: i64 = db
-            .run(|conn| {
+            .with_conn(|conn| {
                 Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?)
             })
             .await
@@ -1458,7 +1458,7 @@ mod tests {
         );
         // No snapshot or proposal created.
         let snapshot_rows: i64 = db
-            .run(|conn| {
+            .with_conn(|conn| {
                 Ok(conn.query_row("SELECT count(*) FROM thematic_snapshots", [], |r| r.get(0))?)
             })
             .await

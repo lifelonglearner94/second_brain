@@ -189,7 +189,7 @@ fn app_with_llm(db: Db, llm: Arc<dyn Llm>) -> axum::Router {
 /// Stamp every graph row's `created_at` to a fixed value so delta-filtering on
 /// a cursor between the stamp and a later retag is deterministic.
 async fn backdate_graph(db: &Db, ts: i64) {
-    db.run(move |conn| {
+    db.with_conn_test(move |conn| {
         conn.execute("UPDATE concepts SET created_at = ?1", rusqlite::params![ts])?;
         conn.execute("UPDATE edges SET created_at = ?1", rusqlite::params![ts])?;
         conn.execute(
@@ -206,7 +206,7 @@ async fn backdate_graph(db: &Db, ts: i64) {
 /// simulates the async refactor (ADR-0003) without standing up governance.
 async fn append_retag(db: &Db, edge_id: i64, type_slug: &str) {
     let type_slug = type_slug.to_string();
-    db.run(move |conn| {
+    db.with_conn_test(move |conn| {
         let next_seq: i64 = conn.query_row(
             "SELECT COALESCE(MAX(seq_index), -1) + 1 FROM edge_type_history WHERE edge_id = ?1",
             rusqlite::params![edge_id],

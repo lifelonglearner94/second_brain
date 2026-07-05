@@ -2,7 +2,7 @@
 //!
 //! Every read AND write against the knowledge graph goes through [`GraphRepo`]
 //! so call sites depend on the interface, not the storage adapter. Production
-//! wires [`SqliteGraphRepo`] (delegating to [`Db::run`](crate::db::Db)); tests
+//! wires [`SqliteGraphRepo`] (delegating to [`Db::with_conn`](crate::db::Db)); tests
 //! wire [`InMemoryGraphRepo`] so every read and write can be exercised without
 //! a SQLite connection — the graph becomes hermetic.
 //!
@@ -33,6 +33,7 @@ use crate::chat_inference::{
     STATUS_PENDING, STATUS_REJECTED, STRUCTURAL_MODE, THEMATIC_MODE,
 };
 use crate::db::{now_seconds, Db};
+use crate::delta::{DeltaEdge, GraphDelta, RetaggedEdge};
 use crate::error::{Error, Result};
 use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
 use crate::graph::{
@@ -50,25 +51,16 @@ use crate::retrieval::{
 /// `edge_type_history` entry, correlated on the outer edges alias `e`.
 ///
 /// Lives in the Sqlite adapter's home so the projection lives in one place.
-/// `pub(crate)` (not private) so the still-present write-path closures in
-/// `graph.rs` / `ontology.rs` / `delta.rs` / `retrieval.rs` that call it inside
-/// their own `Db::run` closures keep compiling — #46 puts writes behind the
-/// trait and #48 removes the old closures; after both land this becomes truly
-/// private.
-pub(crate) fn current_type_subquery() -> &'static str {
+/// Private after #48 — no domain module calls it directly anymore.
+fn current_type_subquery() -> &'static str {
     "SELECT type_slug FROM edge_type_history WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1"
 }
 
 /// f32 slice → little-endian byte blob, the on-disk format sqlite-vec expects.
 ///
 /// Lives in the Sqlite adapter's home so the byte layout is defined once.
-/// `pub(crate)` (not private) so the still-present write-path closures in
-/// `graph.rs` (`create_concept`, `store_braindump_embedding`) and
-/// `ontology.rs` (`approve_proposal`, `seed_type_embeddings`) that call it
-/// inside their own `Db::run` closures keep compiling — #46 puts writes behind
-/// the trait and #48 removes the old closures; after both land this becomes
-/// truly private.
-pub(crate) fn vec_to_blob(v: &[f32]) -> Vec<u8> {
+/// Private after #48 — no domain module calls it directly anymore.
+fn vec_to_blob(v: &[f32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(v.len() * 4);
     for f in v {
         bytes.extend_from_slice(&f.to_le_bytes());
@@ -80,16 +72,12 @@ pub(crate) fn vec_to_blob(v: &[f32]) -> Vec<u8> {
 /// Returns `(concept_id, similarity)` where similarity = 1 − distance. `None`
 /// if the collection is empty.
 ///
-/// Lives in the Sqlite adapter's home as `pub(crate)` so the accretion
-/// write-path trait impl in [`SqliteGraphRepo`] can call it synchronously
-/// inside the transaction — the KNN must see the post-retraction state
-/// (embeddings for vanished concepts are deleted before identity resolution
-/// runs), so it cannot be lifted out of the closure to call the async trait
-/// method. #48 makes this truly private once the old closures are gone.
-pub(crate) fn knn_concept_conn(
-    conn: &rusqlite::Connection,
-    query_vec: &[f32],
-) -> Result<Option<(i64, f32)>> {
+/// Lives in the Sqlite adapter as a private helper so the accretion write-path
+/// trait impl can call it synchronously inside the transaction — the KNN must
+/// see the post-retraction state (embeddings for vanished concepts are deleted
+/// before identity resolution runs), so it cannot be lifted out of the closure
+/// to call the async trait method.
+fn knn_concept_conn(conn: &rusqlite::Connection, query_vec: &[f32]) -> Result<Option<(i64, f32)>> {
     let blob = vec_to_blob(query_vec);
     let row = conn
         .prepare(
@@ -106,12 +94,10 @@ pub(crate) fn knn_concept_conn(
 // --- write-path `*_conn` helpers (moved from `graph.rs` in issue #46) ---
 //
 // These synchronous helpers run inside the Sqlite adapter's `run_txn`
-// closures. `pub(crate)` (not private) so `chat_inference.rs` — whose write
-// path is #47's scope — keeps compiling via `crate::graph_repo::...` until
-// #47 switches its call sites to trait methods and #48 makes these private.
+// closures. Private after #48 — no domain module calls them.
 
 /// Insert an edge row and return its surrogate id (ADR-0002).
-pub(crate) fn insert_edge_conn(
+fn insert_edge_conn(
     conn: &rusqlite::Connection,
     source_id: i64,
     target_id: i64,
@@ -128,7 +114,7 @@ pub(crate) fn insert_edge_conn(
 
 /// Initialize the append-only type history at index 0 = the LLM's original
 /// assertion (ADR-0003). The edge's current type is a projection off this log.
-pub(crate) fn init_type_history_conn(
+fn init_type_history_conn(
     conn: &rusqlite::Connection,
     edge_id: i64,
     type_slug: &str,
@@ -144,7 +130,7 @@ pub(crate) fn init_type_history_conn(
 
 /// Look up an edge id by its identity key `(source, original_type, target)`
 /// (ADR-0002). `None` if no edge matches.
-pub(crate) fn find_edge_id_conn(
+fn find_edge_id_conn(
     conn: &rusqlite::Connection,
     source_id: i64,
     original_type: &str,
@@ -163,7 +149,7 @@ pub(crate) fn find_edge_id_conn(
 
 /// Whether `source —[type]→ target` exists wearing `type` as its current
 /// projected type (ADR-0003) — the structural-inference traversability check.
-pub(crate) fn edge_exists_with_current_type_conn(
+fn edge_exists_with_current_type_conn(
     conn: &rusqlite::Connection,
     source_id: i64,
     type_slug: &str,
@@ -185,7 +171,7 @@ pub(crate) fn edge_exists_with_current_type_conn(
 }
 
 /// Whether a concept with `id` exists in the graph.
-pub(crate) fn concept_exists_conn(conn: &rusqlite::Connection, id: i64) -> Result<bool> {
+fn concept_exists_conn(conn: &rusqlite::Connection, id: i64) -> Result<bool> {
     let n: i64 = conn.query_row(
         "SELECT COUNT(*) FROM concepts WHERE id = ?1",
         params![id],
@@ -195,7 +181,7 @@ pub(crate) fn concept_exists_conn(conn: &rusqlite::Connection, id: i64) -> Resul
 }
 
 /// The governed edge-type slugs the LLM draws from (connection-scoped).
-pub(crate) fn ontology_slugs_conn(conn: &rusqlite::Connection) -> Result<Vec<String>> {
+fn ontology_slugs_conn(conn: &rusqlite::Connection) -> Result<Vec<String>> {
     let mut stmt = conn.prepare("SELECT slug FROM ontology ORDER BY id")?;
     let slugs = stmt
         .query_map([], |r| r.get::<_, String>(0))?
@@ -208,11 +194,7 @@ pub(crate) fn ontology_slugs_conn(conn: &rusqlite::Connection) -> Result<Vec<Str
 /// drop the fold concept's embedding (vec0 has no FK cascade), then delete the
 /// fold concept — its remaining provenance and any merge suggestions
 /// referencing it cascade away (ADR-0001 / ADR-0010).
-pub(crate) fn merge_concepts_conn(
-    conn: &rusqlite::Connection,
-    keep_id: i64,
-    fold_id: i64,
-) -> Result<()> {
+fn merge_concepts_conn(conn: &rusqlite::Connection, keep_id: i64, fold_id: i64) -> Result<()> {
     // Edges touching the fold concept: merge duplicates (union provenance) and
     // repoint the rest onto the survivor. Iterated in Rust because the edges
     // table's UNIQUE (source, original_type, target) would otherwise trip on a
@@ -642,6 +624,19 @@ pub trait GraphRepo: Send + Sync {
     /// transaction — a single INSERT.
     async fn insert_braindump(&self, verbatim: &str, cleaned: &str) -> Result<Braindump>;
 
+    /// Look up a braindump by id. `None` if no row matches.
+    async fn get_braindump(&self, id: i64) -> Result<Option<Braindump>>;
+
+    /// Overwrite the verbatim in place (error-correction, ADR-0007) and store
+    /// the re-cleaned rendering. The id and `created_at` are untouched. Returns
+    /// the updated row, or `None` if no braindump with `id` exists.
+    async fn update_braindump(
+        &self,
+        id: i64,
+        verbatim: String,
+        cleaned: String,
+    ) -> Result<Option<Braindump>>;
+
     /// The Concept/Edge accretion pipeline (ADR-0001 / ADR-0002 / ADR-0003 /
     /// ADR-0007 / ADR-0010): retract this braindump's prior extraction, store
     /// its embedding, resolve each concept by embedding KNN (accrete /
@@ -806,13 +801,34 @@ pub trait GraphRepo: Send + Sync {
     /// precomputed query vector. Returns ranked braindumps plus the traversed
     /// edge paths.
     async fn retrieve(&self, query_vec: &[f32]) -> Result<RetrievalResult>;
+
+    // --- issue #48: additional reads/writes migrated from domain modules ---
+
+    /// Every edge's `(source_concept_id, target_concept_id)` endpoints, ordered
+    /// by edge id — the topology input for Louvain clustering (ADR-0008). No
+    /// type information: the partition is type-agnostic (each typed edge
+    /// contributes unit weight regardless of its type).
+    async fn all_edge_endpoints(&self) -> Result<Vec<(i64, i64)>>;
+
+    /// Compute the graph delta since `since` (issue #28): additions, deletions
+    /// (tombstones), and retags. The cursor is `now_seconds()` at query time.
+    async fn graph_delta(&self, since: i64) -> Result<GraphDelta>;
+
+    /// Ontology types missing a type-embedding (ADR-0003 dedup). Returns
+    /// `(ontology_id, slug, label, description)` for each type that has no row
+    /// in the type-embedding collection. Used by the startup seed.
+    async fn missing_type_rows(&self) -> Result<Vec<(i64, String, String, String)>>;
+
+    /// Store a type-embedding for `ontology_id` (ADR-0003 dedup). Idempotent:
+    /// `INSERT OR IGNORE`.
+    async fn store_type_embedding(&self, ontology_id: i64, vec: Vec<f32>) -> Result<()>;
 }
 
-/// Production adapter: delegates to [`Db::run`] against the in-process
-/// `sqlite-vec`, so the single-connection transaction guarantees of `Db`
-/// (ADR-0001) are preserved. `Db::run` itself is untouched. Owns the SQL bodies
-/// for every read AND write so the domain modules (`graph`, `ontology`,
-/// `retrieval`, `snapshot`) no longer contain raw SQL. The 6×
+/// Production adapter: delegates to [`Db::with_conn`](crate::db::Db::with_conn)
+/// against the in-process `sqlite-vec`, so the single-connection transaction
+/// guarantees of `Db` (ADR-0001) are preserved. Owns the SQL bodies for every
+/// read AND write so the domain modules (`graph`, `ontology`, `retrieval`,
+/// `snapshot`, `delta`, `thematic`) no longer contain raw SQL. The 6×
 /// BEGIN/COMMIT/ROLLBACK pattern collapses to one [`run_txn`] helper.
 ///
 /// [`run_txn`]: SqliteGraphRepo::run_txn
@@ -829,7 +845,7 @@ impl SqliteGraphRepo {
 
     /// Run `f` inside a `BEGIN`/`COMMIT`/`ROLLBACK` transaction against the
     /// single shared connection (ADR-0001). The connection is locked for the
-    /// duration of `f` via [`Db::run`]; `COMMIT` on `Ok`, `ROLLBACK` on `Err`.
+    /// duration of `f` via [`Db::with_conn`](crate::db::Db); `COMMIT` on `Ok`, `ROLLBACK` on `Err`.
     /// Every write trait method calls this instead of each inlining the
     /// transaction boilerplate — the 6× pattern (ingest, delete, approve-merge,
     /// ontology approve, ontology refactor, chat endorse) collapses to one
@@ -841,7 +857,7 @@ impl SqliteGraphRepo {
         T: Send + 'static,
     {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 conn.execute_batch("BEGIN")?;
                 match f(conn) {
                     Ok(t) => {
@@ -862,7 +878,7 @@ impl SqliteGraphRepo {
 impl GraphRepo for SqliteGraphRepo {
     async fn braindump_embedding_stored(&self, braindump_id: i64) -> Result<bool> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let count: i64 = conn.query_row(
                     "SELECT count(*) FROM braindump_embeddings WHERE braindump_id = ?1",
                     params![braindump_id],
@@ -875,7 +891,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn ontology_types(&self) -> Result<Vec<(String, String, String)>> {
         self.db
-            .run(|conn| {
+            .with_conn(|conn| {
                 let mut stmt =
                     conn.prepare("SELECT slug, label, description FROM ontology ORDER BY id")?;
                 let rows = stmt
@@ -888,7 +904,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn get_concept(&self, id: i64) -> Result<Option<Concept>> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let row = conn
                     .query_row(
                         "SELECT id, label, created_at FROM concepts WHERE id = ?1",
@@ -909,7 +925,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn concept_provenance(&self, concept_id: i64) -> Result<Vec<i64>> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT braindump_id FROM concept_provenance
                      WHERE concept_id = ?1 ORDER BY braindump_id",
@@ -930,7 +946,7 @@ impl GraphRepo for SqliteGraphRepo {
     ) -> Result<Option<Edge>> {
         let original_type = original_type.to_string();
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let row = conn
                     .query_row(
                         "SELECT id, source_concept_id, target_concept_id, original_type, created_at
@@ -955,7 +971,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn edge_provenance(&self, edge_id: i64) -> Result<Vec<i64>> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT braindump_id FROM edge_provenance
                      WHERE edge_id = ?1 ORDER BY braindump_id",
@@ -970,7 +986,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn edge_type_history(&self, edge_id: i64) -> Result<Vec<TypeHistoryEntry>> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT seq_index, type_slug, created_at FROM edge_type_history
                      WHERE edge_id = ?1 ORDER BY seq_index",
@@ -991,7 +1007,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn merge_suggestions(&self) -> Result<Vec<MergeSuggestion>> {
         self.db
-            .run(|conn| {
+            .with_conn(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, kind, braindump_id, new_concept_label, new_concept_id,
                             existing_concept_id, similarity, status, created_at
@@ -1020,7 +1036,7 @@ impl GraphRepo for SqliteGraphRepo {
     async fn concept_id_for_label(&self, label: &str) -> Result<Option<i64>> {
         let label = label.to_string();
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let id = conn
                     .query_row(
                         "SELECT id FROM concepts WHERE label = ?1 ORDER BY id LIMIT 1",
@@ -1035,7 +1051,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn all_concepts(&self) -> Result<Vec<Concept>> {
         self.db
-            .run(|conn| {
+            .with_conn(|conn| {
                 let mut stmt =
                     conn.prepare("SELECT id, label, created_at FROM concepts ORDER BY id")?;
                 let rows = stmt
@@ -1054,7 +1070,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn all_edges_with_current_type(&self) -> Result<Vec<EdgeProjection>> {
         self.db
-            .run(|conn| {
+            .with_conn(|conn| {
                 let mut stmt = conn.prepare(&format!(
                     "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
                             e.created_at, ({}) AS current_type
@@ -1081,14 +1097,14 @@ impl GraphRepo for SqliteGraphRepo {
     async fn knn_concept(&self, query_vec: &[f32]) -> Result<Option<(i64, f32)>> {
         let query_vec = query_vec.to_vec();
         self.db
-            .run(move |conn| knn_concept_conn(conn, &query_vec))
+            .with_conn(move |conn| knn_concept_conn(conn, &query_vec))
             .await
     }
 
     async fn knn_type(&self, query_vec: &[f32]) -> Result<Option<(String, f32)>> {
         let blob = vec_to_blob(query_vec);
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let row = conn
                     .prepare(
                         "SELECT ontology_id, distance FROM type_embeddings
@@ -1116,7 +1132,7 @@ impl GraphRepo for SqliteGraphRepo {
     async fn knn_concepts(&self, query_vec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
         let blob = vec_to_blob(query_vec);
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT concept_id, distance FROM concept_embeddings
                      WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
@@ -1136,7 +1152,7 @@ impl GraphRepo for SqliteGraphRepo {
     async fn knn_braindumps(&self, query_vec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
         let blob = vec_to_blob(query_vec);
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT braindump_id, distance FROM braindump_embeddings
                      WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
@@ -1159,7 +1175,7 @@ impl GraphRepo for SqliteGraphRepo {
         let verbatim = verbatim.to_string();
         let cleaned = cleaned.to_string();
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let created_at = now_seconds();
                 conn.execute(
                     "INSERT INTO braindumps (verbatim, cleaned, created_at)
@@ -1173,6 +1189,48 @@ impl GraphRepo for SqliteGraphRepo {
                     cleaned,
                     created_at,
                 })
+            })
+            .await
+    }
+
+    async fn get_braindump(&self, id: i64) -> Result<Option<Braindump>> {
+        self.db
+            .with_conn(move |conn| {
+                let row = conn
+                    .query_row(
+                        "SELECT id, verbatim, cleaned, created_at
+                         FROM braindumps WHERE id = ?1",
+                        params![id],
+                        row_to_braindump,
+                    )
+                    .optional()?;
+                Ok(row)
+            })
+            .await
+    }
+
+    async fn update_braindump(
+        &self,
+        id: i64,
+        verbatim: String,
+        cleaned: String,
+    ) -> Result<Option<Braindump>> {
+        self.db
+            .with_conn(move |conn| {
+                let updated = conn.execute(
+                    "UPDATE braindumps SET verbatim = ?1, cleaned = ?2 WHERE id = ?3",
+                    params![verbatim, cleaned, id],
+                )?;
+                if updated == 0 {
+                    return Ok(None);
+                }
+                let row = conn.query_row(
+                    "SELECT id, verbatim, cleaned, created_at
+                     FROM braindumps WHERE id = ?1",
+                    params![id],
+                    row_to_braindump,
+                )?;
+                Ok(Some(row))
             })
             .await
     }
@@ -1249,7 +1307,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn reject_merge_suggestion(&self, suggestion_id: i64) -> Result<()> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let n = conn.execute(
                     "DELETE FROM merge_suggestions WHERE id = ?1",
                     params![suggestion_id],
@@ -1282,7 +1340,7 @@ impl GraphRepo for SqliteGraphRepo {
             .map_err(|e| Error::internal(format!("encode evidence_path: {e}")))?;
         let created_at = now_seconds();
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 if !ontology_slug_exists_conn(conn, &proposed_type)? {
                     return Err(Error::BadRequest(format!(
                         "proposed type `{proposed_type}` is not in the ontology; \
@@ -1353,7 +1411,7 @@ impl GraphRepo for SqliteGraphRepo {
             .filter(|s| !s.is_empty());
         let created_at = now_seconds();
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 if !ontology_slug_exists_conn(conn, &proposed_type)? {
                     return Err(Error::BadRequest(format!(
                         "proposed type `{proposed_type}` is not in the ontology; \
@@ -1464,7 +1522,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn reject_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 transition_status_conn(conn, "chat_inference_proposals", id, STATUS_REJECTED, true)
             })
             .await?;
@@ -1475,7 +1533,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn list_inference_proposals(&self) -> Result<Vec<ChatInferenceProposal>> {
         self.db
-            .run(|conn| {
+            .with_conn(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT p.id, p.mode, p.source_concept_id, p.target_concept_id,
                             p.proposed_type, p.evidence_path, p.rationale,
@@ -1495,7 +1553,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn get_inference_proposal(&self, id: i64) -> Result<Option<ChatInferenceProposal>> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let row = conn
                     .query_row(
                         "SELECT p.id, p.mode, p.source_concept_id, p.target_concept_id,
@@ -1516,7 +1574,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn edge_inference_asserted_by(&self, edge_id: i64) -> Result<Vec<InferenceAssertion>> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT chat_inference_id, mode, snapshot_id FROM edge_inference_provenance
                      WHERE edge_id = ?1 ORDER BY chat_inference_id",
@@ -1539,7 +1597,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn list_type_proposals(&self) -> Result<Vec<TypeProposal>> {
         self.db
-            .run(|conn| {
+            .with_conn(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, slug, label, description, merge_of, status,
                             near_match_slug, near_match_similarity, created_at, resolved_at
@@ -1568,7 +1626,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn get_type_proposal(&self, id: i64) -> Result<Option<TypeProposal>> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let row = conn
                     .query_row(
                         "SELECT id, slug, label, description, merge_of, status,
@@ -1610,7 +1668,7 @@ impl GraphRepo for SqliteGraphRepo {
     ) -> Result<TypeProposal> {
         let created_at = now_seconds();
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 conn.execute(
                     "INSERT INTO type_proposals
                         (slug, label, description, merge_of, status,
@@ -1675,13 +1733,15 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn reject_type_proposal(&self, id: i64) -> Result<()> {
         self.db
-            .run(move |conn| transition_status_conn(conn, "type_proposals", id, "rejected", true))
+            .with_conn(move |conn| {
+                transition_status_conn(conn, "type_proposals", id, "rejected", true)
+            })
             .await
     }
 
     async fn current_edge_type(&self, edge_id: i64) -> Result<Option<String>> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let slug = conn
                     .query_row(
                         "SELECT type_slug FROM edge_type_history
@@ -1698,7 +1758,7 @@ impl GraphRepo for SqliteGraphRepo {
     async fn edges_with_current_type(&self, slug: &str) -> Result<Vec<i64>> {
         let slug = slug.to_string();
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(&format!(
                     "SELECT e.id FROM edges e WHERE ({}) = ?1 ORDER BY e.id",
                     current_type_subquery()
@@ -1713,7 +1773,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn edge_endpoints_and_type(&self, edge_id: i64) -> Result<(String, String, String)> {
         self.db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let row = conn.query_row(
                     &format!(
                         "SELECT sc.label, tc.label, ({})
@@ -1812,7 +1872,7 @@ impl GraphRepo for SqliteGraphRepo {
 
         let (traversed_edges, subgraph) = self
             .db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let mut concept_labels: HashMap<i64, String> = HashMap::new();
                 {
                     let mut stmt = conn.prepare("SELECT id, label FROM concepts")?;
@@ -1861,6 +1921,177 @@ impl GraphRepo for SqliteGraphRepo {
             mode: RetrievalMode::SeedThenExpand,
         })
     }
+
+    // --- issue #48: additional reads/writes migrated from domain modules ---
+
+    async fn all_edge_endpoints(&self) -> Result<Vec<(i64, i64)>> {
+        self.db
+            .with_conn(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT source_concept_id, target_concept_id FROM edges ORDER BY id",
+                )?;
+                let rows =
+                    stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
+    async fn graph_delta(&self, since: i64) -> Result<GraphDelta> {
+        self.db
+            .with_conn(move |conn| {
+                let added_concepts = delta_added_concepts_conn(conn, since)?;
+                let added_edges = delta_added_edges_conn(conn, since)?;
+                let deleted_concept_ids = delta_tombstoned_conn(conn, "concept", since)?;
+                let deleted_edge_ids = delta_tombstoned_conn(conn, "edge", since)?;
+                let retagged_edges = delta_retagged_edges_conn(conn, since)?;
+                let cursor = now_seconds();
+                Ok(GraphDelta {
+                    cursor,
+                    added_concepts,
+                    added_edges,
+                    deleted_concept_ids,
+                    deleted_edge_ids,
+                    retagged_edges,
+                })
+            })
+            .await
+    }
+
+    async fn missing_type_rows(&self) -> Result<Vec<(i64, String, String, String)>> {
+        self.db
+            .with_conn(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT o.id, o.slug, o.label, o.description FROM ontology o
+                     WHERE NOT EXISTS
+                         (SELECT 1 FROM type_embeddings t WHERE t.ontology_id = o.id)
+                     ORDER BY o.id",
+                )?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                })?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
+    async fn store_type_embedding(&self, ontology_id: i64, vec: Vec<f32>) -> Result<()> {
+        self.db
+            .with_conn(move |conn| {
+                conn.execute(
+                    "INSERT OR IGNORE INTO type_embeddings (ontology_id, embedding)
+                     VALUES (?1, ?2)",
+                    params![ontology_id, vec_to_blob(&vec)],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+}
+
+// --- issue #48: delta-sync helpers (migrated from delta.rs) ---
+//
+// These synchronous helpers run inside the `graph_delta` trait method's
+// `with_conn` closure. Private — no domain module calls them.
+
+fn delta_added_concepts_conn(conn: &rusqlite::Connection, since: i64) -> Result<Vec<Concept>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, label, created_at FROM concepts
+         WHERE created_at > ?1 ORDER BY id",
+    )?;
+    let rows = stmt
+        .query_map(params![since], |r| {
+            Ok(Concept {
+                id: r.get(0)?,
+                label: r.get(1)?,
+                created_at: r.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+fn delta_added_edges_conn(conn: &rusqlite::Connection, since: i64) -> Result<Vec<DeltaEdge>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
+                e.created_at, ({}) AS current_type
+         FROM edges e WHERE e.created_at > ?1 ORDER BY e.id",
+        current_type_subquery()
+    ))?;
+    let rows = stmt
+        .query_map(params![since], |r| {
+            Ok(DeltaEdge {
+                id: r.get(0)?,
+                source_concept_id: r.get(1)?,
+                target_concept_id: r.get(2)?,
+                original_type: r.get(3)?,
+                created_at: r.get(4)?,
+                current_type: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+fn delta_tombstoned_conn(conn: &rusqlite::Connection, kind: &str, since: i64) -> Result<Vec<i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT entity_id FROM graph_tombstones
+         WHERE kind = ?1 AND created_at > ?2 ORDER BY entity_id",
+    )?;
+    let ids = stmt
+        .query_map(params![kind, since], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
+
+fn delta_retagged_edges_conn(conn: &rusqlite::Connection, since: i64) -> Result<Vec<RetaggedEdge>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
+                ({}) AS current_type
+         FROM edges e
+         WHERE e.created_at <= ?1 AND EXISTS (
+             SELECT 1 FROM edge_type_history eth
+             WHERE eth.edge_id = e.id AND eth.seq_index > 0 AND eth.created_at > ?1)
+         ORDER BY e.id",
+        current_type_subquery()
+    ))?;
+    let rows = stmt
+        .query_map(params![since], |r| {
+            Ok(RetaggedEdge {
+                id: r.get(0)?,
+                source_concept_id: r.get(1)?,
+                target_concept_id: r.get(2)?,
+                original_type: r.get(3)?,
+                current_type: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+/// Map a `rusqlite::Row` (the 4-column `SELECT id, verbatim, cleaned,
+/// created_at FROM braindumps`) into a [`Braindump`]. Shared by
+/// `get_braindump` and `update_braindump`.
+fn row_to_braindump(row: &rusqlite::Row) -> rusqlite::Result<Braindump> {
+    Ok(Braindump {
+        id: row.get(0)?,
+        verbatim: row.get(1)?,
+        cleaned: row.get(2)?,
+        created_at: row.get(3)?,
+    })
 }
 
 /// Map a `rusqlite::Row` (the 14-column SELECT from
@@ -1945,7 +2176,7 @@ impl SqliteGraphRepo {
         let hits = self.knn_braindumps(query_vec, BRAINDUMP_TOP_K).await?;
         let braindumps = self
             .db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let mut out = Vec::new();
                 for (bd_id, sim) in &hits {
                     if let Some((id, verbatim, cleaned, created_at)) =
@@ -1980,7 +2211,7 @@ impl SqliteGraphRepo {
         let hits = self.knn_braindumps(query_vec, BRAINDUMP_TOP_K).await?;
         let backfill = self
             .db
-            .run(move |conn| {
+            .with_conn(move |conn| {
                 let mut out = Vec::new();
                 for (bd_id, sim) in &hits {
                     if already.contains(bd_id) {
@@ -3533,6 +3764,116 @@ impl GraphRepo for InMemoryGraphRepo {
             mode: RetrievalMode::SeedThenExpand,
         })
     }
+
+    // --- issue #48: additional reads/writes migrated from domain modules ---
+
+    async fn get_braindump(&self, id: i64) -> Result<Option<Braindump>> {
+        Ok(self
+            .braindumps
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .get(&id)
+            .cloned())
+    }
+
+    async fn update_braindump(
+        &self,
+        id: i64,
+        verbatim: String,
+        cleaned: String,
+    ) -> Result<Option<Braindump>> {
+        let mut braindumps = self
+            .braindumps
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned");
+        let Some(braindump) = braindumps.get_mut(&id) else {
+            return Ok(None);
+        };
+        braindump.verbatim = verbatim;
+        braindump.cleaned = cleaned;
+        Ok(Some(braindump.clone()))
+    }
+
+    async fn all_edge_endpoints(&self) -> Result<Vec<(i64, i64)>> {
+        let mut endpoints: Vec<(i64, i64)> = self
+            .edges
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .values()
+            .map(|e| (e.source_concept_id, e.target_concept_id))
+            .collect();
+        endpoints.sort_by_key(|(src, _)| *src);
+        Ok(endpoints)
+    }
+
+    async fn graph_delta(&self, since: i64) -> Result<GraphDelta> {
+        let added_concepts: Vec<Concept> = self
+            .all_concepts()
+            .await?
+            .into_iter()
+            .filter(|c| c.created_at > since)
+            .collect();
+        let added_edges: Vec<DeltaEdge> = self
+            .all_edges_with_current_type()
+            .await?
+            .into_iter()
+            .filter(|e| e.created_at > since)
+            .map(|e| DeltaEdge {
+                id: e.id,
+                source_concept_id: e.source_concept_id,
+                target_concept_id: e.target_concept_id,
+                original_type: e.original_type,
+                current_type: e.current_type,
+                created_at: e.created_at,
+            })
+            .collect();
+        // InMemoryGraphRepo does not track tombstones — deletions are empty.
+        let deleted_concept_ids = Vec::new();
+        let deleted_edge_ids = Vec::new();
+        let retagged_edges = self.compute_retagged_edges_in_memory(since).await;
+        Ok(GraphDelta {
+            cursor: now_seconds(),
+            added_concepts,
+            added_edges,
+            deleted_concept_ids,
+            deleted_edge_ids,
+            retagged_edges,
+        })
+    }
+
+    async fn missing_type_rows(&self) -> Result<Vec<(i64, String, String, String)>> {
+        let ontology = self
+            .ontology
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone();
+        let embedded_slugs: std::collections::HashSet<String> = self
+            .type_embeddings
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .iter()
+            .map(|(slug, _)| slug.clone())
+            .collect();
+        let mut out = Vec::new();
+        for (idx, (slug, label, description)) in ontology.iter().enumerate() {
+            if !embedded_slugs.contains(slug) {
+                out.push((idx as i64, slug.clone(), label.clone(), description.clone()));
+            }
+        }
+        Ok(out)
+    }
+
+    async fn store_type_embedding(&self, ontology_id: i64, vec: Vec<f32>) -> Result<()> {
+        let ontology = self
+            .ontology
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone();
+        if let Some((slug, _, _)) = ontology.get(ontology_id as usize) {
+            self.set_type_embedding(slug, vec);
+        }
+        Ok(())
+    }
 }
 
 // --- InMemoryGraphRepo private write helpers (issue #46) ---
@@ -3924,6 +4265,53 @@ impl InMemoryGraphRepo {
                     })
                     .unwrap_or(false)
         })
+    }
+
+    /// Compute retagged edges for the delta-sync read (issue #48): edges
+    /// created before `since` that have a type-history entry with
+    /// `seq_index > 0` and `created_at > since`. The InMemoryGraphRepo does
+    /// not track tombstones, so deletions are always empty — only additions
+    /// and retags are computed here.
+    async fn compute_retagged_edges_in_memory(&self, since: i64) -> Vec<RetaggedEdge> {
+        let edges = self
+            .edges
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone();
+        let history = self
+            .edge_type_history
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .clone();
+        let mut retagged = Vec::new();
+        for (edge_id, entries) in &history {
+            let Some(edge) = edges.get(edge_id) else {
+                continue;
+            };
+            if edge.created_at > since {
+                continue;
+            }
+            let has_retag = entries
+                .iter()
+                .any(|h| h.seq_index > 0 && h.created_at > since);
+            if !has_retag {
+                continue;
+            }
+            let current_type = entries
+                .iter()
+                .max_by_key(|h| h.seq_index)
+                .map(|h| h.type_slug.clone())
+                .unwrap_or_default();
+            retagged.push(RetaggedEdge {
+                id: edge.id,
+                source_concept_id: edge.source_concept_id,
+                target_concept_id: edge.target_concept_id,
+                original_type: edge.original_type.clone(),
+                current_type,
+            });
+        }
+        retagged.sort_by_key(|r| r.id);
+        retagged
     }
 
     /// Compute the braindump ids whose edges formed the thematic density of a
@@ -5717,5 +6105,25 @@ mod tests {
             "no braindumps on an empty graph"
         );
         assert!(result.paths.is_empty(), "no graph traversal in fallback");
+    }
+
+    // --- issue #48: helper-function tests (moved from graph.rs) ---
+
+    #[test]
+    fn current_type_subquery_returns_the_projection_fragment() {
+        assert_eq!(
+            current_type_subquery(),
+            "SELECT type_slug FROM edge_type_history WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1"
+        );
+    }
+
+    #[test]
+    fn vec_to_blob_encodes_f32_slice_as_little_endian_bytes() {
+        let vec = vec![1.0_f32, 0.0, -0.5];
+        let blob = vec_to_blob(&vec);
+        assert_eq!(blob.len(), 12, "4 bytes per f32");
+        assert_eq!(&blob[0..4], &1.0_f32.to_le_bytes());
+        assert_eq!(&blob[4..8], &0.0_f32.to_le_bytes());
+        assert_eq!(&blob[8..12], &(-0.5_f32).to_le_bytes());
     }
 }

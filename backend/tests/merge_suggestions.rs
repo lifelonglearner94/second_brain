@@ -174,7 +174,7 @@ async fn seed_suggestion(
     new_concept_id: i64,
     existing_concept_id: i64,
 ) -> i64 {
-    db.run(move |conn| {
+    db.with_conn_test(move |conn| {
         let created_at = now_seconds();
         conn.execute(
             "INSERT INTO merge_suggestions

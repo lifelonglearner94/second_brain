@@ -41,6 +41,10 @@ webauthn-rs-proto = "0.5"
 http-body-util = "0.1"
 tower = { version = "0.5", default-features = false, features = ["util"] }
 webauthn-authenticator-rs = { version = "0.5", features = ["softpasskey"] }
+# Enable the `test-support` feature so integration-test crates under
+# `backend/tests/` can access test-only APIs (e.g. `Db::with_conn_test` for
+# raw SQL setup/assertion, and `InMemoryGraphRepo`).
+second_brain_backend = { path = ".", features = ["test-support"] }
 
 [features]
 # Enables the in-memory graph-repo adapter so integration-test crates under

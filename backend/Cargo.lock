@@ -1392,6 +1392,7 @@ dependencies = [
  "rand 0.8.6",
  "reqwest",
  "rusqlite",
+ "second_brain_backend",
  "serde",
  "serde_json",
  "sqlite-vec",

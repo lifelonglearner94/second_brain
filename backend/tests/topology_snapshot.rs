@@ -119,7 +119,7 @@ async fn submit(app: &axum::Router, cookie: &http::HeaderValue, verbatim: &str) 
 /// governance.
 async fn append_retag(db: &Db, edge_id: i64, type_slug: &str) {
     let type_slug = type_slug.to_string();
-    db.run(move |conn| {
+    db.with_conn_test(move |conn| {
         let next_seq: i64 = conn.query_row(
             "SELECT COALESCE(MAX(seq_index), -1) + 1 FROM edge_type_history WHERE edge_id = ?1",
             rusqlite::params![edge_id],
