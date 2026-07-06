@@ -93,6 +93,19 @@ fn encode_id(bytes: &[u8]) -> String {
     base64url_encode(bytes)
 }
 
+/// Mint a fresh cryptographically-random bearer token (base64url, no padding,
+/// 256 bits of entropy) — the same shape as a session id, but carrying no
+/// server-side row of its own until the caller persists it. Used by the admin
+/// invite minter (issue #73): an invitation token is a one-time bearer the
+/// invitee consumes in a later slice's registration flow.
+pub(crate) fn random_bearer_token() -> String {
+    let mut rng = SysRng;
+    let mut bytes = vec![0u8; SESSION_ID_BYTES];
+    rng.try_fill_bytes(&mut bytes)
+        .expect("filling bearer token bytes from OS entropy");
+    encode_id(&bytes)
+}
+
 /// Mint a brand-new, cryptographically-random session id and persist a `sessions`
 /// row for it. The id is returned exactly once so the caller can set the cookie;
 /// it is never looked up by anything but the cookie value. Issue #72: also
@@ -101,11 +114,7 @@ fn encode_id(bytes: &[u8]) -> String {
 pub async fn mint_session(db: &Db, user_id: &str) -> Result<SessionInfo> {
     let user_id = user_id.to_string();
     db.with_conn(move |conn| {
-        let mut rng = SysRng;
-        let mut bytes = vec![0u8; SESSION_ID_BYTES];
-        rng.try_fill_bytes(&mut bytes)
-            .expect("filling session id bytes from OS entropy");
-        let id = encode_id(&bytes);
+        let id = random_bearer_token();
         // Uniqueness: 256-bit CSPRNG collision is astronomically unlikely; the
         // PRIMARY KEY is the backstop. On the (impossible) collision we re-roll.
         loop {

@@ -116,6 +116,10 @@
 		{#if headerTaps >= 5}
 			<p class="admin-entry">
 				<a href="/app/admin/logs" data-testid="admin-link">Admin — logs</a>
+				<span class="sep" aria-hidden="true">·</span>
+				<a href="/app/admin/invites" data-testid="admin-invites-link">
+					Admin — invitations
+				</a>
 			</p>
 		{/if}
 	</header>
@@ -224,6 +228,10 @@
 	}
 	.admin-entry a:hover {
 		color: var(--fg-muted);
+	}
+	.admin-entry .sep {
+		color: var(--fg-subtle);
+		font-size: var(--fs-13);
 	}
 	.capture-section {
 		display: grid;

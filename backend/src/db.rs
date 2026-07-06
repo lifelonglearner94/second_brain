@@ -385,6 +385,28 @@ fn migrate(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "chat_inference_proposals", "user_id", "TEXT")?;
     backfill_user_id(conn, "chat_inference_proposals")?;
 
+    // Issue #73 — single-use invitations. An invitation is a one-time bearer
+    // token the admin mints and shares out-of-band; a future registration flow
+    // (issue #74) consumes it. `created_by_user_id` is the minting admin;
+    // `consumed_by_user_id` is the invitee who burned it (NULL while pending).
+    // `status` is `pending` until consumed, then `consumed`. The token is
+    // unique and unguessable (256-bit CSPRNG, base64url). Forward-only
+    // additive: a fresh table, no backfill needed.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS invitations (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            token               TEXT NOT NULL UNIQUE,
+            created_by_user_id  TEXT NOT NULL REFERENCES users(id),
+            status              TEXT NOT NULL DEFAULT 'pending',
+            created_at          INTEGER NOT NULL,
+            consumed_at         INTEGER,
+            consumed_by_user_id TEXT REFERENCES users(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS invitations_status_idx
+            ON invitations(status);",
+    )?;
+
     Ok(())
 }
 
