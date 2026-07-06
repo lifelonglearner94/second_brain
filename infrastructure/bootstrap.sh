@@ -35,13 +35,18 @@ if [[ "$(swapon --show --noheadings 2>/dev/null | wc -l)" -eq 0 ]]; then
   mkswap /swapfile >/dev/null
   swapon /swapfile
   grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
-  if command -v sysctl >/dev/null 2>&1; then sysctl -w vm.swappiness=10 >/dev/null; fi
-  # Debian 13 has no /etc/sysctl.conf; write a drop-in so it persists reboot.
-  echo 'vm.swappiness=10' > /etc/sysctl.d/99-second-brain.conf
-  echo ">>> swap enabled (4GB, swappiness=10)"
+  echo ">>> swap enabled (4GB)"
 else
   echo ">>> swap already present, skipping"
 fi
+# Swappiness is set unconditionally (outside the create-swap branch) so a
+# re-bootstrap with swap already present still writes the drop-in. The previous
+# version only wrote it inside the if-branch, so a re-run left the drop-in
+# missing and vm.swappiness did not survive reboot. Debian 13 has no
+# /etc/sysctl.conf, so the drop-in is the persistence mechanism.
+if command -v sysctl >/dev/null 2>&1; then sysctl -w vm.swappiness=10 >/dev/null; fi
+echo 'vm.swappiness=10' > /etc/sysctl.d/99-second-brain.conf
+echo ">>> swappiness=10 (runtime + /etc/sysctl.d/99-second-brain.conf)"
 
 # --- 2. Docker ---------------------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
