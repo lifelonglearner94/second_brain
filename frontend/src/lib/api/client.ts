@@ -113,6 +113,21 @@ export type LogsResponse = {
 	capacity: number;
 };
 
+export type Invitation = {
+	id: number;
+	token: string;
+	created_by_user_id: string;
+	status: string;
+	created_at: number;
+	consumed_at: number | null;
+	consumed_by_user_id: string | null;
+	consumed_by_display_name: string | null;
+};
+
+export type InvitationsResponse = {
+	invitations: Invitation[];
+};
+
 export type BraindumpDto = {
 	id: string;
 	verbatim: string;
@@ -231,6 +246,8 @@ export interface ApiClient {
 	recover(): Promise<RecoverResponse>;
 	getGraph(): Promise<GlobalTopologySnapshot>;
 	getAdminLogs(limit?: number): Promise<LogsResponse>;
+	mintInvite(): Promise<Invitation>;
+	listInvites(): Promise<InvitationsResponse>;
 	submitBraindump(verbatim: string): Promise<BraindumpDto>;
 	getGraphDelta(since?: number): Promise<GraphDelta>;
 	chat(query: string): Promise<ChatResponse>;
@@ -372,6 +389,19 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 			const path =
 				limit !== undefined ? `/admin/logs?limit=${limit}` : '/admin/logs';
 			return getJson<LogsResponse>(path, 'GET /admin/logs');
+		},
+		async mintInvite(): Promise<Invitation> {
+			return postJson<Invitation>(
+				'/admin/invites',
+				null,
+				'POST /admin/invites'
+			);
+		},
+		async listInvites(): Promise<InvitationsResponse> {
+			return getJson<InvitationsResponse>(
+				'/admin/invites',
+				'GET /admin/invites'
+			);
 		},
 		async submitBraindump(verbatim: string): Promise<BraindumpDto> {
 			return postJson<BraindumpDto>(

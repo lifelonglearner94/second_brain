@@ -28,6 +28,9 @@ pub enum Error {
     #[error("unauthorized")]
     Unauthorized,
 
+    #[error("forbidden")]
+    Forbidden,
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -52,6 +55,7 @@ impl IntoResponse for Error {
             Error::Conflict(_) => StatusCode::CONFLICT,
             Error::WebAuthn(_) => StatusCode::BAD_REQUEST,
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
+            Error::Forbidden => StatusCode::FORBIDDEN,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let body = Json(json!({ "error": self.to_string() }));

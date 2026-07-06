@@ -5,12 +5,12 @@
 //! `401`; on success it stashes the validated [`SessionInfo`] in request
 //! extensions so downstream handlers read it via [`axum::Extension`].
 
-use axum::extract::{Request, State};
+use axum::extract::{Extension, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use axum_extra::extract::CookieJar;
 
-use crate::auth::session::{lookup_session, SessionId, SESSION_COOKIE_NAME};
+use crate::auth::session::{lookup_session, SessionId, SessionInfo, SESSION_COOKIE_NAME};
 use crate::error::{Error, Result};
 use crate::state::AppState;
 
@@ -36,5 +36,23 @@ pub async fn require_session(
         return Err(Error::Unauthorized);
     }
     request.extensions_mut().insert(session);
+    Ok(next.run(request).await)
+}
+
+/// Admin-only guard (issue #73). Runs *behind* [`require_session`] — the
+/// validated [`SessionInfo`] is already in request extensions (its `is_admin`
+/// flag was sourced from the `users` table by `lookup_session`, so no second
+/// DB hit is needed). Refuses non-admin callers with 403; forwards otherwise.
+/// Apply with `.route_layer(from_fn(require_admin))` on a sub-router that is
+/// itself wrapped by `require_session` (the session must be resolved first so
+/// the extension is present).
+pub async fn require_admin(
+    Extension(session): Extension<SessionInfo>,
+    request: Request,
+    next: Next,
+) -> Result<Response> {
+    if !session.is_admin {
+        return Err(Error::Forbidden);
+    }
     Ok(next.run(request).await)
 }

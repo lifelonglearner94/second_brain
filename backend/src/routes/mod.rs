@@ -1,11 +1,11 @@
 //! HTTP routes. Each domain module owns its router; `router()` stitches them
 //! together. Routes are added incrementally as slices land.
 
-use axum::middleware::from_fn_with_state;
+use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::{get, post};
 use axum::Router;
 
-use crate::auth::middleware::require_session;
+use crate::auth::middleware::{require_admin, require_session};
 use crate::state::AppState;
 
 mod admin;
@@ -97,9 +97,26 @@ pub fn router(state: AppState) -> Router {
         .route("/ontology/proposals/{id}/reject", post(ontology::reject))
         .route_layer(from_fn_with_state(state.clone(), require_session));
 
+    // Admin-only routes (issue #73) — behind `require_session` (outer, resolves
+    // the session and stashes `SessionInfo` in extensions) AND `require_admin`
+    // (inner, refuses non-admins with 403 by reading `SessionInfo.is_admin`).
+    // The layer order is load-bearing: `require_session` must run first so the
+    // extension is present when `require_admin` reads it; chained
+    // `.route_layer` calls apply outermost-last, so `require_session` is added
+    // second (outer) and `require_admin` first (inner). `/admin/invites` mints
+    // and lists single-use invitations that gate future passkey registration.
+    let admin_routes: Router<AppState> = Router::new()
+        .route(
+            "/admin/invites",
+            post(admin::mint_invite).get(admin::list_invites),
+        )
+        .route_layer(from_fn(require_admin))
+        .route_layer(from_fn_with_state(state.clone(), require_session));
+
     Router::new()
         .route("/health", get(health::health))
         .merge(auth_routes)
         .merge(protected_routes)
+        .merge(admin_routes)
         .with_state(state)
 }
