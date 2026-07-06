@@ -17,3 +17,5 @@ target/
 # Env
 .env*
 !.env.example
+
+.agents
