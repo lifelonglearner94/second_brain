@@ -68,23 +68,22 @@ fn vec_to_blob(v: &[f32]) -> Vec<u8> {
     bytes
 }
 
-/// sqlite-vec KNN over `concept_embeddings`: nearest concept by cosine.
-/// Returns `(concept_id, similarity)` where similarity = 1 − distance. `None`
-/// if the collection is empty.
-///
-/// Lives in the Sqlite adapter as a private helper so the accretion write-path
-/// trait impl can call it synchronously inside the transaction — the KNN must
-/// see the post-retraction state (embeddings for vanished concepts are deleted
-/// before identity resolution runs), so it cannot be lifted out of the closure
-/// to call the async trait method.
-fn knn_concept_conn(conn: &rusqlite::Connection, query_vec: &[f32]) -> Result<Option<(i64, f32)>> {
+/// sqlite-vec KNN over `concept_embeddings`: nearest concept by cosine,
+/// scoped to `user_id` via the vec0 partition key (issue #72). Returns
+/// `(concept_id, similarity)` where similarity = 1 − distance. `None` if the
+/// collection is empty for this user.
+fn knn_concept_conn(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+    query_vec: &[f32],
+) -> Result<Option<(i64, f32)>> {
     let blob = vec_to_blob(query_vec);
     let row = conn
         .prepare(
             "SELECT concept_id, distance FROM concept_embeddings
-             WHERE embedding MATCH ?1 ORDER BY distance LIMIT 1",
+             WHERE user_id = ?1 AND embedding MATCH ?2 ORDER BY distance LIMIT 1",
         )?
-        .query_row(params![blob], |r| {
+        .query_row(params![user_id, blob], |r| {
             Ok((r.get::<_, i64>(0)?, 1.0 - r.get::<_, f64>(1)? as f32))
         })
         .optional()?;
@@ -96,18 +95,20 @@ fn knn_concept_conn(conn: &rusqlite::Connection, query_vec: &[f32]) -> Result<Op
 // These synchronous helpers run inside the Sqlite adapter's `run_txn`
 // closures. Private after #48 — no domain module calls them.
 
-/// Insert an edge row and return its surrogate id (ADR-0002).
+/// Insert an edge row and return its surrogate id (ADR-0002). Issue #72:
+/// scoped to `user_id`.
 fn insert_edge_conn(
     conn: &rusqlite::Connection,
+    user_id: &str,
     source_id: i64,
     target_id: i64,
     original_type: &str,
 ) -> Result<i64> {
     let created_at = now_seconds();
     conn.execute(
-        "INSERT INTO edges (source_concept_id, target_concept_id, original_type, created_at)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![source_id, target_id, original_type, created_at],
+        "INSERT INTO edges (user_id, source_concept_id, target_concept_id, original_type, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![user_id, source_id, target_id, original_type, created_at],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -129,9 +130,10 @@ fn init_type_history_conn(
 }
 
 /// Look up an edge id by its identity key `(source, original_type, target)`
-/// (ADR-0002). `None` if no edge matches.
+/// (ADR-0002). Issue #72: scoped to `user_id`. `None` if no edge matches.
 fn find_edge_id_conn(
     conn: &rusqlite::Connection,
+    user_id: &str,
     source_id: i64,
     original_type: &str,
     target_id: i64,
@@ -139,8 +141,8 @@ fn find_edge_id_conn(
     let id = conn
         .query_row(
             "SELECT id FROM edges
-             WHERE source_concept_id = ?1 AND original_type = ?2 AND target_concept_id = ?3",
-            params![source_id, original_type, target_id],
+             WHERE user_id = ?1 AND source_concept_id = ?2 AND original_type = ?3 AND target_concept_id = ?4",
+            params![user_id, source_id, original_type, target_id],
             |r| r.get::<_, i64>(0),
         )
         .optional()?;
@@ -149,8 +151,10 @@ fn find_edge_id_conn(
 
 /// Whether `source —[type]→ target` exists wearing `type` as its current
 /// projected type (ADR-0003) — the structural-inference traversability check.
+/// Issue #72: scoped to `user_id`.
 fn edge_exists_with_current_type_conn(
     conn: &rusqlite::Connection,
+    user_id: &str,
     source_id: i64,
     type_slug: &str,
     target_id: i64,
@@ -158,11 +162,11 @@ fn edge_exists_with_current_type_conn(
     let exists = conn
         .query_row(
             &format!(
-                "SELECT 1 FROM edges e WHERE e.source_concept_id = ?1
-                 AND e.target_concept_id = ?2 AND ({}) = ?3",
+                "SELECT 1 FROM edges e WHERE e.user_id = ?1 AND e.source_concept_id = ?2
+                 AND e.target_concept_id = ?3 AND ({}) = ?4",
                 current_type_subquery()
             ),
-            params![source_id, target_id, type_slug],
+            params![user_id, source_id, target_id, type_slug],
             |_| Ok(()),
         )
         .optional()?
@@ -170,21 +174,23 @@ fn edge_exists_with_current_type_conn(
     Ok(exists)
 }
 
-/// Whether a concept with `id` exists in the graph.
-fn concept_exists_conn(conn: &rusqlite::Connection, id: i64) -> Result<bool> {
+/// Whether a concept with `id` exists in the graph. Issue #72: scoped to
+/// `user_id`.
+fn concept_exists_conn(conn: &rusqlite::Connection, user_id: &str, id: i64) -> Result<bool> {
     let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM concepts WHERE id = ?1",
-        params![id],
+        "SELECT COUNT(*) FROM concepts WHERE user_id = ?1 AND id = ?2",
+        params![user_id, id],
         |r| r.get(0),
     )?;
     Ok(n > 0)
 }
 
 /// The governed edge-type slugs the LLM draws from (connection-scoped).
-fn ontology_slugs_conn(conn: &rusqlite::Connection) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare("SELECT slug FROM ontology ORDER BY id")?;
+/// Issue #72: scoped to `user_id`.
+fn ontology_slugs_conn(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT slug FROM ontology WHERE user_id = ?1 ORDER BY id")?;
     let slugs = stmt
-        .query_map([], |r| r.get::<_, String>(0))?
+        .query_map(params![user_id], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<_>>()?;
     Ok(slugs)
 }
@@ -193,8 +199,14 @@ fn ontology_slugs_conn(conn: &rusqlite::Connection) -> Result<Vec<String>> {
 /// repoint/merge edges touching the fold concept, union extraction provenance,
 /// drop the fold concept's embedding (vec0 has no FK cascade), then delete the
 /// fold concept — its remaining provenance and any merge suggestions
-/// referencing it cascade away (ADR-0001 / ADR-0010).
-fn merge_concepts_conn(conn: &rusqlite::Connection, keep_id: i64, fold_id: i64) -> Result<()> {
+/// referencing it cascade away (ADR-0001 / ADR-0010). Issue #72: scoped to
+/// `user_id` so edges don't get repointed across users.
+fn merge_concepts_conn(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+    keep_id: i64,
+    fold_id: i64,
+) -> Result<()> {
     // Edges touching the fold concept: merge duplicates (union provenance) and
     // repoint the rest onto the survivor. Iterated in Rust because the edges
     // table's UNIQUE (source, original_type, target) would otherwise trip on a
@@ -202,9 +214,9 @@ fn merge_concepts_conn(conn: &rusqlite::Connection, keep_id: i64, fold_id: i64) 
     let fold_edges: Vec<(i64, i64, i64, String)> = conn
         .prepare(
             "SELECT id, source_concept_id, target_concept_id, original_type
-             FROM edges WHERE source_concept_id = ?1 OR target_concept_id = ?1",
+             FROM edges WHERE user_id = ?1 AND (source_concept_id = ?2 OR target_concept_id = ?2)",
         )?
-        .query_map(params![fold_id], |r| {
+        .query_map(params![user_id, fold_id], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -214,9 +226,9 @@ fn merge_concepts_conn(conn: &rusqlite::Connection, keep_id: i64, fold_id: i64) 
         let collision = conn
             .query_row(
                 "SELECT id FROM edges
-                 WHERE source_concept_id = ?1 AND original_type = ?2
-                   AND target_concept_id = ?3 AND id != ?4",
-                params![new_src, &otype, new_tgt, edge_id],
+                 WHERE user_id = ?1 AND source_concept_id = ?2 AND original_type = ?3
+                   AND target_concept_id = ?4 AND id != ?5",
+                params![user_id, new_src, &otype, new_tgt, edge_id],
                 |r| r.get::<_, i64>(0),
             )
             .optional()?;
@@ -248,9 +260,10 @@ fn merge_concepts_conn(conn: &rusqlite::Connection, keep_id: i64, fold_id: i64) 
         params![keep_id, fold_id],
     )?;
     // The vec0 concept_embeddings table has no FK cascade — clean manually.
+    // Issue #72: scoped to user_id.
     conn.execute(
-        "DELETE FROM concept_embeddings WHERE concept_id = ?1",
-        params![fold_id],
+        "DELETE FROM concept_embeddings WHERE user_id = ?1 AND concept_id = ?2",
+        params![user_id, fold_id],
     )?;
     // Delete the fold concept; cascades drop its remaining provenance, any
     // edges still referencing it (none — all repointed above), and merge
@@ -330,9 +343,11 @@ fn insert_inference_provenance_conn(
 
 /// Compute the braindump ids whose edges formed the thematic density of a
 /// cluster (ADR-0009): the distinct braindumps that asserted edges where BOTH
-/// endpoints are in the cluster and the edge is not a self-edge.
+/// endpoints are in the cluster and the edge is not a self-edge. Issue #72:
+/// scoped to `user_id` so cross-user edges don't leak into the snapshot.
 fn compute_cluster_braindump_ids_conn(
     conn: &rusqlite::Connection,
+    user_id: &str,
     cluster_concept_ids: &[i64],
 ) -> Result<Vec<i64>> {
     if cluster_concept_ids.is_empty() {
@@ -344,13 +359,14 @@ fn compute_cluster_braindump_ids_conn(
         "SELECT DISTINCT ep.braindump_id
          FROM edge_provenance ep
          JOIN edges e ON ep.edge_id = e.id
-         WHERE e.source_concept_id != e.target_concept_id
-           AND e.source_concept_id IN (SELECT value FROM json_each(?1))
-           AND e.target_concept_id IN (SELECT value FROM json_each(?1))
+         WHERE e.user_id = ?1
+           AND e.source_concept_id != e.target_concept_id
+           AND e.source_concept_id IN (SELECT value FROM json_each(?2))
+           AND e.target_concept_id IN (SELECT value FROM json_each(?2))
          ORDER BY ep.braindump_id",
     )?;
     let ids = stmt
-        .query_map(params![cluster_json], |r| r.get::<_, i64>(0))?
+        .query_map(params![user_id, cluster_json], |r| r.get::<_, i64>(0))?
         .collect::<rusqlite::Result<_>>()?;
     Ok(ids)
 }
@@ -358,10 +374,15 @@ fn compute_cluster_braindump_ids_conn(
 // --- ontology `*_conn` helpers (moved from `ontology.rs` in #47) ---
 
 /// Whether a slug already exists in the ontology (connection-scoped).
-fn ontology_slug_exists_conn(conn: &rusqlite::Connection, slug: &str) -> Result<bool> {
+/// Issue #72: scoped to `user_id`.
+fn ontology_slug_exists_conn(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+    slug: &str,
+) -> Result<bool> {
     let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM ontology WHERE slug = ?1",
-        params![slug],
+        "SELECT COUNT(*) FROM ontology WHERE user_id = ?1 AND slug = ?2",
+        params![user_id, slug],
         |r| r.get(0),
     )?;
     Ok(n > 0)
@@ -487,17 +508,20 @@ fn bfs_expand(
     (concept_hops, traversed)
 }
 
-/// Load a braindump row by id from a SQLite connection. `None` if no row
-/// matches. Used by the retrieval subgraph-collection, backfill, and
-/// no-seed-fallback paths.
+/// Load a braindump row by id from a SQLite connection. Issue #72: scoped to
+/// `user_id` — a request by user A for user B's braindump by id returns `None`
+/// (the route maps that to 404). Used by the retrieval subgraph-collection,
+/// backfill, and no-seed-fallback paths.
 fn load_braindump_row_conn(
     conn: &rusqlite::Connection,
+    user_id: &str,
     id: i64,
 ) -> Result<Option<(i64, String, String, i64)>> {
     let row = conn
         .query_row(
-            "SELECT id, verbatim, cleaned, created_at FROM braindumps WHERE id = ?1",
-            params![id],
+            "SELECT id, verbatim, cleaned, created_at FROM braindumps
+             WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id],
             |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
@@ -520,173 +544,104 @@ fn load_braindump_row_conn(
 /// #45 to cover every scattered read helper — single-row reads, list reads,
 /// provenance reads, and the vec0 KNN sites in the graph, ontology, and
 /// retrieval paths.
+///
+/// Issue #72: every method takes `user_id` so the graph is multi-user-capable
+/// — each user's Braindumps, Concepts, Edges, Provenance, and inference
+/// proposals are isolated from every other user's. The vec0 KNN methods
+/// scope by `user_id` via the vec0 partition key (ADR-0004).
 #[async_trait]
 pub trait GraphRepo: Send + Sync {
-    /// Whether a braindump's embedding is stored (retrieval backfill,
-    /// ADR-0004). The smallest possible read; #44 migrated it to prove the
-    /// seam.
-    async fn braindump_embedding_stored(&self, braindump_id: i64) -> Result<bool>;
+    async fn braindump_embedding_stored(&self, user_id: &str, braindump_id: i64) -> Result<bool>;
 
-    /// All ontology types as `(slug, label, description)`, ordered by `id`.
-    /// The single source of truth for the full-row ontology read — the query
-    /// that was duplicated across `ontology.rs` and `routes/ontology.rs` lives
-    /// here now (in the Sqlite adapter) and nowhere else.
-    async fn ontology_types(&self) -> Result<Vec<(String, String, String)>>;
+    async fn ontology_types(&self, user_id: &str) -> Result<Vec<(String, String, String)>>;
 
-    /// The governed edge-type slugs the LLM draws from. Derived from
-    /// [`ontology_types`](GraphRepo::ontology_types) so the slug-only read and
-    /// the full-row read cannot drift apart.
-    async fn ontology_slugs(&self) -> Result<Vec<String>> {
+    async fn ontology_slugs(&self, user_id: &str) -> Result<Vec<String>> {
         Ok(self
-            .ontology_types()
+            .ontology_types(user_id)
             .await?
             .into_iter()
             .map(|(slug, _, _)| slug)
             .collect())
     }
 
-    /// A single concept by id (read model). Identity is by embedding
-    /// (ADR-0001), not id; this is the inspection/helper path. `None` if no
-    /// concept with `id` exists.
-    async fn get_concept(&self, id: i64) -> Result<Option<Concept>>;
+    async fn get_concept(&self, user_id: &str, id: i64) -> Result<Option<Concept>>;
 
-    /// The braindump ids that extracted a concept (ADR-0010 extraction
-    /// provenance), ordered by braindump id.
-    async fn concept_provenance(&self, concept_id: i64) -> Result<Vec<i64>>;
+    async fn concept_provenance(&self, user_id: &str, concept_id: i64) -> Result<Vec<i64>>;
 
-    /// Look up an edge by its identity key `(source, original_type, target)`
-    /// (ADR-0002). `original_type` anchors identity and is immutable; the
-    /// current type is a projection off the type history (ADR-0003) and is
-    /// NOT returned here — see [`all_edges_with_current_type`] /
-    /// [`edge_type_history`](GraphRepo::edge_type_history). `None` if no edge
-    /// matches.
-    ///
-    /// [`all_edges_with_current_type`]: GraphRepo::all_edges_with_current_type
     async fn find_edge(
         &self,
+        user_id: &str,
         source_id: i64,
         original_type: &str,
         target_id: i64,
     ) -> Result<Option<Edge>>;
 
-    /// The braindump ids asserting an edge (ADR-0002 `asserted_by`), ordered
-    /// by braindump id.
-    async fn edge_provenance(&self, edge_id: i64) -> Result<Vec<i64>>;
+    async fn edge_provenance(&self, user_id: &str, edge_id: i64) -> Result<Vec<i64>>;
 
-    /// The append-only type history of an edge (ADR-0003). Index 0 is the
-    /// original assertion; the last entry is the current (projected) type.
-    async fn edge_type_history(&self, edge_id: i64) -> Result<Vec<TypeHistoryEntry>>;
+    async fn edge_type_history(&self, user_id: &str, edge_id: i64)
+        -> Result<Vec<TypeHistoryEntry>>;
 
-    /// All pending + resolved merge suggestions (ADR-0001), ordered by id.
-    async fn merge_suggestions(&self) -> Result<Vec<MergeSuggestion>>;
+    async fn merge_suggestions(&self, user_id: &str) -> Result<Vec<MergeSuggestion>>;
 
-    /// Look up a concept id by exact label. Identity is by embedding
-    /// (ADR-0001), not label, so this is a test/inspection helper — not the
-    /// identity path. `None` if no concept with the label exists.
-    async fn concept_id_for_label(&self, label: &str) -> Result<Option<i64>>;
+    async fn concept_id_for_label(&self, user_id: &str, label: &str) -> Result<Option<i64>>;
 
-    /// Every concept, ordered by id — the full node set for whole-graph reads
-    /// (issue #27's Global Topology Snapshot).
-    async fn all_concepts(&self) -> Result<Vec<Concept>>;
+    async fn all_concepts(&self, user_id: &str) -> Result<Vec<Concept>>;
 
-    /// Every edge with its projected current type (ADR-0003), ordered by id.
-    /// The current type is the last `edge_type_history` entry; for a
-    /// freshly-created edge it equals the original assertion.
-    async fn all_edges_with_current_type(&self) -> Result<Vec<EdgeProjection>>;
+    async fn all_edges_with_current_type(&self, user_id: &str) -> Result<Vec<EdgeProjection>>;
 
-    /// sqlite-vec KNN: nearest concept by cosine. Returns `(concept_id,
-    /// similarity)` where similarity = 1 − distance (cosine metric on the vec0
-    /// table). `None` if no concepts exist yet. Used by concept identity
-    /// resolution / accretion (ADR-0001).
-    async fn knn_concept(&self, query_vec: &[f32]) -> Result<Option<(i64, f32)>>;
+    async fn knn_concept(&self, user_id: &str, query_vec: &[f32]) -> Result<Option<(i64, f32)>>;
 
-    /// sqlite-vec KNN: nearest ontology type by cosine. Returns `(slug,
-    /// similarity)` where similarity = 1 − distance. `None` if the
-    /// type-embedding collection is empty. Used by ontology governance dedup
-    /// (ADR-0003).
-    async fn knn_type(&self, query_vec: &[f32]) -> Result<Option<(String, f32)>>;
+    async fn knn_type(&self, user_id: &str, query_vec: &[f32]) -> Result<Option<(String, f32)>>;
 
-    /// sqlite-vec KNN: top-K concepts by cosine similarity to the query
-    /// vector. similarity = 1 − distance. Used by retrieval seed
-    /// (ADR-0004).
-    async fn knn_concepts(&self, query_vec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>>;
+    async fn knn_concepts(
+        &self,
+        user_id: &str,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(i64, f32)>>;
 
-    /// sqlite-vec KNN: top-K braindumps by cosine similarity to the query
-    /// vector. similarity = 1 − distance. Used by retrieval backfill and the
-    /// no-seed fallback (ADR-0004).
-    async fn knn_braindumps(&self, query_vec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>>;
+    async fn knn_braindumps(
+        &self,
+        user_id: &str,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(i64, f32)>>;
 
-    // --- write paths (issue #46) ---
+    async fn insert_braindump(
+        &self,
+        user_id: &str,
+        verbatim: &str,
+        cleaned: &str,
+    ) -> Result<Braindump>;
 
-    /// Persist a new braindump with its verbatim and cleaned rendering
-    /// (ADR-0007). The granular write behind the ingest orchestration; returns
-    /// the stored row with the surrogate id and `created_at` filled in. No
-    /// transaction — a single INSERT.
-    async fn insert_braindump(&self, verbatim: &str, cleaned: &str) -> Result<Braindump>;
+    async fn get_braindump(&self, user_id: &str, id: i64) -> Result<Option<Braindump>>;
 
-    /// Look up a braindump by id. `None` if no row matches.
-    async fn get_braindump(&self, id: i64) -> Result<Option<Braindump>>;
-
-    /// Overwrite the verbatim in place (error-correction, ADR-0007) and store
-    /// the re-cleaned rendering. The id and `created_at` are untouched. Returns
-    /// the updated row, or `None` if no braindump with `id` exists.
     async fn update_braindump(
         &self,
+        user_id: &str,
         id: i64,
         verbatim: String,
         cleaned: String,
     ) -> Result<Option<Braindump>>;
 
-    /// The Concept/Edge accretion pipeline (ADR-0001 / ADR-0002 / ADR-0003 /
-    /// ADR-0007 / ADR-0010): retract this braindump's prior extraction, store
-    /// its embedding, resolve each concept by embedding KNN (accrete /
-    /// suggest / create), accrete edges by `(source, original_type, target)`,
-    /// init type history at index 0, and write provenance — all inside one
-    /// transaction. The embedding *computation* (LLM network call) runs in
-    /// the caller; the precomputed vectors are passed in so the trait method
-    /// owns only the synchronous storage work that must commit atomically.
     async fn ingest_extraction(
         &self,
+        user_id: &str,
         braindump_id: i64,
         braindump_vec: Vec<f32>,
         extraction: ExtractionResult,
         concept_vecs: Vec<Vec<f32>>,
     ) -> Result<IngestOutcome>;
 
-    /// Delete a braindump and cascade through the graph (ADR-0002 / ADR-0007 /
-    /// ADR-0010). Drops the braindump's id from every concept's extraction
-    /// provenance and every edge's `asserted_by`; a concept vanishes when its
-    /// last extracting braindump is removed, an edge vanishes when its last
-    /// asserter is removed. Returns `false` if no braindump with `id` exists.
-    async fn delete_braindump(&self, braindump_id: i64) -> Result<bool>;
+    async fn delete_braindump(&self, user_id: &str, braindump_id: i64) -> Result<bool>;
 
-    /// Approve a pending concept merge suggestion (ADR-0001 / ADR-0010): fold
-    /// the `new_concept_id` into the `existing_concept_id` — union extraction
-    /// provenance, repoint edges from the fold concept onto the survivor, and
-    /// drop the fold concept and the suggestion. `NotFound` if the suggestion
-    /// does not exist.
-    async fn approve_merge_suggestion(&self, suggestion_id: i64) -> Result<()>;
+    async fn approve_merge_suggestion(&self, user_id: &str, suggestion_id: i64) -> Result<()>;
 
-    /// Reject a pending concept merge suggestion (ADR-0001): keep the two
-    /// concepts separate and drop the suggestion. `NotFound` if the suggestion
-    /// does not exist.
-    async fn reject_merge_suggestion(&self, suggestion_id: i64) -> Result<()>;
+    async fn reject_merge_suggestion(&self, user_id: &str, suggestion_id: i64) -> Result<()>;
 
-    // --- chat write-back (issue #47, ADR-0006) ---
-    //
-    // All pure-DB: the LLM that produces the proposal info (path, cluster,
-    // rationale) lives in the chat route, not in chat_inference.rs. The trait
-    // methods own the propose→HITL→endorse/reject storage flow. The
-    // `InferenceProposer` trait (architecture-review candidate 3) becomes the
-    // natural next step after this slice — splitting Structural and Thematic
-    // proposal *generation* (the LLM side) behind a separate trait.
-
-    /// Propose a structural inference (ADR-0006): store a pending proposal for
-    /// a direct edge summarizing a traversable multi-hop path. Validates the
-    /// proposed type is a governed ontology slug and every evidence-path hop is
-    /// a real edge wearing the stated type as its current projected type.
     async fn propose_structural_inference(
         &self,
+        user_id: &str,
         source_concept_id: i64,
         target_concept_id: i64,
         proposed_type: &str,
@@ -694,12 +649,9 @@ pub trait GraphRepo: Send + Sync {
         rationale: Option<&str>,
     ) -> Result<ChatInferenceProposal>;
 
-    /// Propose a thematic inference (ADR-0006 + ADR-0009): store a pending
-    /// proposal for a new edge bridging cluster-mates, with a frozen Thematic
-    /// Snapshot. Validates the proposed type, cluster concepts, and computed
-    /// braindump evidence.
     async fn propose_thematic_inference(
         &self,
+        user_id: &str,
         source_concept_id: i64,
         target_concept_id: i64,
         proposed_type: &str,
@@ -707,44 +659,40 @@ pub trait GraphRepo: Send + Sync {
         rationale: Option<&str>,
     ) -> Result<ChatInferenceProposal>;
 
-    /// Endorse a pending proposal (ADR-0006): persist the edge + inference
-    /// provenance + type history, flip status to endorsed. `NotFound` if the
-    /// proposal does not exist; `Conflict` if not pending.
-    async fn endorse_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal>;
+    async fn endorse_inference_proposal(
+        &self,
+        user_id: &str,
+        id: i64,
+    ) -> Result<ChatInferenceProposal>;
 
-    /// Reject a pending proposal (ADR-0006): keep the graph untouched, mark
-    /// the proposal rejected. `NotFound` if missing; `Conflict` if not pending.
-    async fn reject_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal>;
+    async fn reject_inference_proposal(
+        &self,
+        user_id: &str,
+        id: i64,
+    ) -> Result<ChatInferenceProposal>;
 
-    /// List all chat-inference proposals, oldest first.
-    async fn list_inference_proposals(&self) -> Result<Vec<ChatInferenceProposal>>;
+    async fn list_inference_proposals(&self, user_id: &str) -> Result<Vec<ChatInferenceProposal>>;
 
-    /// Look up a single chat-inference proposal by id. `None` if no row matches.
-    async fn get_inference_proposal(&self, id: i64) -> Result<Option<ChatInferenceProposal>>;
+    async fn get_inference_proposal(
+        &self,
+        user_id: &str,
+        id: i64,
+    ) -> Result<Option<ChatInferenceProposal>>;
 
-    /// The chat-inference assertions backing an edge (ADR-0006 origin-typed
-    /// provenance).
-    async fn edge_inference_asserted_by(&self, edge_id: i64) -> Result<Vec<InferenceAssertion>>;
+    async fn edge_inference_asserted_by(
+        &self,
+        user_id: &str,
+        edge_id: i64,
+    ) -> Result<Vec<InferenceAssertion>>;
 
-    // --- ontology governance + refactor (issue #47, ADR-0003) ---
-    //
-    // Governance (propose/approve/reject) is pure-DB: the LLM embedding
-    // computation runs in the wrapper. The refactor takes `&dyn Llm` (allowed
-    // deviation per #47's design rule) because it interleaves LLM-per-edge
-    // re-classification with DB reads; the InMemoryGraphRepo impl works with
-    // FakeLlm so tests are hermetic.
+    async fn list_type_proposals(&self, user_id: &str) -> Result<Vec<TypeProposal>>;
 
-    /// List all type proposals, oldest first.
-    async fn list_type_proposals(&self) -> Result<Vec<TypeProposal>>;
+    async fn get_type_proposal(&self, user_id: &str, id: i64) -> Result<Option<TypeProposal>>;
 
-    /// Look up a single type proposal by id. `None` if no row matches.
-    async fn get_type_proposal(&self, id: i64) -> Result<Option<TypeProposal>>;
-
-    /// Insert a type proposal row (pure-DB). The wrapper computes the embedding
-    /// + KNN near-match + status; this method owns only the INSERT.
     #[allow(clippy::too_many_arguments)]
     async fn insert_type_proposal(
         &self,
+        user_id: &str,
         slug: String,
         label: String,
         description: String,
@@ -754,12 +702,9 @@ pub trait GraphRepo: Send + Sync {
         near_match_similarity: Option<f32>,
     ) -> Result<TypeProposal>;
 
-    /// Approve a pending type proposal (ADR-0003): add the type to the ontology,
-    /// store its type-embedding, mark the proposal approved. The wrapper computes
-    /// the embedding; this method owns the atomic INSERT+UPDATE inside one
-    /// transaction.
     async fn approve_type_proposal(
         &self,
+        user_id: &str,
         id: i64,
         slug: String,
         label: String,
@@ -767,61 +712,39 @@ pub trait GraphRepo: Send + Sync {
         type_vec: Vec<f32>,
     ) -> Result<()>;
 
-    /// Reject a pending type proposal (ADR-0003): mark rejected, no ontology
-    /// change. `NotFound` if missing; `Conflict` if not pending.
-    async fn reject_type_proposal(&self, id: i64) -> Result<()>;
+    async fn reject_type_proposal(&self, _user_id: &str, id: i64) -> Result<()>;
 
-    /// The projected current type of an edge: the last entry of its append-only
-    /// type history (ADR-0003). `None` if no history.
-    async fn current_edge_type(&self, edge_id: i64) -> Result<Option<String>>;
+    async fn current_edge_type(&self, user_id: &str, edge_id: i64) -> Result<Option<String>>;
 
-    /// Every edge id whose projected current type is `slug`. The refactor
-    /// targets these edges.
-    async fn edges_with_current_type(&self, slug: &str) -> Result<Vec<i64>>;
+    async fn edges_with_current_type(&self, user_id: &str, slug: &str) -> Result<Vec<i64>>;
 
-    /// The (source label, target label, current type) for an edge — the prompt
-    /// payload for the refactor LLM.
-    async fn edge_endpoints_and_type(&self, edge_id: i64) -> Result<(String, String, String)>;
+    async fn edge_endpoints_and_type(
+        &self,
+        user_id: &str,
+        edge_id: i64,
+    ) -> Result<(String, String, String)>;
 
-    /// Run the ontology refactor (ADR-0003): re-classify every edge of the
-    /// merged type against the new vocabulary, appending the LLM's chosen slug
-    /// to each edge's type history. Takes `&dyn Llm` (allowed deviation: the
-    /// LLM-per-edge interleaving can't be split without duplicating logic); the
-    /// InMemoryGraphRepo impl works with FakeLlm.
-    async fn run_refactor(&self, llm: &dyn Llm, proposal: &TypeProposal)
-        -> Result<RefactorOutcome>;
+    async fn run_refactor(
+        &self,
+        user_id: &str,
+        llm: &dyn Llm,
+        proposal: &TypeProposal,
+    ) -> Result<RefactorOutcome>;
 
-    // --- retrieval pipeline (issue #47, ADR-0004) ---
-    //
-    // Pure-DB: the wrapper computes the query embedding (LLM); the trait method
-    // takes the precomputed `query_vec` and owns the full seed→expand→collect→
-    // backfill flow. The petgraph BFS is private to the adapter's impl.
+    async fn retrieve(&self, user_id: &str, query_vec: &[f32]) -> Result<RetrievalResult>;
 
-    /// Run seed-then-expand retrieval (or the no-seed fallback) for a
-    /// precomputed query vector. Returns ranked braindumps plus the traversed
-    /// edge paths.
-    async fn retrieve(&self, query_vec: &[f32]) -> Result<RetrievalResult>;
+    async fn all_edge_endpoints(&self, user_id: &str) -> Result<Vec<(i64, i64)>>;
 
-    // --- issue #48: additional reads/writes migrated from domain modules ---
+    async fn graph_delta(&self, user_id: &str, since: i64) -> Result<GraphDelta>;
 
-    /// Every edge's `(source_concept_id, target_concept_id)` endpoints, ordered
-    /// by edge id — the topology input for Louvain clustering (ADR-0008). No
-    /// type information: the partition is type-agnostic (each typed edge
-    /// contributes unit weight regardless of its type).
-    async fn all_edge_endpoints(&self) -> Result<Vec<(i64, i64)>>;
+    async fn missing_type_rows(&self, user_id: &str) -> Result<Vec<(i64, String, String, String)>>;
 
-    /// Compute the graph delta since `since` (issue #28): additions, deletions
-    /// (tombstones), and retags. The cursor is `now_seconds()` at query time.
-    async fn graph_delta(&self, since: i64) -> Result<GraphDelta>;
-
-    /// Ontology types missing a type-embedding (ADR-0003 dedup). Returns
-    /// `(ontology_id, slug, label, description)` for each type that has no row
-    /// in the type-embedding collection. Used by the startup seed.
-    async fn missing_type_rows(&self) -> Result<Vec<(i64, String, String, String)>>;
-
-    /// Store a type-embedding for `ontology_id` (ADR-0003 dedup). Idempotent:
-    /// `INSERT OR IGNORE`.
-    async fn store_type_embedding(&self, ontology_id: i64, vec: Vec<f32>) -> Result<()>;
+    async fn store_type_embedding(
+        &self,
+        user_id: &str,
+        ontology_id: i64,
+        vec: Vec<f32>,
+    ) -> Result<()>;
 }
 
 /// Production adapter: delegates to [`Db::with_conn`](crate::db::Db::with_conn)
@@ -876,12 +799,14 @@ impl SqliteGraphRepo {
 
 #[async_trait]
 impl GraphRepo for SqliteGraphRepo {
-    async fn braindump_embedding_stored(&self, braindump_id: i64) -> Result<bool> {
+    async fn braindump_embedding_stored(&self, user_id: &str, braindump_id: i64) -> Result<bool> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let count: i64 = conn.query_row(
-                    "SELECT count(*) FROM braindump_embeddings WHERE braindump_id = ?1",
-                    params![braindump_id],
+                    "SELECT count(*) FROM braindump_embeddings
+                     WHERE user_id = ?1 AND braindump_id = ?2",
+                    params![user_id, braindump_id],
                     |r| r.get(0),
                 )?;
                 Ok(count > 0)
@@ -889,26 +814,33 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn ontology_types(&self) -> Result<Vec<(String, String, String)>> {
+    async fn ontology_types(&self, user_id: &str) -> Result<Vec<(String, String, String)>> {
+        let user_id = user_id.to_string();
         self.db
-            .with_conn(|conn| {
-                let mut stmt =
-                    conn.prepare("SELECT slug, label, description FROM ontology ORDER BY id")?;
+            .with_conn(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT slug, label, description FROM ontology
+                     WHERE user_id = ?1 ORDER BY id",
+                )?;
                 let rows = stmt
-                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?)))?
+                    .query_map(params![user_id], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?))
+                    })?
                     .collect::<rusqlite::Result<_>>()?;
                 Ok(rows)
             })
             .await
     }
 
-    async fn get_concept(&self, id: i64) -> Result<Option<Concept>> {
+    async fn get_concept(&self, user_id: &str, id: i64) -> Result<Option<Concept>> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let row = conn
                     .query_row(
-                        "SELECT id, label, created_at FROM concepts WHERE id = ?1",
-                        params![id],
+                        "SELECT id, label, created_at FROM concepts
+                         WHERE user_id = ?1 AND id = ?2",
+                        params![user_id, id],
                         |r| {
                             Ok(Concept {
                                 id: r.get(0)?,
@@ -923,15 +855,18 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn concept_provenance(&self, concept_id: i64) -> Result<Vec<i64>> {
+    async fn concept_provenance(&self, user_id: &str, concept_id: i64) -> Result<Vec<i64>> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT braindump_id FROM concept_provenance
-                     WHERE concept_id = ?1 ORDER BY braindump_id",
+                     WHERE concept_id = ?1 AND concept_id IN
+                         (SELECT id FROM concepts WHERE user_id = ?2)
+                     ORDER BY braindump_id",
                 )?;
                 let ids = stmt
-                    .query_map(params![concept_id], |r| r.get::<_, i64>(0))?
+                    .query_map(params![concept_id, user_id], |r| r.get::<_, i64>(0))?
                     .collect::<rusqlite::Result<_>>()?;
                 Ok(ids)
             })
@@ -940,19 +875,22 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn find_edge(
         &self,
+        user_id: &str,
         source_id: i64,
         original_type: &str,
         target_id: i64,
     ) -> Result<Option<Edge>> {
         let original_type = original_type.to_string();
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let row = conn
                     .query_row(
                         "SELECT id, source_concept_id, target_concept_id, original_type, created_at
                          FROM edges
-                         WHERE source_concept_id = ?1 AND original_type = ?2 AND target_concept_id = ?3",
-                        params![source_id, original_type, target_id],
+                         WHERE user_id = ?1 AND source_concept_id = ?2 AND original_type = ?3
+                           AND target_concept_id = ?4",
+                        params![user_id, source_id, original_type, target_id],
                         |r| {
                             Ok(Edge {
                                 id: r.get(0)?,
@@ -969,30 +907,40 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn edge_provenance(&self, edge_id: i64) -> Result<Vec<i64>> {
+    async fn edge_provenance(&self, user_id: &str, edge_id: i64) -> Result<Vec<i64>> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT braindump_id FROM edge_provenance
-                     WHERE edge_id = ?1 ORDER BY braindump_id",
+                     WHERE edge_id = ?1 AND edge_id IN
+                         (SELECT id FROM edges WHERE user_id = ?2)
+                     ORDER BY braindump_id",
                 )?;
                 let ids = stmt
-                    .query_map(params![edge_id], |r| r.get::<_, i64>(0))?
+                    .query_map(params![edge_id, user_id], |r| r.get::<_, i64>(0))?
                     .collect::<rusqlite::Result<_>>()?;
                 Ok(ids)
             })
             .await
     }
 
-    async fn edge_type_history(&self, edge_id: i64) -> Result<Vec<TypeHistoryEntry>> {
+    async fn edge_type_history(
+        &self,
+        user_id: &str,
+        edge_id: i64,
+    ) -> Result<Vec<TypeHistoryEntry>> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT seq_index, type_slug, created_at FROM edge_type_history
-                     WHERE edge_id = ?1 ORDER BY seq_index",
+                     WHERE edge_id = ?1 AND edge_id IN
+                         (SELECT id FROM edges WHERE user_id = ?2)
+                     ORDER BY seq_index",
                 )?;
                 let entries = stmt
-                    .query_map(params![edge_id], |r| {
+                    .query_map(params![edge_id, user_id], |r| {
                         Ok(TypeHistoryEntry {
                             seq_index: r.get(0)?,
                             type_slug: r.get(1)?,
@@ -1005,16 +953,17 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn merge_suggestions(&self) -> Result<Vec<MergeSuggestion>> {
+    async fn merge_suggestions(&self, user_id: &str) -> Result<Vec<MergeSuggestion>> {
+        let user_id = user_id.to_string();
         self.db
-            .with_conn(|conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, kind, braindump_id, new_concept_label, new_concept_id,
                             existing_concept_id, similarity, status, created_at
-                     FROM merge_suggestions ORDER BY id",
+                     FROM merge_suggestions WHERE user_id = ?1 ORDER BY id",
                 )?;
                 let rows = stmt
-                    .query_map([], |r| {
+                    .query_map(params![user_id], |r| {
                         Ok(MergeSuggestion {
                             id: r.get(0)?,
                             kind: r.get(1)?,
@@ -1033,14 +982,16 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn concept_id_for_label(&self, label: &str) -> Result<Option<i64>> {
+    async fn concept_id_for_label(&self, user_id: &str, label: &str) -> Result<Option<i64>> {
         let label = label.to_string();
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let id = conn
                     .query_row(
-                        "SELECT id FROM concepts WHERE label = ?1 ORDER BY id LIMIT 1",
-                        params![label],
+                        "SELECT id FROM concepts
+                         WHERE user_id = ?1 AND label = ?2 ORDER BY id LIMIT 1",
+                        params![user_id, label],
                         |r| r.get::<_, i64>(0),
                     )
                     .optional()?;
@@ -1049,13 +1000,16 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn all_concepts(&self) -> Result<Vec<Concept>> {
+    async fn all_concepts(&self, user_id: &str) -> Result<Vec<Concept>> {
+        let user_id = user_id.to_string();
         self.db
-            .with_conn(|conn| {
-                let mut stmt =
-                    conn.prepare("SELECT id, label, created_at FROM concepts ORDER BY id")?;
+            .with_conn(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, label, created_at FROM concepts
+                     WHERE user_id = ?1 ORDER BY id",
+                )?;
                 let rows = stmt
-                    .query_map([], |r| {
+                    .query_map(params![user_id], |r| {
                         Ok(Concept {
                             id: r.get(0)?,
                             label: r.get(1)?,
@@ -1068,17 +1022,18 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn all_edges_with_current_type(&self) -> Result<Vec<EdgeProjection>> {
+    async fn all_edges_with_current_type(&self, user_id: &str) -> Result<Vec<EdgeProjection>> {
+        let user_id = user_id.to_string();
         self.db
-            .with_conn(|conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(&format!(
                     "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
                             e.created_at, ({}) AS current_type
-                     FROM edges e ORDER BY e.id",
+                     FROM edges e WHERE e.user_id = ?1 ORDER BY e.id",
                     current_type_subquery()
                 ))?;
                 let rows = stmt
-                    .query_map([], |r| {
+                    .query_map(params![user_id], |r| {
                         Ok(EdgeProjection {
                             id: r.get(0)?,
                             source_concept_id: r.get(1)?,
@@ -1094,31 +1049,33 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn knn_concept(&self, query_vec: &[f32]) -> Result<Option<(i64, f32)>> {
+    async fn knn_concept(&self, user_id: &str, query_vec: &[f32]) -> Result<Option<(i64, f32)>> {
         let query_vec = query_vec.to_vec();
+        let user_id = user_id.to_string();
         self.db
-            .with_conn(move |conn| knn_concept_conn(conn, &query_vec))
+            .with_conn(move |conn| knn_concept_conn(conn, &user_id, &query_vec))
             .await
     }
 
-    async fn knn_type(&self, query_vec: &[f32]) -> Result<Option<(String, f32)>> {
+    async fn knn_type(&self, user_id: &str, query_vec: &[f32]) -> Result<Option<(String, f32)>> {
         let blob = vec_to_blob(query_vec);
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let row = conn
                     .prepare(
                         "SELECT ontology_id, distance FROM type_embeddings
-                         WHERE embedding MATCH ?1 ORDER BY distance LIMIT 1",
+                         WHERE user_id = ?1 AND embedding MATCH ?2 ORDER BY distance LIMIT 1",
                     )?
-                    .query_row(params![blob], |r| {
+                    .query_row(params![user_id, blob], |r| {
                         Ok((r.get::<_, i64>(0)?, 1.0 - r.get::<_, f64>(1)? as f32))
                     })
                     .optional()?;
                 match row {
                     Some((ontology_id, sim)) => {
                         let slug: String = conn.query_row(
-                            "SELECT slug FROM ontology WHERE id = ?1",
-                            params![ontology_id],
+                            "SELECT slug FROM ontology WHERE user_id = ?1 AND id = ?2",
+                            params![user_id, ontology_id],
                             |r| r.get(0),
                         )?;
                         Ok(Some((slug, sim)))
@@ -1129,15 +1086,21 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn knn_concepts(&self, query_vec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
+    async fn knn_concepts(
+        &self,
+        user_id: &str,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(i64, f32)>> {
         let blob = vec_to_blob(query_vec);
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT concept_id, distance FROM concept_embeddings
-                     WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
+                     WHERE user_id = ?1 AND embedding MATCH ?2 ORDER BY distance LIMIT ?3",
                 )?;
-                let rows = stmt.query_map(params![blob, limit as i64], |r| {
+                let rows = stmt.query_map(params![user_id, blob, limit as i64], |r| {
                     Ok((r.get::<_, i64>(0)?, 1.0 - r.get::<_, f64>(1)? as f32))
                 })?;
                 let mut out = Vec::new();
@@ -1149,15 +1112,21 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn knn_braindumps(&self, query_vec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
+    async fn knn_braindumps(
+        &self,
+        user_id: &str,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(i64, f32)>> {
         let blob = vec_to_blob(query_vec);
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT braindump_id, distance FROM braindump_embeddings
-                     WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
+                     WHERE user_id = ?1 AND embedding MATCH ?2 ORDER BY distance LIMIT ?3",
                 )?;
-                let rows = stmt.query_map(params![blob, limit as i64], |r| {
+                let rows = stmt.query_map(params![user_id, blob, limit as i64], |r| {
                     Ok((r.get::<_, i64>(0)?, 1.0 - r.get::<_, f64>(1)? as f32))
                 })?;
                 let mut out = Vec::new();
@@ -1171,16 +1140,22 @@ impl GraphRepo for SqliteGraphRepo {
 
     // --- write paths (issue #46) ---
 
-    async fn insert_braindump(&self, verbatim: &str, cleaned: &str) -> Result<Braindump> {
+    async fn insert_braindump(
+        &self,
+        user_id: &str,
+        verbatim: &str,
+        cleaned: &str,
+    ) -> Result<Braindump> {
         let verbatim = verbatim.to_string();
         let cleaned = cleaned.to_string();
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let created_at = now_seconds();
                 conn.execute(
-                    "INSERT INTO braindumps (verbatim, cleaned, created_at)
-                     VALUES (?1, ?2, ?3)",
-                    params![verbatim, cleaned, created_at],
+                    "INSERT INTO braindumps (user_id, verbatim, cleaned, created_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![user_id, verbatim, cleaned, created_at],
                 )?;
                 let id = conn.last_insert_rowid();
                 Ok(Braindump {
@@ -1193,14 +1168,15 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn get_braindump(&self, id: i64) -> Result<Option<Braindump>> {
+    async fn get_braindump(&self, user_id: &str, id: i64) -> Result<Option<Braindump>> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let row = conn
                     .query_row(
                         "SELECT id, verbatim, cleaned, created_at
-                         FROM braindumps WHERE id = ?1",
-                        params![id],
+                         FROM braindumps WHERE user_id = ?1 AND id = ?2",
+                        params![user_id, id],
                         row_to_braindump,
                     )
                     .optional()?;
@@ -1211,23 +1187,26 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn update_braindump(
         &self,
+        user_id: &str,
         id: i64,
         verbatim: String,
         cleaned: String,
     ) -> Result<Option<Braindump>> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let updated = conn.execute(
-                    "UPDATE braindumps SET verbatim = ?1, cleaned = ?2 WHERE id = ?3",
-                    params![verbatim, cleaned, id],
+                    "UPDATE braindumps SET verbatim = ?1, cleaned = ?2
+                     WHERE user_id = ?3 AND id = ?4",
+                    params![verbatim, cleaned, user_id, id],
                 )?;
                 if updated == 0 {
                     return Ok(None);
                 }
                 let row = conn.query_row(
                     "SELECT id, verbatim, cleaned, created_at
-                     FROM braindumps WHERE id = ?1",
-                    params![id],
+                     FROM braindumps WHERE user_id = ?1 AND id = ?2",
+                    params![user_id, id],
                     row_to_braindump,
                 )?;
                 Ok(Some(row))
@@ -1237,6 +1216,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn ingest_extraction(
         &self,
+        user_id: &str,
         braindump_id: i64,
         braindump_vec: Vec<f32>,
         extraction: ExtractionResult,
@@ -1244,9 +1224,11 @@ impl GraphRepo for SqliteGraphRepo {
     ) -> Result<IngestOutcome> {
         let concepts = extraction.concepts;
         let edges = extraction.edges;
+        let user_id = user_id.to_string();
         self.run_txn(move |conn| {
             accrete_conn(
                 conn,
+                &user_id,
                 braindump_id,
                 braindump_vec,
                 concepts,
@@ -1257,12 +1239,13 @@ impl GraphRepo for SqliteGraphRepo {
         .await
     }
 
-    async fn delete_braindump(&self, braindump_id: i64) -> Result<bool> {
+    async fn delete_braindump(&self, user_id: &str, braindump_id: i64) -> Result<bool> {
+        let user_id = user_id.to_string();
         self.run_txn(move |conn| {
             let exists = conn
                 .query_row(
-                    "SELECT 1 FROM braindumps WHERE id = ?1",
-                    params![braindump_id],
+                    "SELECT 1 FROM braindumps WHERE user_id = ?1 AND id = ?2",
+                    params![user_id, braindump_id],
                     |_| Ok(()),
                 )
                 .optional()?
@@ -1270,23 +1253,24 @@ impl GraphRepo for SqliteGraphRepo {
             if !exists {
                 return Ok(false);
             }
-            retract_extraction_conn(conn, braindump_id)?;
+            retract_extraction_conn(conn, &user_id, braindump_id)?;
             let n = conn.execute(
-                "DELETE FROM braindumps WHERE id = ?1",
-                params![braindump_id],
+                "DELETE FROM braindumps WHERE user_id = ?1 AND id = ?2",
+                params![user_id, braindump_id],
             )?;
             Ok(n > 0)
         })
         .await
     }
 
-    async fn approve_merge_suggestion(&self, suggestion_id: i64) -> Result<()> {
+    async fn approve_merge_suggestion(&self, user_id: &str, suggestion_id: i64) -> Result<()> {
+        let user_id = user_id.to_string();
         self.run_txn(move |conn| {
             let pair = conn
                 .query_row(
                     "SELECT new_concept_id, existing_concept_id FROM merge_suggestions
-                     WHERE id = ?1",
-                    params![suggestion_id],
+                     WHERE user_id = ?1 AND id = ?2",
+                    params![user_id, suggestion_id],
                     |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
                 )
                 .optional()?;
@@ -1300,17 +1284,18 @@ impl GraphRepo for SqliteGraphRepo {
                     "merge suggestion references the same concept twice".into(),
                 ));
             }
-            merge_concepts_conn(conn, keep_id, fold_id)
+            merge_concepts_conn(conn, &user_id, keep_id, fold_id)
         })
         .await
     }
 
-    async fn reject_merge_suggestion(&self, suggestion_id: i64) -> Result<()> {
+    async fn reject_merge_suggestion(&self, user_id: &str, suggestion_id: i64) -> Result<()> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let n = conn.execute(
-                    "DELETE FROM merge_suggestions WHERE id = ?1",
-                    params![suggestion_id],
+                    "DELETE FROM merge_suggestions WHERE user_id = ?1 AND id = ?2",
+                    params![user_id, suggestion_id],
                 )?;
                 if n == 0 {
                     return Err(Error::NotFound(format!(
@@ -1326,6 +1311,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn propose_structural_inference(
         &self,
+        user_id: &str,
         source_concept_id: i64,
         target_concept_id: i64,
         proposed_type: &str,
@@ -1339,9 +1325,10 @@ impl GraphRepo for SqliteGraphRepo {
         let evidence_json = serde_json::to_string(&evidence_path)
             .map_err(|e| Error::internal(format!("encode evidence_path: {e}")))?;
         let created_at = now_seconds();
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
-                if !ontology_slug_exists_conn(conn, &proposed_type)? {
+                if !ontology_slug_exists_conn(conn, &user_id, &proposed_type)? {
                     return Err(Error::BadRequest(format!(
                         "proposed type `{proposed_type}` is not in the ontology; \
                          propose it via POST /ontology/propose and re-propose the \
@@ -1351,6 +1338,7 @@ impl GraphRepo for SqliteGraphRepo {
                 for hop in &evidence_path {
                     if !edge_exists_with_current_type_conn(
                         conn,
+                        &user_id,
                         hop.source_concept_id,
                         &hop.edge_type,
                         hop.target_concept_id,
@@ -1363,10 +1351,11 @@ impl GraphRepo for SqliteGraphRepo {
                 }
                 conn.execute(
                     "INSERT INTO chat_inference_proposals
-                        (mode, source_concept_id, target_concept_id, proposed_type,
+                        (user_id, mode, source_concept_id, target_concept_id, proposed_type,
                          evidence_path, rationale, snapshot_id, status, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9)",
                     params![
+                        user_id,
                         STRUCTURAL_MODE,
                         source_concept_id,
                         target_concept_id,
@@ -1396,6 +1385,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn propose_thematic_inference(
         &self,
+        user_id: &str,
         source_concept_id: i64,
         target_concept_id: i64,
         proposed_type: &str,
@@ -1410,9 +1400,10 @@ impl GraphRepo for SqliteGraphRepo {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         let created_at = now_seconds();
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
-                if !ontology_slug_exists_conn(conn, &proposed_type)? {
+                if !ontology_slug_exists_conn(conn, &user_id, &proposed_type)? {
                     return Err(Error::BadRequest(format!(
                         "proposed type `{proposed_type}` is not in the ontology; \
                          propose it via POST /ontology/propose and re-propose the \
@@ -1420,13 +1411,13 @@ impl GraphRepo for SqliteGraphRepo {
                     )));
                 }
                 for &cid in &cluster {
-                    if !concept_exists_conn(conn, cid)? {
+                    if !concept_exists_conn(conn, &user_id, cid)? {
                         return Err(Error::BadRequest(format!(
                             "cluster concept id {cid} does not exist"
                         )));
                     }
                 }
-                let braindump_ids = compute_cluster_braindump_ids_conn(conn, &cluster)?;
+                let braindump_ids = compute_cluster_braindump_ids_conn(conn, &user_id, &cluster)?;
                 if braindump_ids.is_empty() {
                     return Err(Error::BadRequest(
                         "the motivating cluster has no braindump-backed edges between \
@@ -1439,19 +1430,20 @@ impl GraphRepo for SqliteGraphRepo {
                 let concept_json = serde_json::to_string(&cluster)
                     .map_err(|e| Error::internal(format!("encode concept_ids: {e}")))?;
                 conn.execute(
-                    "INSERT INTO thematic_snapshots (braindump_ids, concept_ids, captured_at)
-                     VALUES (?1, ?2, ?3)",
-                    params![braindump_json, concept_json, created_at],
+                    "INSERT INTO thematic_snapshots (user_id, braindump_ids, concept_ids, captured_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![user_id, braindump_json, concept_json, created_at],
                 )?;
                 let snapshot_id = conn.last_insert_rowid();
                 let evidence_json = serde_json::to_string(&Vec::<EvidenceEdge>::new())
                     .map_err(|e| Error::internal(format!("encode empty evidence_path: {e}")))?;
                 conn.execute(
                     "INSERT INTO chat_inference_proposals
-                        (mode, source_concept_id, target_concept_id, proposed_type,
+                        (user_id, mode, source_concept_id, target_concept_id, proposed_type,
                          evidence_path, rationale, snapshot_id, status, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     params![
+                        user_id,
                         THEMATIC_MODE,
                         source_concept_id,
                         target_concept_id,
@@ -1485,9 +1477,13 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn endorse_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal> {
+    async fn endorse_inference_proposal(
+        &self,
+        user_id: &str,
+        id: i64,
+    ) -> Result<ChatInferenceProposal> {
         let proposal = self
-            .get_inference_proposal(id)
+            .get_inference_proposal(user_id, id)
             .await?
             .ok_or_else(|| Error::NotFound(format!("chat inference proposal {id} not found")))?;
         if proposal.status != STATUS_PENDING {
@@ -1501,39 +1497,47 @@ impl GraphRepo for SqliteGraphRepo {
         let proposed_type = proposal.proposed_type.clone();
         let mode = proposal.mode.clone();
         let snapshot_id = proposal.snapshot.as_ref().map(|s| s.id);
+        let user_id = user_id.to_string();
+        let user_id_for_lookup = user_id.clone();
         self.run_txn(move |conn| {
-            let edge_id =
-                if let Some(eid) = find_edge_id_conn(conn, source, &proposed_type, target)? {
-                    eid
-                } else {
-                    let eid = insert_edge_conn(conn, source, target, &proposed_type)?;
-                    init_type_history_conn(conn, eid, &proposed_type)?;
-                    eid
-                };
+            let edge_id = if let Some(eid) =
+                find_edge_id_conn(conn, &user_id, source, &proposed_type, target)?
+            {
+                eid
+            } else {
+                let eid = insert_edge_conn(conn, &user_id, source, target, &proposed_type)?;
+                init_type_history_conn(conn, eid, &proposed_type)?;
+                eid
+            };
             insert_inference_provenance_conn(conn, edge_id, id, &mode, snapshot_id)?;
             transition_status_conn(conn, "chat_inference_proposals", id, STATUS_ENDORSED, false)?;
             Ok(())
         })
         .await?;
-        self.get_inference_proposal(id)
+        self.get_inference_proposal(&user_id_for_lookup, id)
             .await?
             .ok_or_else(|| Error::internal("proposal vanished after endorse"))
     }
 
-    async fn reject_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal> {
+    async fn reject_inference_proposal(
+        &self,
+        user_id: &str,
+        id: i64,
+    ) -> Result<ChatInferenceProposal> {
         self.db
             .with_conn(move |conn| {
                 transition_status_conn(conn, "chat_inference_proposals", id, STATUS_REJECTED, true)
             })
             .await?;
-        self.get_inference_proposal(id)
+        self.get_inference_proposal(user_id, id)
             .await?
             .ok_or_else(|| Error::internal("proposal vanished after reject"))
     }
 
-    async fn list_inference_proposals(&self) -> Result<Vec<ChatInferenceProposal>> {
+    async fn list_inference_proposals(&self, user_id: &str) -> Result<Vec<ChatInferenceProposal>> {
+        let user_id = user_id.to_string();
         self.db
-            .with_conn(|conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT p.id, p.mode, p.source_concept_id, p.target_concept_id,
                             p.proposed_type, p.evidence_path, p.rationale,
@@ -1541,17 +1545,23 @@ impl GraphRepo for SqliteGraphRepo {
                             s.id, s.braindump_ids, s.concept_ids, s.captured_at
                      FROM chat_inference_proposals p
                      LEFT JOIN thematic_snapshots s ON p.snapshot_id = s.id
+                     WHERE p.user_id = ?1
                      ORDER BY p.id",
                 )?;
                 let rows = stmt
-                    .query_map([], row_to_proposal)?
+                    .query_map(params![user_id], row_to_proposal)?
                     .collect::<rusqlite::Result<_>>()?;
                 Ok(rows)
             })
             .await
     }
 
-    async fn get_inference_proposal(&self, id: i64) -> Result<Option<ChatInferenceProposal>> {
+    async fn get_inference_proposal(
+        &self,
+        user_id: &str,
+        id: i64,
+    ) -> Result<Option<ChatInferenceProposal>> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let row = conn
@@ -1562,8 +1572,8 @@ impl GraphRepo for SqliteGraphRepo {
                                 s.id, s.braindump_ids, s.concept_ids, s.captured_at
                          FROM chat_inference_proposals p
                          LEFT JOIN thematic_snapshots s ON p.snapshot_id = s.id
-                         WHERE p.id = ?1",
-                        params![id],
+                         WHERE p.user_id = ?1 AND p.id = ?2",
+                        params![user_id, id],
                         row_to_proposal,
                     )
                     .optional()?;
@@ -1572,15 +1582,22 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn edge_inference_asserted_by(&self, edge_id: i64) -> Result<Vec<InferenceAssertion>> {
+    async fn edge_inference_asserted_by(
+        &self,
+        user_id: &str,
+        edge_id: i64,
+    ) -> Result<Vec<InferenceAssertion>> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT chat_inference_id, mode, snapshot_id FROM edge_inference_provenance
-                     WHERE edge_id = ?1 ORDER BY chat_inference_id",
+                     WHERE edge_id = ?1 AND edge_id IN
+                         (SELECT id FROM edges WHERE user_id = ?2)
+                     ORDER BY chat_inference_id",
                 )?;
                 let rows = stmt
-                    .query_map(params![edge_id], |r| {
+                    .query_map(params![edge_id, user_id], |r| {
                         Ok(InferenceAssertion {
                             chat_inference_id: r.get(0)?,
                             mode: r.get(1)?,
@@ -1595,16 +1612,17 @@ impl GraphRepo for SqliteGraphRepo {
 
     // --- ontology governance + refactor (issue #47) ---
 
-    async fn list_type_proposals(&self) -> Result<Vec<TypeProposal>> {
+    async fn list_type_proposals(&self, user_id: &str) -> Result<Vec<TypeProposal>> {
+        let user_id = user_id.to_string();
         self.db
-            .with_conn(|conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, slug, label, description, merge_of, status,
                             near_match_slug, near_match_similarity, created_at, resolved_at
-                     FROM type_proposals ORDER BY id",
+                     FROM type_proposals WHERE user_id = ?1 ORDER BY id",
                 )?;
                 let rows = stmt
-                    .query_map([], |r| {
+                    .query_map(params![user_id], |r| {
                         Ok(TypeProposal {
                             id: r.get(0)?,
                             slug: r.get(1)?,
@@ -1624,15 +1642,16 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn get_type_proposal(&self, id: i64) -> Result<Option<TypeProposal>> {
+    async fn get_type_proposal(&self, user_id: &str, id: i64) -> Result<Option<TypeProposal>> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let row = conn
                     .query_row(
                         "SELECT id, slug, label, description, merge_of, status,
                                 near_match_slug, near_match_similarity, created_at, resolved_at
-                         FROM type_proposals WHERE id = ?1",
-                        params![id],
+                         FROM type_proposals WHERE user_id = ?1 AND id = ?2",
+                        params![user_id, id],
                         |r| {
                             Ok(TypeProposal {
                                 id: r.get(0)?,
@@ -1658,6 +1677,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn insert_type_proposal(
         &self,
+        user_id: &str,
         slug: String,
         label: String,
         description: String,
@@ -1667,14 +1687,16 @@ impl GraphRepo for SqliteGraphRepo {
         near_match_similarity: Option<f32>,
     ) -> Result<TypeProposal> {
         let created_at = now_seconds();
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 conn.execute(
                     "INSERT INTO type_proposals
-                        (slug, label, description, merge_of, status,
+                        (user_id, slug, label, description, merge_of, status,
                          near_match_slug, near_match_similarity, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
+                        user_id,
                         slug,
                         label,
                         description,
@@ -1703,6 +1725,7 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn approve_type_proposal(
         &self,
+        user_id: &str,
         id: i64,
         slug: String,
         label: String,
@@ -1710,20 +1733,21 @@ impl GraphRepo for SqliteGraphRepo {
         type_vec: Vec<f32>,
     ) -> Result<()> {
         let now = now_seconds();
+        let user_id = user_id.to_string();
         self.run_txn(move |conn| {
             conn.execute(
-                "INSERT INTO ontology (slug, label, description, created_at)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![slug, label, description, now],
+                "INSERT INTO ontology (user_id, slug, label, description, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![user_id, slug, label, description, now],
             )?;
             let ontology_id: i64 = conn.query_row(
-                "SELECT id FROM ontology WHERE slug = ?1",
-                params![slug],
+                "SELECT id FROM ontology WHERE user_id = ?1 AND slug = ?2",
+                params![user_id, slug],
                 |r| r.get(0),
             )?;
             conn.execute(
-                "INSERT INTO type_embeddings (ontology_id, embedding) VALUES (?1, ?2)",
-                params![ontology_id, vec_to_blob(&type_vec)],
+                "INSERT INTO type_embeddings (ontology_id, user_id, embedding) VALUES (?1, ?2, ?3)",
+                params![ontology_id, user_id, vec_to_blob(&type_vec)],
             )?;
             transition_status_conn(conn, "type_proposals", id, "approved", false)?;
             Ok(())
@@ -1731,7 +1755,7 @@ impl GraphRepo for SqliteGraphRepo {
         .await
     }
 
-    async fn reject_type_proposal(&self, id: i64) -> Result<()> {
+    async fn reject_type_proposal(&self, _user_id: &str, id: i64) -> Result<()> {
         self.db
             .with_conn(move |conn| {
                 transition_status_conn(conn, "type_proposals", id, "rejected", true)
@@ -1739,14 +1763,17 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn current_edge_type(&self, edge_id: i64) -> Result<Option<String>> {
+    async fn current_edge_type(&self, user_id: &str, edge_id: i64) -> Result<Option<String>> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let slug = conn
                     .query_row(
                         "SELECT type_slug FROM edge_type_history
-                         WHERE edge_id = ?1 ORDER BY seq_index DESC LIMIT 1",
-                        params![edge_id],
+                         WHERE edge_id = ?1 AND edge_id IN
+                             (SELECT id FROM edges WHERE user_id = ?2)
+                         ORDER BY seq_index DESC LIMIT 1",
+                        params![edge_id, user_id],
                         |r| r.get::<_, String>(0),
                     )
                     .optional()?;
@@ -1755,23 +1782,29 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn edges_with_current_type(&self, slug: &str) -> Result<Vec<i64>> {
+    async fn edges_with_current_type(&self, user_id: &str, slug: &str) -> Result<Vec<i64>> {
         let slug = slug.to_string();
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let mut stmt = conn.prepare(&format!(
-                    "SELECT e.id FROM edges e WHERE ({}) = ?1 ORDER BY e.id",
+                    "SELECT e.id FROM edges e WHERE e.user_id = ?1 AND ({}) = ?2 ORDER BY e.id",
                     current_type_subquery()
                 ))?;
                 let ids = stmt
-                    .query_map(params![slug], |r| r.get::<_, i64>(0))?
+                    .query_map(params![user_id, slug], |r| r.get::<_, i64>(0))?
                     .collect::<rusqlite::Result<_>>()?;
                 Ok(ids)
             })
             .await
     }
 
-    async fn edge_endpoints_and_type(&self, edge_id: i64) -> Result<(String, String, String)> {
+    async fn edge_endpoints_and_type(
+        &self,
+        user_id: &str,
+        edge_id: i64,
+    ) -> Result<(String, String, String)> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 let row = conn.query_row(
@@ -1780,10 +1813,10 @@ impl GraphRepo for SqliteGraphRepo {
                          FROM edges e
                          JOIN concepts sc ON sc.id = e.source_concept_id
                          JOIN concepts tc ON tc.id = e.target_concept_id
-                         WHERE e.id = ?1",
+                         WHERE e.user_id = ?1 AND e.id = ?2",
                         current_type_subquery()
                     ),
-                    params![edge_id],
+                    params![user_id, edge_id],
                     |r| {
                         Ok((
                             r.get::<_, String>(0)?,
@@ -1799,18 +1832,19 @@ impl GraphRepo for SqliteGraphRepo {
 
     async fn run_refactor(
         &self,
+        user_id: &str,
         llm: &dyn Llm,
         proposal: &TypeProposal,
     ) -> Result<RefactorOutcome> {
         let Some(merge_of) = proposal.merge_of.as_ref() else {
             return Ok(RefactorOutcome::default());
         };
-        let edge_ids = self.edges_with_current_type(merge_of).await?;
+        let edge_ids = self.edges_with_current_type(user_id, merge_of).await?;
         if edge_ids.is_empty() {
             return Ok(RefactorOutcome::default());
         }
 
-        let ontology = self.ontology_slugs().await?;
+        let ontology = self.ontology_slugs(user_id).await?;
         let new_slug = proposal.slug.clone();
         let system = "You re-classify edges when the ontology evolves. \
                       Given an edge and the new vocabulary, respond with the single slug \
@@ -1822,7 +1856,7 @@ impl GraphRepo for SqliteGraphRepo {
         let mut retagged: Vec<(i64, String)> = Vec::with_capacity(edge_ids.len());
         for edge_id in edge_ids {
             let (source_label, target_label, current_type) =
-                self.edge_endpoints_and_type(edge_id).await?;
+                self.edge_endpoints_and_type(user_id, edge_id).await?;
             let user = format!(
                 "Edge: {source_label} —[{current_type}]→ {target_label}\n\
                  The type `{merge_of_for_prompt}` has been merged into `{new_slug}` \
@@ -1859,25 +1893,28 @@ impl GraphRepo for SqliteGraphRepo {
 
     // --- retrieval pipeline (issue #47) ---
 
-    async fn retrieve(&self, query_vec: &[f32]) -> Result<RetrievalResult> {
-        let candidates = self.knn_concepts(query_vec, SEED_TOP_K).await?;
+    async fn retrieve(&self, user_id: &str, query_vec: &[f32]) -> Result<RetrievalResult> {
+        let candidates = self.knn_concepts(user_id, query_vec, SEED_TOP_K).await?;
         let seeds: Vec<(i64, f32)> = candidates
             .into_iter()
             .filter(|(_, sim)| *sim >= SEED_SIMILARITY_FLOOR)
             .collect();
 
         if seeds.is_empty() {
-            return self.no_seed_fallback(query_vec).await;
+            return self.no_seed_fallback(user_id, query_vec).await;
         }
 
+        let user_id_owned = user_id.to_string();
         let (traversed_edges, subgraph) = self
             .db
             .with_conn(move |conn| {
                 let mut concept_labels: HashMap<i64, String> = HashMap::new();
                 {
-                    let mut stmt = conn.prepare("SELECT id, label FROM concepts")?;
-                    let rows =
-                        stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+                    let mut stmt =
+                        conn.prepare("SELECT id, label FROM concepts WHERE user_id = ?1")?;
+                    let rows = stmt.query_map(params![user_id_owned], |r| {
+                        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                    })?;
                     for row in rows {
                         let (id, label) = row?;
                         concept_labels.insert(id, label);
@@ -1885,10 +1922,10 @@ impl GraphRepo for SqliteGraphRepo {
                 }
                 let mut stmt = conn.prepare(&format!(
                     "SELECT e.source_concept_id, e.target_concept_id, ({}) AS current_type
-                     FROM edges e",
+                     FROM edges e WHERE e.user_id = ?1",
                     current_type_subquery()
                 ))?;
-                let edge_rows = stmt.query_map([], |r| {
+                let edge_rows = stmt.query_map(params![user_id_owned], |r| {
                     Ok(RetrievalEdgeInfo {
                         source_concept_id: r.get(0)?,
                         target_concept_id: r.get(1)?,
@@ -1900,12 +1937,15 @@ impl GraphRepo for SqliteGraphRepo {
                     edges.push(row?);
                 }
                 let (concept_hops, traversed_edges) = bfs_expand(&concept_labels, &edges, &seeds);
-                let subgraph = collect_subgraph_braindumps_conn(conn, &concept_hops)?;
+                let subgraph =
+                    collect_subgraph_braindumps_conn(conn, &user_id_owned, &concept_hops)?;
                 Ok((traversed_edges, subgraph))
             })
             .await?;
 
-        let backfill = self.backfill_braindumps(query_vec, &subgraph).await?;
+        let backfill = self
+            .backfill_braindumps(user_id, query_vec, &subgraph)
+            .await?;
 
         let mut all = subgraph;
         all.extend(backfill);
@@ -1924,14 +1964,17 @@ impl GraphRepo for SqliteGraphRepo {
 
     // --- issue #48: additional reads/writes migrated from domain modules ---
 
-    async fn all_edge_endpoints(&self) -> Result<Vec<(i64, i64)>> {
+    async fn all_edge_endpoints(&self, user_id: &str) -> Result<Vec<(i64, i64)>> {
+        let user_id = user_id.to_string();
         self.db
-            .with_conn(|conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT source_concept_id, target_concept_id FROM edges ORDER BY id",
+                    "SELECT source_concept_id, target_concept_id FROM edges
+                     WHERE user_id = ?1 ORDER BY id",
                 )?;
-                let rows =
-                    stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+                let rows = stmt.query_map(params![user_id], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+                })?;
                 let mut out = Vec::new();
                 for row in rows {
                     out.push(row?);
@@ -1941,14 +1984,15 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn graph_delta(&self, since: i64) -> Result<GraphDelta> {
+    async fn graph_delta(&self, user_id: &str, since: i64) -> Result<GraphDelta> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
-                let added_concepts = delta_added_concepts_conn(conn, since)?;
-                let added_edges = delta_added_edges_conn(conn, since)?;
-                let deleted_concept_ids = delta_tombstoned_conn(conn, "concept", since)?;
-                let deleted_edge_ids = delta_tombstoned_conn(conn, "edge", since)?;
-                let retagged_edges = delta_retagged_edges_conn(conn, since)?;
+                let added_concepts = delta_added_concepts_conn(conn, &user_id, since)?;
+                let added_edges = delta_added_edges_conn(conn, &user_id, since)?;
+                let deleted_concept_ids = delta_tombstoned_conn(conn, &user_id, "concept", since)?;
+                let deleted_edge_ids = delta_tombstoned_conn(conn, &user_id, "edge", since)?;
+                let retagged_edges = delta_retagged_edges_conn(conn, &user_id, since)?;
                 let cursor = now_seconds();
                 Ok(GraphDelta {
                     cursor,
@@ -1962,16 +2006,18 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn missing_type_rows(&self) -> Result<Vec<(i64, String, String, String)>> {
+    async fn missing_type_rows(&self, user_id: &str) -> Result<Vec<(i64, String, String, String)>> {
+        let user_id = user_id.to_string();
         self.db
-            .with_conn(|conn| {
+            .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT o.id, o.slug, o.label, o.description FROM ontology o
-                     WHERE NOT EXISTS
-                         (SELECT 1 FROM type_embeddings t WHERE t.ontology_id = o.id)
+                     WHERE o.user_id = ?1 AND NOT EXISTS
+                         (SELECT 1 FROM type_embeddings t
+                          WHERE t.ontology_id = o.id AND t.user_id = o.user_id)
                      ORDER BY o.id",
                 )?;
-                let rows = stmt.query_map([], |r| {
+                let rows = stmt.query_map(params![user_id], |r| {
                     Ok((
                         r.get::<_, i64>(0)?,
                         r.get::<_, String>(1)?,
@@ -1988,13 +2034,19 @@ impl GraphRepo for SqliteGraphRepo {
             .await
     }
 
-    async fn store_type_embedding(&self, ontology_id: i64, vec: Vec<f32>) -> Result<()> {
+    async fn store_type_embedding(
+        &self,
+        user_id: &str,
+        ontology_id: i64,
+        vec: Vec<f32>,
+    ) -> Result<()> {
+        let user_id = user_id.to_string();
         self.db
             .with_conn(move |conn| {
                 conn.execute(
-                    "INSERT OR IGNORE INTO type_embeddings (ontology_id, embedding)
-                     VALUES (?1, ?2)",
-                    params![ontology_id, vec_to_blob(&vec)],
+                    "INSERT OR IGNORE INTO type_embeddings (ontology_id, user_id, embedding)
+                     VALUES (?1, ?2, ?3)",
+                    params![ontology_id, user_id, vec_to_blob(&vec)],
                 )?;
                 Ok(())
             })
@@ -2007,13 +2059,17 @@ impl GraphRepo for SqliteGraphRepo {
 // These synchronous helpers run inside the `graph_delta` trait method's
 // `with_conn` closure. Private — no domain module calls them.
 
-fn delta_added_concepts_conn(conn: &rusqlite::Connection, since: i64) -> Result<Vec<Concept>> {
+fn delta_added_concepts_conn(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+    since: i64,
+) -> Result<Vec<Concept>> {
     let mut stmt = conn.prepare(
         "SELECT id, label, created_at FROM concepts
-         WHERE created_at > ?1 ORDER BY id",
+         WHERE user_id = ?1 AND created_at > ?2 ORDER BY id",
     )?;
     let rows = stmt
-        .query_map(params![since], |r| {
+        .query_map(params![user_id, since], |r| {
             Ok(Concept {
                 id: r.get(0)?,
                 label: r.get(1)?,
@@ -2024,15 +2080,19 @@ fn delta_added_concepts_conn(conn: &rusqlite::Connection, since: i64) -> Result<
     Ok(rows)
 }
 
-fn delta_added_edges_conn(conn: &rusqlite::Connection, since: i64) -> Result<Vec<DeltaEdge>> {
+fn delta_added_edges_conn(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+    since: i64,
+) -> Result<Vec<DeltaEdge>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
                 e.created_at, ({}) AS current_type
-         FROM edges e WHERE e.created_at > ?1 ORDER BY e.id",
+         FROM edges e WHERE e.user_id = ?1 AND e.created_at > ?2 ORDER BY e.id",
         current_type_subquery()
     ))?;
     let rows = stmt
-        .query_map(params![since], |r| {
+        .query_map(params![user_id, since], |r| {
             Ok(DeltaEdge {
                 id: r.get(0)?,
                 source_concept_id: r.get(1)?,
@@ -2046,30 +2106,39 @@ fn delta_added_edges_conn(conn: &rusqlite::Connection, since: i64) -> Result<Vec
     Ok(rows)
 }
 
-fn delta_tombstoned_conn(conn: &rusqlite::Connection, kind: &str, since: i64) -> Result<Vec<i64>> {
+fn delta_tombstoned_conn(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+    kind: &str,
+    since: i64,
+) -> Result<Vec<i64>> {
     let mut stmt = conn.prepare(
         "SELECT entity_id FROM graph_tombstones
-         WHERE kind = ?1 AND created_at > ?2 ORDER BY entity_id",
+         WHERE user_id = ?1 AND kind = ?2 AND created_at > ?3 ORDER BY entity_id",
     )?;
     let ids = stmt
-        .query_map(params![kind, since], |r| r.get::<_, i64>(0))?
+        .query_map(params![user_id, kind, since], |r| r.get::<_, i64>(0))?
         .collect::<rusqlite::Result<_>>()?;
     Ok(ids)
 }
 
-fn delta_retagged_edges_conn(conn: &rusqlite::Connection, since: i64) -> Result<Vec<RetaggedEdge>> {
+fn delta_retagged_edges_conn(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+    since: i64,
+) -> Result<Vec<RetaggedEdge>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT e.id, e.source_concept_id, e.target_concept_id, e.original_type,
                 ({}) AS current_type
          FROM edges e
-         WHERE e.created_at <= ?1 AND EXISTS (
+         WHERE e.user_id = ?1 AND e.created_at <= ?2 AND EXISTS (
              SELECT 1 FROM edge_type_history eth
-             WHERE eth.edge_id = e.id AND eth.seq_index > 0 AND eth.created_at > ?1)
+             WHERE eth.edge_id = e.id AND eth.seq_index > 0 AND eth.created_at > ?2)
          ORDER BY e.id",
         current_type_subquery()
     ))?;
     let rows = stmt
-        .query_map(params![since], |r| {
+        .query_map(params![user_id, since], |r| {
             Ok(RetaggedEdge {
                 id: r.get(0)?,
                 source_concept_id: r.get(1)?,
@@ -2132,9 +2201,11 @@ fn row_to_proposal(r: &rusqlite::Row) -> rusqlite::Result<ChatInferenceProposal>
 
 /// Collect braindumps from the traversed subgraph: each visited concept's
 /// extraction provenance (ADR-0010). Score decays with hop distance from the
-/// nearest seed.
+/// nearest seed. Issue #72: scoped to `user_id` so cross-user braindumps
+/// don't leak into the retrieval result.
 fn collect_subgraph_braindumps_conn(
     conn: &rusqlite::Connection,
+    user_id: &str,
     concept_hops: &HashMap<i64, usize>,
 ) -> Result<Vec<RetrievedBraindump>> {
     let mut best: HashMap<i64, f32> = HashMap::new();
@@ -2154,7 +2225,9 @@ fn collect_subgraph_braindumps_conn(
 
     let mut result = Vec::new();
     for (bd_id, score) in &best {
-        if let Some((id, verbatim, cleaned, created_at)) = load_braindump_row_conn(conn, *bd_id)? {
+        if let Some((id, verbatim, cleaned, created_at)) =
+            load_braindump_row_conn(conn, user_id, *bd_id)?
+        {
             result.push(RetrievedBraindump {
                 id,
                 verbatim,
@@ -2170,17 +2243,22 @@ fn collect_subgraph_braindumps_conn(
 
 /// Braindump-embedding KNN backfill for strays the graph missed (ADR-0004).
 /// Returns braindumps not already in the subgraph set, scored by similarity.
+/// Issue #72: scoped to `user_id`.
 impl SqliteGraphRepo {
-    /// No-seed fallback (ADR-0004): braindump-vector-direct.
-    async fn no_seed_fallback(&self, query_vec: &[f32]) -> Result<RetrievalResult> {
-        let hits = self.knn_braindumps(query_vec, BRAINDUMP_TOP_K).await?;
+    /// No-seed fallback (ADR-0004): braindump-vector-direct. Issue #72: scoped
+    /// to `user_id`.
+    async fn no_seed_fallback(&self, user_id: &str, query_vec: &[f32]) -> Result<RetrievalResult> {
+        let hits = self
+            .knn_braindumps(user_id, query_vec, BRAINDUMP_TOP_K)
+            .await?;
+        let user_id = user_id.to_string();
         let braindumps = self
             .db
             .with_conn(move |conn| {
                 let mut out = Vec::new();
                 for (bd_id, sim) in &hits {
                     if let Some((id, verbatim, cleaned, created_at)) =
-                        load_braindump_row_conn(conn, *bd_id)?
+                        load_braindump_row_conn(conn, &user_id, *bd_id)?
                     {
                         out.push(RetrievedBraindump {
                             id,
@@ -2204,11 +2282,15 @@ impl SqliteGraphRepo {
 
     async fn backfill_braindumps(
         &self,
+        user_id: &str,
         query_vec: &[f32],
         subgraph: &[RetrievedBraindump],
     ) -> Result<Vec<RetrievedBraindump>> {
         let already: HashSet<i64> = subgraph.iter().map(|b| b.id).collect();
-        let hits = self.knn_braindumps(query_vec, BRAINDUMP_TOP_K).await?;
+        let hits = self
+            .knn_braindumps(user_id, query_vec, BRAINDUMP_TOP_K)
+            .await?;
+        let user_id = user_id.to_string();
         let backfill = self
             .db
             .with_conn(move |conn| {
@@ -2218,7 +2300,7 @@ impl SqliteGraphRepo {
                         continue;
                     }
                     if let Some((id, verbatim, cleaned, created_at)) =
-                        load_braindump_row_conn(conn, *bd_id)?
+                        load_braindump_row_conn(conn, &user_id, *bd_id)?
                     {
                         out.push(RetrievedBraindump {
                             id,
@@ -2244,8 +2326,10 @@ impl SqliteGraphRepo {
 // `ingest_extraction` / `delete_braindump` wrappers delegate to the trait.
 
 /// Run the full accretion for one braindump inside an open transaction.
+/// Issue #72: scoped to `user_id`.
 fn accrete_conn(
     conn: &rusqlite::Connection,
+    user_id: &str,
     braindump_id: i64,
     braindump_vec: Vec<f32>,
     concepts: Vec<ExtractedConcept>,
@@ -2254,11 +2338,11 @@ fn accrete_conn(
 ) -> Result<IngestOutcome> {
     let mut outcome = IngestOutcome::default();
 
-    retract_extraction_conn(conn, braindump_id)?;
+    retract_extraction_conn(conn, user_id, braindump_id)?;
 
-    store_braindump_embedding_conn(conn, braindump_id, &braindump_vec)?;
+    store_braindump_embedding_conn(conn, user_id, braindump_id, &braindump_vec)?;
 
-    let ontology: Vec<String> = ontology_slugs_conn(conn)?;
+    let ontology: Vec<String> = ontology_slugs_conn(conn, user_id)?;
 
     // Resolve each extracted concept: accrete, suggest, or create. Build a
     // label→concept_id map for the edge step (edges reference concepts by the
@@ -2269,7 +2353,7 @@ fn accrete_conn(
         if !seen_labels.insert(concept.label.as_str()) {
             continue;
         }
-        let resolved = resolve_concept_conn(conn, braindump_id, &concept.label, vec)?;
+        let resolved = resolve_concept_conn(conn, user_id, braindump_id, &concept.label, vec)?;
         match resolved {
             ConceptResolution::Accreted(existing_id) => {
                 outcome.concepts_accreted += 1;
@@ -2328,11 +2412,13 @@ fn accrete_conn(
             outcome.edges_rejected += 1;
             continue;
         }
-        if let Some(edge_id) = find_edge_id_conn(conn, source_id, &edge.type_slug, target_id)? {
+        if let Some(edge_id) =
+            find_edge_id_conn(conn, user_id, source_id, &edge.type_slug, target_id)?
+        {
             insert_edge_provenance_conn(conn, edge_id, braindump_id)?;
             outcome.edges_accreted += 1;
         } else {
-            let edge_id = insert_edge_conn(conn, source_id, target_id, &edge.type_slug)?;
+            let edge_id = insert_edge_conn(conn, user_id, source_id, target_id, &edge.type_slug)?;
             init_type_history_conn(conn, edge_id, &edge.type_slug)?;
             insert_edge_provenance_conn(conn, edge_id, braindump_id)?;
             outcome.edges_created += 1;
@@ -2350,22 +2436,25 @@ enum ConceptResolution {
 
 /// Resolve a newly-extracted concept against existing ones by embedding KNN
 /// (ADR-0001). >95% accretes; borderline → new concept + merge suggestion;
-/// below the floor → new concept.
+/// below the floor → new concept. Issue #72: KNN scoped to `user_id` so
+/// concepts don't accrete across users.
 fn resolve_concept_conn(
     conn: &rusqlite::Connection,
+    user_id: &str,
     braindump_id: i64,
     label: &str,
     vec: &[f32],
 ) -> Result<ConceptResolution> {
-    if let Some((existing_id, similarity)) = knn_concept_conn(conn, vec)? {
+    if let Some((existing_id, similarity)) = knn_concept_conn(conn, user_id, vec)? {
         if similarity >= ACCRETION_SIMILARITY {
             insert_concept_provenance_conn(conn, existing_id, braindump_id)?;
             return Ok(ConceptResolution::Accreted(existing_id));
         }
         if similarity >= SUGGESTION_FLOOR_SIMILARITY {
-            let new_id = create_concept_conn(conn, braindump_id, label, vec)?;
+            let new_id = create_concept_conn(conn, user_id, braindump_id, label, vec)?;
             insert_merge_suggestion_conn(
                 conn,
+                user_id,
                 braindump_id,
                 label,
                 new_id,
@@ -2375,27 +2464,29 @@ fn resolve_concept_conn(
             return Ok(ConceptResolution::Suggested { new_id });
         }
     }
-    let id = create_concept_conn(conn, braindump_id, label, vec)?;
+    let id = create_concept_conn(conn, user_id, braindump_id, label, vec)?;
     Ok(ConceptResolution::Created { id })
 }
 
 /// Create a concept, store its embedding (identity + retrieval seed), and
-/// record this braindump as its first extractor (ADR-0010).
+/// record this braindump as its first extractor (ADR-0010). Issue #72: scoped
+/// to `user_id` — the concept and its embedding carry the user's id.
 fn create_concept_conn(
     conn: &rusqlite::Connection,
+    user_id: &str,
     braindump_id: i64,
     label: &str,
     vec: &[f32],
 ) -> Result<i64> {
     let created_at = now_seconds();
     conn.execute(
-        "INSERT INTO concepts (label, created_at) VALUES (?1, ?2)",
-        params![label, created_at],
+        "INSERT INTO concepts (user_id, label, created_at) VALUES (?1, ?2, ?3)",
+        params![user_id, label, created_at],
     )?;
     let id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO concept_embeddings (concept_id, embedding) VALUES (?1, ?2)",
-        params![id, vec_to_blob(vec)],
+        "INSERT INTO concept_embeddings (concept_id, user_id, embedding) VALUES (?1, ?2, ?3)",
+        params![id, user_id, vec_to_blob(vec)],
     )?;
     insert_concept_provenance_conn(conn, id, braindump_id)?;
     Ok(id)
@@ -2403,12 +2494,13 @@ fn create_concept_conn(
 
 fn store_braindump_embedding_conn(
     conn: &rusqlite::Connection,
+    user_id: &str,
     braindump_id: i64,
     vec: &[f32],
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO braindump_embeddings (braindump_id, embedding) VALUES (?1, ?2)",
-        params![braindump_id, vec_to_blob(vec)],
+        "INSERT INTO braindump_embeddings (braindump_id, user_id, embedding) VALUES (?1, ?2, ?3)",
+        params![braindump_id, user_id, vec_to_blob(vec)],
     )?;
     Ok(())
 }
@@ -2439,6 +2531,7 @@ fn insert_edge_provenance_conn(
 
 fn insert_merge_suggestion_conn(
     conn: &rusqlite::Connection,
+    user_id: &str,
     braindump_id: i64,
     new_label: &str,
     new_concept_id: i64,
@@ -2448,10 +2541,11 @@ fn insert_merge_suggestion_conn(
     let created_at = now_seconds();
     conn.execute(
         "INSERT INTO merge_suggestions
-            (kind, braindump_id, new_concept_label, new_concept_id, existing_concept_id,
+            (user_id, kind, braindump_id, new_concept_label, new_concept_id, existing_concept_id,
              similarity, status, created_at)
-         VALUES ('concept', ?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
+         VALUES (?1, 'concept', ?2, ?3, ?4, ?5, ?6, 'pending', ?7)",
         params![
+            user_id,
             braindump_id,
             new_label,
             new_concept_id,
@@ -2468,8 +2562,13 @@ fn insert_merge_suggestion_conn(
 /// re-accreting — ADR-0007). Concepts/edges that lose their last asserter
 /// vanish (ADR-0002 / ADR-0010); type-history and suggestions cascade. Vanished
 /// concepts/edges are tombstoned into `graph_tombstones` before the row DELETEs
-/// so delta sync can report what disappeared (issue #28).
-fn retract_extraction_conn(conn: &rusqlite::Connection, braindump_id: i64) -> Result<()> {
+/// so delta sync can report what disappeared (issue #28). Issue #72: scoped to
+/// `user_id` so tombstones carry the user's id.
+fn retract_extraction_conn(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+    braindump_id: i64,
+) -> Result<()> {
     conn.execute(
         "DELETE FROM concept_provenance WHERE braindump_id = ?1",
         params![braindump_id],
@@ -2483,8 +2582,8 @@ fn retract_extraction_conn(conn: &rusqlite::Connection, braindump_id: i64) -> Re
         params![braindump_id],
     )?;
     conn.execute(
-        "DELETE FROM merge_suggestions WHERE braindump_id = ?1",
-        params![braindump_id],
+        "DELETE FROM merge_suggestions WHERE user_id = ?1 AND braindump_id = ?2",
+        params![user_id, braindump_id],
     )?;
     // Tombstone orphan edges (no asserter left) before the row DELETE so delta
     // sync can report the deletion (issue #28). An edge's asserter list is the
@@ -2492,61 +2591,62 @@ fn retract_extraction_conn(conn: &rusqlite::Connection, braindump_id: i64) -> Re
     // chat-inference provenance (`edge_inference_provenance`, ADR-0006) — so an
     // edge backed only by a chat inference is NOT orphaned by a braindump
     // deletion (the inference is its own origin).
-    tombstone_orphan_edges_conn(conn)?;
+    tombstone_orphan_edges_conn(conn, user_id)?;
     // Orphan edges first (they reference concepts), then orphan concepts.
+    // Issue #72: only delete edges belonging to this user.
     conn.execute(
-        "DELETE FROM edges WHERE NOT EXISTS
+        "DELETE FROM edges WHERE user_id = ?1 AND NOT EXISTS
             (SELECT 1 FROM edge_provenance WHERE edge_id = edges.id)
           AND NOT EXISTS
             (SELECT 1 FROM edge_inference_provenance WHERE edge_id = edges.id)",
-        [],
+        params![user_id],
     )?;
     // The vec0 concept_embeddings table has no FK cascade — clean embeddings for
     // concepts about to vanish, so KNN never returns a deleted concept's vector.
     conn.execute(
-        "DELETE FROM concept_embeddings WHERE concept_id IN
-            (SELECT id FROM concepts WHERE NOT EXISTS
+        "DELETE FROM concept_embeddings WHERE user_id = ?1 AND concept_id IN
+            (SELECT id FROM concepts WHERE user_id = ?1 AND NOT EXISTS
                 (SELECT 1 FROM concept_provenance WHERE concept_id = concepts.id))",
-        [],
+        params![user_id],
     )?;
     // Tombstone orphan concepts (no extractor left) before the row DELETE.
-    tombstone_orphan_concepts_conn(conn)?;
+    tombstone_orphan_concepts_conn(conn, user_id)?;
     conn.execute(
-        "DELETE FROM concepts WHERE NOT EXISTS
+        "DELETE FROM concepts WHERE user_id = ?1 AND NOT EXISTS
             (SELECT 1 FROM concept_provenance WHERE concept_id = concepts.id)",
-        [],
+        params![user_id],
     )?;
     Ok(())
 }
 
 /// Append 'edge' tombstone rows for every edge about to vanish (no asserter
 /// remains) in the current transaction. A single `INSERT ... SELECT` — no Rust
-/// loop.
-fn tombstone_orphan_edges_conn(conn: &rusqlite::Connection) -> Result<()> {
+/// loop. Issue #72: scoped to `user_id`.
+fn tombstone_orphan_edges_conn(conn: &rusqlite::Connection, user_id: &str) -> Result<()> {
     let now = now_seconds();
     conn.execute(
-        "INSERT INTO graph_tombstones (kind, entity_id, created_at)
-         SELECT 'edge', id, ?1 FROM edges
-         WHERE NOT EXISTS
+        "INSERT INTO graph_tombstones (user_id, kind, entity_id, created_at)
+         SELECT ?1, 'edge', id, ?2 FROM edges
+         WHERE edges.user_id = ?1 AND NOT EXISTS
             (SELECT 1 FROM edge_provenance WHERE edge_id = edges.id)
            AND NOT EXISTS
             (SELECT 1 FROM edge_inference_provenance WHERE edge_id = edges.id)",
-        params![now],
+        params![user_id, now],
     )?;
     Ok(())
 }
 
 /// Append 'concept' tombstone rows for every concept about to vanish (no
 /// extractor remains) in the current transaction. Symmetric to
-/// [`tombstone_orphan_edges_conn`].
-fn tombstone_orphan_concepts_conn(conn: &rusqlite::Connection) -> Result<()> {
+/// [`tombstone_orphan_edges_conn`]. Issue #72: scoped to `user_id`.
+fn tombstone_orphan_concepts_conn(conn: &rusqlite::Connection, user_id: &str) -> Result<()> {
     let now = now_seconds();
     conn.execute(
-        "INSERT INTO graph_tombstones (kind, entity_id, created_at)
-         SELECT 'concept', id, ?1 FROM concepts
-         WHERE NOT EXISTS
+        "INSERT INTO graph_tombstones (user_id, kind, entity_id, created_at)
+         SELECT ?1, 'concept', id, ?2 FROM concepts
+         WHERE concepts.user_id = ?1 AND NOT EXISTS
             (SELECT 1 FROM concept_provenance WHERE concept_id = concepts.id)",
-        params![now],
+        params![user_id, now],
     )?;
     Ok(())
 }
@@ -2810,7 +2910,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(any(test, feature = "test-support"))]
 #[async_trait]
 impl GraphRepo for InMemoryGraphRepo {
-    async fn braindump_embedding_stored(&self, braindump_id: i64) -> Result<bool> {
+    async fn braindump_embedding_stored(&self, _user_id: &str, braindump_id: i64) -> Result<bool> {
         let stored = self
             .braindump_embeddings
             .lock()
@@ -2818,7 +2918,7 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(stored.contains_key(&braindump_id))
     }
 
-    async fn ontology_types(&self) -> Result<Vec<(String, String, String)>> {
+    async fn ontology_types(&self, _user_id: &str) -> Result<Vec<(String, String, String)>> {
         Ok(self
             .ontology
             .lock()
@@ -2826,7 +2926,7 @@ impl GraphRepo for InMemoryGraphRepo {
             .clone())
     }
 
-    async fn get_concept(&self, id: i64) -> Result<Option<Concept>> {
+    async fn get_concept(&self, _user_id: &str, id: i64) -> Result<Option<Concept>> {
         Ok(self
             .concepts
             .lock()
@@ -2835,7 +2935,7 @@ impl GraphRepo for InMemoryGraphRepo {
             .cloned())
     }
 
-    async fn concept_provenance(&self, concept_id: i64) -> Result<Vec<i64>> {
+    async fn concept_provenance(&self, _user_id: &str, concept_id: i64) -> Result<Vec<i64>> {
         Ok(self
             .concept_provenance
             .lock()
@@ -2847,6 +2947,7 @@ impl GraphRepo for InMemoryGraphRepo {
 
     async fn find_edge(
         &self,
+        _user_id: &str,
         source_id: i64,
         original_type: &str,
         target_id: i64,
@@ -2864,7 +2965,7 @@ impl GraphRepo for InMemoryGraphRepo {
             .cloned())
     }
 
-    async fn edge_provenance(&self, edge_id: i64) -> Result<Vec<i64>> {
+    async fn edge_provenance(&self, _user_id: &str, edge_id: i64) -> Result<Vec<i64>> {
         Ok(self
             .edge_provenance
             .lock()
@@ -2874,7 +2975,11 @@ impl GraphRepo for InMemoryGraphRepo {
             .unwrap_or_default())
     }
 
-    async fn edge_type_history(&self, edge_id: i64) -> Result<Vec<TypeHistoryEntry>> {
+    async fn edge_type_history(
+        &self,
+        _user_id: &str,
+        edge_id: i64,
+    ) -> Result<Vec<TypeHistoryEntry>> {
         Ok(self
             .edge_type_history
             .lock()
@@ -2884,7 +2989,7 @@ impl GraphRepo for InMemoryGraphRepo {
             .unwrap_or_default())
     }
 
-    async fn merge_suggestions(&self) -> Result<Vec<MergeSuggestion>> {
+    async fn merge_suggestions(&self, _user_id: &str) -> Result<Vec<MergeSuggestion>> {
         let mut suggestions = self
             .merge_suggestions
             .lock()
@@ -2894,7 +2999,7 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(suggestions)
     }
 
-    async fn concept_id_for_label(&self, label: &str) -> Result<Option<i64>> {
+    async fn concept_id_for_label(&self, _user_id: &str, label: &str) -> Result<Option<i64>> {
         Ok(self
             .concepts
             .lock()
@@ -2905,7 +3010,7 @@ impl GraphRepo for InMemoryGraphRepo {
             .min())
     }
 
-    async fn all_concepts(&self) -> Result<Vec<Concept>> {
+    async fn all_concepts(&self, _user_id: &str) -> Result<Vec<Concept>> {
         let mut concepts: Vec<Concept> = self
             .concepts
             .lock()
@@ -2917,7 +3022,7 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(concepts)
     }
 
-    async fn all_edges_with_current_type(&self) -> Result<Vec<EdgeProjection>> {
+    async fn all_edges_with_current_type(&self, _user_id: &str) -> Result<Vec<EdgeProjection>> {
         let edges = self
             .edges
             .lock()
@@ -2954,7 +3059,7 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(projections)
     }
 
-    async fn knn_concept(&self, query_vec: &[f32]) -> Result<Option<(i64, f32)>> {
+    async fn knn_concept(&self, _user_id: &str, query_vec: &[f32]) -> Result<Option<(i64, f32)>> {
         let embeddings = self
             .concept_embeddings
             .lock()
@@ -2967,7 +3072,7 @@ impl GraphRepo for InMemoryGraphRepo {
             .filter(|(_, sim)| *sim > 0.0))
     }
 
-    async fn knn_type(&self, query_vec: &[f32]) -> Result<Option<(String, f32)>> {
+    async fn knn_type(&self, _user_id: &str, query_vec: &[f32]) -> Result<Option<(String, f32)>> {
         let embeddings = self
             .type_embeddings
             .lock()
@@ -2980,7 +3085,12 @@ impl GraphRepo for InMemoryGraphRepo {
             .filter(|(_, sim)| *sim > 0.0))
     }
 
-    async fn knn_concepts(&self, query_vec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
+    async fn knn_concepts(
+        &self,
+        _user_id: &str,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(i64, f32)>> {
         let mut hits: Vec<(i64, f32)> = self
             .concept_embeddings
             .lock()
@@ -2994,7 +3104,12 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(hits)
     }
 
-    async fn knn_braindumps(&self, query_vec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
+    async fn knn_braindumps(
+        &self,
+        _user_id: &str,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(i64, f32)>> {
         let mut hits: Vec<(i64, f32)> = self
             .braindump_embeddings
             .lock()
@@ -3010,7 +3125,12 @@ impl GraphRepo for InMemoryGraphRepo {
 
     // --- write paths (issue #46) ---
 
-    async fn insert_braindump(&self, verbatim: &str, cleaned: &str) -> Result<Braindump> {
+    async fn insert_braindump(
+        &self,
+        _user_id: &str,
+        verbatim: &str,
+        cleaned: &str,
+    ) -> Result<Braindump> {
         let id = Self::next_id(&self.next_braindump_id);
         let created_at = now_seconds();
         let braindump = Braindump {
@@ -3028,6 +3148,7 @@ impl GraphRepo for InMemoryGraphRepo {
 
     async fn ingest_extraction(
         &self,
+        _user_id: &str,
         braindump_id: i64,
         braindump_vec: Vec<f32>,
         extraction: ExtractionResult,
@@ -3126,7 +3247,7 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(outcome)
     }
 
-    async fn delete_braindump(&self, braindump_id: i64) -> Result<bool> {
+    async fn delete_braindump(&self, _user_id: &str, braindump_id: i64) -> Result<bool> {
         let exists = self
             .braindumps
             .lock()
@@ -3143,7 +3264,7 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(true)
     }
 
-    async fn approve_merge_suggestion(&self, suggestion_id: i64) -> Result<()> {
+    async fn approve_merge_suggestion(&self, _user_id: &str, suggestion_id: i64) -> Result<()> {
         let (fold_id, keep_id) = {
             let suggestions = self
                 .merge_suggestions
@@ -3166,7 +3287,7 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(())
     }
 
-    async fn reject_merge_suggestion(&self, suggestion_id: i64) -> Result<()> {
+    async fn reject_merge_suggestion(&self, _user_id: &str, suggestion_id: i64) -> Result<()> {
         let mut suggestions = self
             .merge_suggestions
             .lock()
@@ -3185,6 +3306,7 @@ impl GraphRepo for InMemoryGraphRepo {
 
     async fn propose_structural_inference(
         &self,
+        _user_id: &str,
         source_concept_id: i64,
         target_concept_id: i64,
         proposed_type: &str,
@@ -3245,6 +3367,7 @@ impl GraphRepo for InMemoryGraphRepo {
 
     async fn propose_thematic_inference(
         &self,
+        _user_id: &str,
         source_concept_id: i64,
         target_concept_id: i64,
         proposed_type: &str,
@@ -3334,9 +3457,13 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(proposal)
     }
 
-    async fn endorse_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal> {
+    async fn endorse_inference_proposal(
+        &self,
+        _user_id: &str,
+        id: i64,
+    ) -> Result<ChatInferenceProposal> {
         let proposal = self
-            .get_inference_proposal(id)
+            .get_inference_proposal(_user_id, id)
             .await?
             .ok_or_else(|| Error::NotFound(format!("chat inference proposal {id} not found")))?;
         if proposal.status != STATUS_PENDING {
@@ -3382,12 +3509,16 @@ impl GraphRepo for InMemoryGraphRepo {
             }
         }
         self.transition_proposal_status_in_memory(id, STATUS_ENDORSED);
-        self.get_inference_proposal(id)
+        self.get_inference_proposal(_user_id, id)
             .await?
             .ok_or_else(|| Error::internal("proposal vanished after endorse"))
     }
 
-    async fn reject_inference_proposal(&self, id: i64) -> Result<ChatInferenceProposal> {
+    async fn reject_inference_proposal(
+        &self,
+        _user_id: &str,
+        id: i64,
+    ) -> Result<ChatInferenceProposal> {
         {
             let proposals = self
                 .chat_inference_proposals
@@ -3410,12 +3541,12 @@ impl GraphRepo for InMemoryGraphRepo {
             }
         }
         self.transition_proposal_status_in_memory(id, STATUS_REJECTED);
-        self.get_inference_proposal(id)
+        self.get_inference_proposal(_user_id, id)
             .await?
             .ok_or_else(|| Error::internal("proposal vanished after reject"))
     }
 
-    async fn list_inference_proposals(&self) -> Result<Vec<ChatInferenceProposal>> {
+    async fn list_inference_proposals(&self, _user_id: &str) -> Result<Vec<ChatInferenceProposal>> {
         Ok(self
             .chat_inference_proposals
             .lock()
@@ -3423,7 +3554,11 @@ impl GraphRepo for InMemoryGraphRepo {
             .clone())
     }
 
-    async fn get_inference_proposal(&self, id: i64) -> Result<Option<ChatInferenceProposal>> {
+    async fn get_inference_proposal(
+        &self,
+        _user_id: &str,
+        id: i64,
+    ) -> Result<Option<ChatInferenceProposal>> {
         Ok(self
             .chat_inference_proposals
             .lock()
@@ -3433,7 +3568,11 @@ impl GraphRepo for InMemoryGraphRepo {
             .cloned())
     }
 
-    async fn edge_inference_asserted_by(&self, edge_id: i64) -> Result<Vec<InferenceAssertion>> {
+    async fn edge_inference_asserted_by(
+        &self,
+        _user_id: &str,
+        edge_id: i64,
+    ) -> Result<Vec<InferenceAssertion>> {
         Ok(self
             .edge_inference_provenance
             .lock()
@@ -3445,7 +3584,7 @@ impl GraphRepo for InMemoryGraphRepo {
 
     // --- ontology governance + refactor (issue #47) ---
 
-    async fn list_type_proposals(&self) -> Result<Vec<TypeProposal>> {
+    async fn list_type_proposals(&self, _user_id: &str) -> Result<Vec<TypeProposal>> {
         Ok(self
             .type_proposals
             .lock()
@@ -3453,7 +3592,7 @@ impl GraphRepo for InMemoryGraphRepo {
             .clone())
     }
 
-    async fn get_type_proposal(&self, id: i64) -> Result<Option<TypeProposal>> {
+    async fn get_type_proposal(&self, _user_id: &str, id: i64) -> Result<Option<TypeProposal>> {
         Ok(self
             .type_proposals
             .lock()
@@ -3465,6 +3604,7 @@ impl GraphRepo for InMemoryGraphRepo {
 
     async fn insert_type_proposal(
         &self,
+        _user_id: &str,
         slug: String,
         label: String,
         description: String,
@@ -3496,6 +3636,7 @@ impl GraphRepo for InMemoryGraphRepo {
 
     async fn approve_type_proposal(
         &self,
+        _user_id: &str,
         id: i64,
         slug: String,
         label: String,
@@ -3540,7 +3681,7 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(())
     }
 
-    async fn reject_type_proposal(&self, id: i64) -> Result<()> {
+    async fn reject_type_proposal(&self, _user_id: &str, id: i64) -> Result<()> {
         {
             let proposals = self
                 .type_proposals
@@ -3574,7 +3715,7 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(())
     }
 
-    async fn current_edge_type(&self, edge_id: i64) -> Result<Option<String>> {
+    async fn current_edge_type(&self, _user_id: &str, edge_id: i64) -> Result<Option<String>> {
         Ok(self
             .edge_type_history
             .lock()
@@ -3588,7 +3729,7 @@ impl GraphRepo for InMemoryGraphRepo {
             }))
     }
 
-    async fn edges_with_current_type(&self, slug: &str) -> Result<Vec<i64>> {
+    async fn edges_with_current_type(&self, _user_id: &str, slug: &str) -> Result<Vec<i64>> {
         let slug = slug.to_string();
         let history = self
             .edge_type_history
@@ -3617,7 +3758,11 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(ids)
     }
 
-    async fn edge_endpoints_and_type(&self, edge_id: i64) -> Result<(String, String, String)> {
+    async fn edge_endpoints_and_type(
+        &self,
+        _user_id: &str,
+        edge_id: i64,
+    ) -> Result<(String, String, String)> {
         let (source_concept_id, target_concept_id) = {
             let edges = self.edges.lock().expect("InMemoryGraphRepo mutex poisoned");
             let edge = edges
@@ -3639,24 +3784,28 @@ impl GraphRepo for InMemoryGraphRepo {
             .get(&target_concept_id)
             .map(|c| c.label.clone())
             .unwrap_or_default();
-        let current_type = self.current_edge_type(edge_id).await?.unwrap_or_default();
+        let current_type = self
+            .current_edge_type(_user_id, edge_id)
+            .await?
+            .unwrap_or_default();
         Ok((source_label, target_label, current_type))
     }
 
     async fn run_refactor(
         &self,
+        _user_id: &str,
         llm: &dyn Llm,
         proposal: &TypeProposal,
     ) -> Result<RefactorOutcome> {
         let Some(merge_of) = proposal.merge_of.as_ref() else {
             return Ok(RefactorOutcome::default());
         };
-        let edge_ids = self.edges_with_current_type(merge_of).await?;
+        let edge_ids = self.edges_with_current_type(_user_id, merge_of).await?;
         if edge_ids.is_empty() {
             return Ok(RefactorOutcome::default());
         }
 
-        let ontology = self.ontology_slugs().await?;
+        let ontology = self.ontology_slugs(_user_id).await?;
         let new_slug = proposal.slug.clone();
         let system = "You re-classify edges when the ontology evolves. \
                       Given an edge and the new vocabulary, respond with the single slug \
@@ -3668,7 +3817,7 @@ impl GraphRepo for InMemoryGraphRepo {
         let mut retagged: Vec<(i64, String)> = Vec::with_capacity(edge_ids.len());
         for edge_id in edge_ids {
             let (source_label, target_label, current_type) =
-                self.edge_endpoints_and_type(edge_id).await?;
+                self.edge_endpoints_and_type(_user_id, edge_id).await?;
             let user = format!(
                 "Edge: {source_label} —[{current_type}]→ {target_label}\n\
                  The type `{merge_of_for_prompt}` has been merged into `{new_slug}` \
@@ -3702,15 +3851,15 @@ impl GraphRepo for InMemoryGraphRepo {
 
     // --- retrieval pipeline (issue #47) ---
 
-    async fn retrieve(&self, query_vec: &[f32]) -> Result<RetrievalResult> {
-        let candidates = self.knn_concepts(query_vec, SEED_TOP_K).await?;
+    async fn retrieve(&self, _user_id: &str, query_vec: &[f32]) -> Result<RetrievalResult> {
+        let candidates = self.knn_concepts(_user_id, query_vec, SEED_TOP_K).await?;
         let seeds: Vec<(i64, f32)> = candidates
             .into_iter()
             .filter(|(_, sim)| *sim >= SEED_SIMILARITY_FLOOR)
             .collect();
 
         if seeds.is_empty() {
-            return self.no_seed_fallback_in_memory(query_vec).await;
+            return self.no_seed_fallback_in_memory(_user_id, query_vec).await;
         }
 
         let concept_labels: HashMap<i64, String> = self
@@ -3747,7 +3896,7 @@ impl GraphRepo for InMemoryGraphRepo {
         let (concept_hops, traversed_edges) = bfs_expand(&concept_labels, &edges, &seeds);
         let subgraph = self.collect_subgraph_braindumps_in_memory(&concept_hops);
         let backfill = self
-            .backfill_braindumps_in_memory(query_vec, &subgraph)
+            .backfill_braindumps_in_memory(_user_id, query_vec, &subgraph)
             .await;
 
         let mut all = subgraph;
@@ -3767,7 +3916,7 @@ impl GraphRepo for InMemoryGraphRepo {
 
     // --- issue #48: additional reads/writes migrated from domain modules ---
 
-    async fn get_braindump(&self, id: i64) -> Result<Option<Braindump>> {
+    async fn get_braindump(&self, _user_id: &str, id: i64) -> Result<Option<Braindump>> {
         Ok(self
             .braindumps
             .lock()
@@ -3778,6 +3927,7 @@ impl GraphRepo for InMemoryGraphRepo {
 
     async fn update_braindump(
         &self,
+        _user_id: &str,
         id: i64,
         verbatim: String,
         cleaned: String,
@@ -3794,7 +3944,7 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(Some(braindump.clone()))
     }
 
-    async fn all_edge_endpoints(&self) -> Result<Vec<(i64, i64)>> {
+    async fn all_edge_endpoints(&self, _user_id: &str) -> Result<Vec<(i64, i64)>> {
         let mut endpoints: Vec<(i64, i64)> = self
             .edges
             .lock()
@@ -3806,15 +3956,15 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(endpoints)
     }
 
-    async fn graph_delta(&self, since: i64) -> Result<GraphDelta> {
+    async fn graph_delta(&self, _user_id: &str, since: i64) -> Result<GraphDelta> {
         let added_concepts: Vec<Concept> = self
-            .all_concepts()
+            .all_concepts(_user_id)
             .await?
             .into_iter()
             .filter(|c| c.created_at > since)
             .collect();
         let added_edges: Vec<DeltaEdge> = self
-            .all_edges_with_current_type()
+            .all_edges_with_current_type(_user_id)
             .await?
             .into_iter()
             .filter(|e| e.created_at > since)
@@ -3841,7 +3991,10 @@ impl GraphRepo for InMemoryGraphRepo {
         })
     }
 
-    async fn missing_type_rows(&self) -> Result<Vec<(i64, String, String, String)>> {
+    async fn missing_type_rows(
+        &self,
+        _user_id: &str,
+    ) -> Result<Vec<(i64, String, String, String)>> {
         let ontology = self
             .ontology
             .lock()
@@ -3863,7 +4016,12 @@ impl GraphRepo for InMemoryGraphRepo {
         Ok(out)
     }
 
-    async fn store_type_embedding(&self, ontology_id: i64, vec: Vec<f32>) -> Result<()> {
+    async fn store_type_embedding(
+        &self,
+        _user_id: &str,
+        ontology_id: i64,
+        vec: Vec<f32>,
+    ) -> Result<()> {
         let ontology = self
             .ontology
             .lock()
@@ -4403,8 +4561,15 @@ impl InMemoryGraphRepo {
     }
 
     /// No-seed fallback (ADR-0004): braindump-vector-direct (in-memory).
-    async fn no_seed_fallback_in_memory(&self, query_vec: &[f32]) -> Result<RetrievalResult> {
-        let hits = self.knn_braindumps(query_vec, BRAINDUMP_TOP_K).await?;
+    /// Issue #72: scoped to `_user_id`.
+    async fn no_seed_fallback_in_memory(
+        &self,
+        _user_id: &str,
+        query_vec: &[f32],
+    ) -> Result<RetrievalResult> {
+        let hits = self
+            .knn_braindumps(_user_id, query_vec, BRAINDUMP_TOP_K)
+            .await?;
         let braindumps = self
             .braindumps
             .lock()
@@ -4434,12 +4599,13 @@ impl InMemoryGraphRepo {
     /// (ADR-0004), in-memory.
     async fn backfill_braindumps_in_memory(
         &self,
+        _user_id: &str,
         query_vec: &[f32],
         subgraph: &[RetrievedBraindump],
     ) -> Vec<RetrievedBraindump> {
         let already: HashSet<i64> = subgraph.iter().map(|b| b.id).collect();
         let hits = self
-            .knn_braindumps(query_vec, BRAINDUMP_TOP_K)
+            .knn_braindumps(_user_id, query_vec, BRAINDUMP_TOP_K)
             .await
             .unwrap_or_default();
         let braindumps = self
@@ -4479,6 +4645,7 @@ enum InMemoryResolution {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::BOOTSTRAP_ADMIN_USER_ID;
 
     /// The braindump-embedding check is reachable through the seam without a
     /// SQLite connection: a fresh `InMemoryGraphRepo` reports nothing stored,
@@ -4487,12 +4654,17 @@ mod tests {
     async fn in_memory_reports_stored_after_marking() {
         let repo = InMemoryGraphRepo::new();
         assert!(
-            !repo.braindump_embedding_stored(42).await.unwrap(),
+            !repo
+                .braindump_embedding_stored(BOOTSTRAP_ADMIN_USER_ID, 42)
+                .await
+                .unwrap(),
             "fresh repo reports nothing stored"
         );
         repo.mark_braindump_embedding_stored(42);
         assert!(
-            repo.braindump_embedding_stored(42).await.unwrap(),
+            repo.braindump_embedding_stored(BOOTSTRAP_ADMIN_USER_ID, 42)
+                .await
+                .unwrap(),
             "marked id reports stored"
         );
     }
@@ -4525,12 +4697,15 @@ mod tests {
             created_at: 100,
         });
 
-        let concepts = repo.all_concepts().await.unwrap();
+        let concepts = repo.all_concepts(BOOTSTRAP_ADMIN_USER_ID).await.unwrap();
         assert_eq!(concepts.len(), 2, "both concepts returned");
         assert_eq!(concepts[0].id, 1);
         assert_eq!(concepts[1].id, 2, "concepts ordered by id");
 
-        let edges = repo.all_edges_with_current_type().await.unwrap();
+        let edges = repo
+            .all_edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID)
+            .await
+            .unwrap();
         assert_eq!(edges.len(), 1, "the one edge returned");
         let e = &edges[0];
         assert_eq!(e.id, 10);
@@ -4545,7 +4720,10 @@ mod tests {
         // ADR-0003: a refactor retag appends to the type history; the
         // projected current type flips, original stays immutable.
         repo.append_edge_type_history(10, "affects", 200);
-        let edges_after = repo.all_edges_with_current_type().await.unwrap();
+        let edges_after = repo
+            .all_edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID)
+            .await
+            .unwrap();
         assert_eq!(
             edges_after[0].current_type, "affects",
             "current type projected from the last history entry"
@@ -4558,17 +4736,23 @@ mod tests {
         // `find_edge` looks up by (source, original_type, target) and returns
         // the immutable Edge (no current_type — that's a projection).
         let found = repo
-            .find_edge(1, "endangers", 2)
+            .find_edge(BOOTSTRAP_ADMIN_USER_ID, 1, "endangers", 2)
             .await
             .unwrap()
             .expect("edge found by identity key");
         assert_eq!(found.id, 10);
         assert_eq!(found.original_type, "endangers");
-        let none = repo.find_edge(1, "helps", 2).await.unwrap();
+        let none = repo
+            .find_edge(BOOTSTRAP_ADMIN_USER_ID, 1, "helps", 2)
+            .await
+            .unwrap();
         assert!(none.is_none(), "no edge matches a different type");
 
         // Type history read mirrors what the projection consumes.
-        let history = repo.edge_type_history(10).await.unwrap();
+        let history = repo
+            .edge_type_history(BOOTSTRAP_ADMIN_USER_ID, 10)
+            .await
+            .unwrap();
         assert_eq!(history.len(), 2, "original + retag");
         assert_eq!(history[0].seq_index, 0);
         assert_eq!(history[0].type_slug, "endangers");
@@ -4583,7 +4767,11 @@ mod tests {
     async fn in_memory_knn_concept_returns_nearest_by_cosine() {
         let repo = InMemoryGraphRepo::new();
         // Empty graph → no hit.
-        assert!(repo.knn_concept(&[1.0, 0.0]).await.unwrap().is_none());
+        assert!(repo
+            .knn_concept(BOOTSTRAP_ADMIN_USER_ID, &[1.0, 0.0])
+            .await
+            .unwrap()
+            .is_none());
 
         repo.add_concept(Concept {
             id: 1,
@@ -4599,7 +4787,11 @@ mod tests {
         repo.set_concept_embedding(2, vec![0.0, 1.0]);
 
         // Query identical to concept 1 → similarity 1.0, returns concept 1.
-        let (id, sim) = repo.knn_concept(&[1.0, 0.0]).await.unwrap().expect("a hit");
+        let (id, sim) = repo
+            .knn_concept(BOOTSTRAP_ADMIN_USER_ID, &[1.0, 0.0])
+            .await
+            .unwrap()
+            .expect("a hit");
         assert_eq!(id, 1);
         assert!(
             (sim - 1.0).abs() < 1e-5,
@@ -4607,7 +4799,10 @@ mod tests {
         );
 
         // Top-K concepts: query closer to concept 1 → concept 1 ranks first.
-        let top = repo.knn_concepts(&[0.9, 0.1], 5).await.unwrap();
+        let top = repo
+            .knn_concepts(BOOTSTRAP_ADMIN_USER_ID, &[0.9, 0.1], 5)
+            .await
+            .unwrap();
         assert_eq!(top.len(), 2, "both concepts returned");
         assert_eq!(top[0].0, 1, "concept 1 ranks first (closer)");
         assert!(top[0].1 > top[1].1, "sorted by similarity descending");
@@ -4621,9 +4816,9 @@ mod tests {
         let repo = InMemoryGraphRepo::new();
         repo.add_ontology_type("causes", "Causes", "A brings about B.");
         repo.add_ontology_type("helps", "Helps", "A benefits B.");
-        let slugs = repo.ontology_slugs().await.unwrap();
+        let slugs = repo.ontology_slugs(BOOTSTRAP_ADMIN_USER_ID).await.unwrap();
         assert_eq!(slugs, vec!["causes".to_string(), "helps".to_string()]);
-        let types = repo.ontology_types().await.unwrap();
+        let types = repo.ontology_types(BOOTSTRAP_ADMIN_USER_ID).await.unwrap();
         assert_eq!(types.len(), 2);
         assert_eq!(
             types[0],
@@ -4664,12 +4859,17 @@ mod tests {
         let repo = InMemoryGraphRepo::new();
         repo.add_ontology_type("endangers", "Endangers", "A threatens B.");
         let bd = repo
-            .insert_braindump("maria endangers q3", "maria endangers q3")
+            .insert_braindump(
+                BOOTSTRAP_ADMIN_USER_ID,
+                "maria endangers q3",
+                "maria endangers q3",
+            )
             .await
             .unwrap();
 
         let outcome = repo
             .ingest_extraction(
+                BOOTSTRAP_ADMIN_USER_ID,
                 bd.id,
                 vec![0.5, 0.5],
                 extraction(
@@ -4688,23 +4888,33 @@ mod tests {
         assert_eq!(outcome.edges_rejected, 0);
 
         let maria = repo
-            .concept_id_for_label("Maria")
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Maria")
             .await
             .unwrap()
             .expect("Maria created");
         let q3 = repo
-            .concept_id_for_label("Q3 launch")
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
             .await
             .unwrap()
             .expect("Q3 created");
         assert_eq!(
-            repo.concept_provenance(maria).await.unwrap(),
+            repo.concept_provenance(BOOTSTRAP_ADMIN_USER_ID, maria)
+                .await
+                .unwrap(),
             vec![bd.id],
             "extraction provenance (ADR-0010)"
         );
-        assert_eq!(repo.concept_provenance(q3).await.unwrap(), vec![bd.id]);
+        assert_eq!(
+            repo.concept_provenance(BOOTSTRAP_ADMIN_USER_ID, q3)
+                .await
+                .unwrap(),
+            vec![bd.id]
+        );
 
-        let edges = repo.all_edges_with_current_type().await.unwrap();
+        let edges = repo
+            .all_edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID)
+            .await
+            .unwrap();
         assert_eq!(edges.len(), 1, "one edge");
         let e = &edges[0];
         assert_eq!(e.source_concept_id, maria);
@@ -4716,17 +4926,24 @@ mod tests {
         );
 
         assert_eq!(
-            repo.edge_provenance(e.id).await.unwrap(),
+            repo.edge_provenance(BOOTSTRAP_ADMIN_USER_ID, e.id)
+                .await
+                .unwrap(),
             vec![bd.id],
             "edge asserted_by this braindump (ADR-0002)"
         );
-        let history = repo.edge_type_history(e.id).await.unwrap();
+        let history = repo
+            .edge_type_history(BOOTSTRAP_ADMIN_USER_ID, e.id)
+            .await
+            .unwrap();
         assert_eq!(history.len(), 1, "type history seeded at index 0");
         assert_eq!(history[0].seq_index, 0);
         assert_eq!(history[0].type_slug, "endangers");
 
         assert!(
-            repo.braindump_embedding_stored(bd.id).await.unwrap(),
+            repo.braindump_embedding_stored(BOOTSTRAP_ADMIN_USER_ID, bd.id)
+                .await
+                .unwrap(),
             "braindump embedding stored (retrieval backfill)"
         );
     }
@@ -4739,22 +4956,28 @@ mod tests {
     async fn in_memory_ingest_accretes_same_concept_across_two_braindumps() {
         let repo = InMemoryGraphRepo::new();
         let bd1 = repo
-            .insert_braindump("q3 review one", "q3 review one")
+            .insert_braindump(BOOTSTRAP_ADMIN_USER_ID, "q3 review one", "q3 review one")
             .await
             .unwrap();
         let bd2 = repo
-            .insert_braindump("q3 review two", "q3 review two")
+            .insert_braindump(BOOTSTRAP_ADMIN_USER_ID, "q3 review two", "q3 review two")
             .await
             .unwrap();
 
         let ext = extraction(&["Q3 review"], &[]);
         let vecs = vec![vec![1.0, 0.0]];
 
-        repo.ingest_extraction(bd1.id, vec![0.5, 0.5], ext.clone(), vecs.clone())
-            .await
-            .unwrap();
+        repo.ingest_extraction(
+            BOOTSTRAP_ADMIN_USER_ID,
+            bd1.id,
+            vec![0.5, 0.5],
+            ext.clone(),
+            vecs.clone(),
+        )
+        .await
+        .unwrap();
         let outcome = repo
-            .ingest_extraction(bd2.id, vec![0.5, 0.5], ext, vecs)
+            .ingest_extraction(BOOTSTRAP_ADMIN_USER_ID, bd2.id, vec![0.5, 0.5], ext, vecs)
             .await
             .unwrap();
 
@@ -4762,16 +4985,22 @@ mod tests {
         assert_eq!(outcome.concepts_accreted, 1, "{outcome:?}");
 
         assert_eq!(
-            repo.all_concepts().await.unwrap().len(),
+            repo.all_concepts(BOOTSTRAP_ADMIN_USER_ID)
+                .await
+                .unwrap()
+                .len(),
             1,
             "one concept node, not two"
         );
         let cid = repo
-            .concept_id_for_label("Q3 review")
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Q3 review")
             .await
             .unwrap()
             .unwrap();
-        let mut prov = repo.concept_provenance(cid).await.unwrap();
+        let mut prov = repo
+            .concept_provenance(BOOTSTRAP_ADMIN_USER_ID, cid)
+            .await
+            .unwrap();
         prov.sort_unstable();
         assert_eq!(prov, vec![bd1.id, bd2.id], "both braindumps in provenance");
     }
@@ -4782,12 +5011,17 @@ mod tests {
     async fn in_memory_ingest_rejects_unsanctioned_edge_type() {
         let repo = InMemoryGraphRepo::new();
         let bd = repo
-            .insert_braindump("maria bamboozles q3", "maria bamboozles q3")
+            .insert_braindump(
+                BOOTSTRAP_ADMIN_USER_ID,
+                "maria bamboozles q3",
+                "maria bamboozles q3",
+            )
             .await
             .unwrap();
 
         let outcome = repo
             .ingest_extraction(
+                BOOTSTRAP_ADMIN_USER_ID,
                 bd.id,
                 vec![0.5, 0.5],
                 extraction(
@@ -4802,7 +5036,10 @@ mod tests {
         assert_eq!(outcome.edges_rejected, 1, "{outcome:?}");
         assert_eq!(outcome.edges_created, 0);
         assert_eq!(
-            repo.all_edges_with_current_type().await.unwrap().len(),
+            repo.all_edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID)
+                .await
+                .unwrap()
+                .len(),
             0,
             "unsanctioned edge not stored"
         );
@@ -4814,14 +5051,18 @@ mod tests {
     #[tokio::test]
     async fn in_memory_ingest_borderline_match_creates_concept_and_merge_suggestion() {
         let repo = InMemoryGraphRepo::new();
-        let bd1 = repo.insert_braindump("alpha", "alpha").await.unwrap();
+        let bd1 = repo
+            .insert_braindump(BOOTSTRAP_ADMIN_USER_ID, "alpha", "alpha")
+            .await
+            .unwrap();
         let bd2 = repo
-            .insert_braindump("alpha variant", "alpha variant")
+            .insert_braindump(BOOTSTRAP_ADMIN_USER_ID, "alpha variant", "alpha variant")
             .await
             .unwrap();
 
         // First: create "alpha" with vector [1, 0].
         repo.ingest_extraction(
+            BOOTSTRAP_ADMIN_USER_ID,
             bd1.id,
             vec![0.0, 0.0],
             extraction(&["alpha"], &[]),
@@ -4829,13 +5070,18 @@ mod tests {
         )
         .await
         .unwrap();
-        let existing = repo.concept_id_for_label("alpha").await.unwrap().unwrap();
+        let existing = repo
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "alpha")
+            .await
+            .unwrap()
+            .unwrap();
 
         // Second: "alpha variant" at cosine 0.9 to [1, 0] → suggestion band.
         // [0.9, sqrt(1 − 0.81)] is unit-length and cosine 0.9 to [1, 0].
         let variant_vec = vec![0.9, (1.0_f32 - 0.9 * 0.9).sqrt()];
         let outcome = repo
             .ingest_extraction(
+                BOOTSTRAP_ADMIN_USER_ID,
                 bd2.id,
                 vec![0.0, 0.0],
                 extraction(&["alpha variant"], &[]),
@@ -4849,11 +5095,14 @@ mod tests {
         assert_eq!(outcome.concepts_accreted, 0);
 
         let new_id = repo
-            .concept_id_for_label("alpha variant")
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "alpha variant")
             .await
             .unwrap()
             .expect("borderline concept created");
-        let suggestions = repo.merge_suggestions().await.unwrap();
+        let suggestions = repo
+            .merge_suggestions(BOOTSTRAP_ADMIN_USER_ID)
+            .await
+            .unwrap();
         assert_eq!(suggestions.len(), 1, "{suggestions:?}");
         let s = &suggestions[0];
         assert_eq!(s.kind, "concept");
@@ -4876,10 +5125,17 @@ mod tests {
     async fn in_memory_delete_braindump_vanishes_concept_on_last_extractor() {
         let repo = InMemoryGraphRepo::new();
         repo.add_ontology_type("endangers", "Endangers", "A threatens B.");
-        let bd1 = repo.insert_braindump("q3 one", "q3 one").await.unwrap();
-        let bd2 = repo.insert_braindump("q3 two", "q3 two").await.unwrap();
+        let bd1 = repo
+            .insert_braindump(BOOTSTRAP_ADMIN_USER_ID, "q3 one", "q3 one")
+            .await
+            .unwrap();
+        let bd2 = repo
+            .insert_braindump(BOOTSTRAP_ADMIN_USER_ID, "q3 two", "q3 two")
+            .await
+            .unwrap();
 
         repo.ingest_extraction(
+            BOOTSTRAP_ADMIN_USER_ID,
             bd1.id,
             vec![0.5, 0.5],
             extraction(&["Q3"], &[]),
@@ -4888,6 +5144,7 @@ mod tests {
         .await
         .unwrap();
         repo.ingest_extraction(
+            BOOTSTRAP_ADMIN_USER_ID,
             bd2.id,
             vec![0.5, 0.5],
             extraction(&["Q3"], &[]),
@@ -4895,26 +5152,49 @@ mod tests {
         )
         .await
         .unwrap();
-        let cid = repo.concept_id_for_label("Q3").await.unwrap().unwrap();
-        let mut prov = repo.concept_provenance(cid).await.unwrap();
+        let cid = repo
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Q3")
+            .await
+            .unwrap()
+            .unwrap();
+        let mut prov = repo
+            .concept_provenance(BOOTSTRAP_ADMIN_USER_ID, cid)
+            .await
+            .unwrap();
         prov.sort_unstable();
         assert_eq!(prov, vec![bd1.id, bd2.id]);
 
         // Delete bd1: Q3 still extracted by bd2 → survives, provenance = [bd2].
         assert!(
-            repo.delete_braindump(bd1.id).await.unwrap(),
+            repo.delete_braindump(BOOTSTRAP_ADMIN_USER_ID, bd1.id)
+                .await
+                .unwrap(),
             "deleting an existing braindump reports true"
         );
-        assert_eq!(repo.concept_provenance(cid).await.unwrap(), vec![bd2.id]);
+        assert_eq!(
+            repo.concept_provenance(BOOTSTRAP_ADMIN_USER_ID, cid)
+                .await
+                .unwrap(),
+            vec![bd2.id]
+        );
         assert!(
-            repo.get_concept(cid).await.unwrap().is_some(),
+            repo.get_concept(BOOTSTRAP_ADMIN_USER_ID, cid)
+                .await
+                .unwrap()
+                .is_some(),
             "concept survives while another braindump extracts it"
         );
 
         // Delete bd2: Q3's last extractor gone → concept vanishes.
-        assert!(repo.delete_braindump(bd2.id).await.unwrap());
+        assert!(repo
+            .delete_braindump(BOOTSTRAP_ADMIN_USER_ID, bd2.id)
+            .await
+            .unwrap());
         assert!(
-            repo.get_concept(cid).await.unwrap().is_none(),
+            repo.get_concept(BOOTSTRAP_ADMIN_USER_ID, cid)
+                .await
+                .unwrap()
+                .is_none(),
             "concept vanishes when its last extracting braindump is deleted"
         );
     }
@@ -4927,11 +5207,19 @@ mod tests {
         let repo = InMemoryGraphRepo::new();
         repo.add_ontology_type("endangers", "Endangers", "A threatens B.");
         let bd1 = repo
-            .insert_braindump("maria endangers q3", "maria endangers q3")
+            .insert_braindump(
+                BOOTSTRAP_ADMIN_USER_ID,
+                "maria endangers q3",
+                "maria endangers q3",
+            )
             .await
             .unwrap();
         let bd2 = repo
-            .insert_braindump("maria still endangers q3", "maria still endangers q3")
+            .insert_braindump(
+                BOOTSTRAP_ADMIN_USER_ID,
+                "maria still endangers q3",
+                "maria still endangers q3",
+            )
             .await
             .unwrap();
 
@@ -4940,30 +5228,47 @@ mod tests {
             &[("Maria", "endangers", "Q3 launch")],
         );
         let vecs = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
-        repo.ingest_extraction(bd1.id, vec![0.5, 0.5], ext.clone(), vecs.clone())
-            .await
-            .unwrap();
-        repo.ingest_extraction(bd2.id, vec![0.5, 0.5], ext, vecs)
+        repo.ingest_extraction(
+            BOOTSTRAP_ADMIN_USER_ID,
+            bd1.id,
+            vec![0.5, 0.5],
+            ext.clone(),
+            vecs.clone(),
+        )
+        .await
+        .unwrap();
+        repo.ingest_extraction(BOOTSTRAP_ADMIN_USER_ID, bd2.id, vec![0.5, 0.5], ext, vecs)
             .await
             .unwrap();
 
-        let maria = repo.concept_id_for_label("Maria").await.unwrap().unwrap();
+        let maria = repo
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Maria")
+            .await
+            .unwrap()
+            .unwrap();
         let q3 = repo
-            .concept_id_for_label("Q3 launch")
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
             .await
             .unwrap()
             .unwrap();
         let edge = repo
-            .find_edge(maria, "endangers", q3)
+            .find_edge(BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
             .await
             .unwrap()
             .expect("edge created");
 
         // Delete bd1: edge still asserted by bd2 → survives.
-        repo.delete_braindump(bd1.id).await.unwrap();
-        assert_eq!(repo.edge_provenance(edge.id).await.unwrap(), vec![bd2.id]);
+        repo.delete_braindump(BOOTSTRAP_ADMIN_USER_ID, bd1.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.edge_provenance(BOOTSTRAP_ADMIN_USER_ID, edge.id)
+                .await
+                .unwrap(),
+            vec![bd2.id]
+        );
         assert!(
-            repo.find_edge(maria, "endangers", q3)
+            repo.find_edge(BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
                 .await
                 .unwrap()
                 .is_some(),
@@ -4971,9 +5276,11 @@ mod tests {
         );
 
         // Delete bd2: last asserter gone → edge vanishes.
-        repo.delete_braindump(bd2.id).await.unwrap();
+        repo.delete_braindump(BOOTSTRAP_ADMIN_USER_ID, bd2.id)
+            .await
+            .unwrap();
         assert!(
-            repo.find_edge(maria, "endangers", q3)
+            repo.find_edge(BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
                 .await
                 .unwrap()
                 .is_none(),
@@ -4986,7 +5293,10 @@ mod tests {
     async fn in_memory_delete_missing_braindump_returns_false() {
         let repo = InMemoryGraphRepo::new();
         assert!(
-            !repo.delete_braindump(9999).await.unwrap(),
+            !repo
+                .delete_braindump(BOOTSTRAP_ADMIN_USER_ID, 9999)
+                .await
+                .unwrap(),
             "deleting a non-existent braindump reports false"
         );
     }
@@ -5001,16 +5311,21 @@ mod tests {
         repo.add_ontology_type("endangers", "Endangers", "A threatens B.");
         repo.add_ontology_type("helps", "Helps", "A benefits B.");
         let bd1 = repo
-            .insert_braindump("maria endangers q3", "maria endangers q3")
+            .insert_braindump(
+                BOOTSTRAP_ADMIN_USER_ID,
+                "maria endangers q3",
+                "maria endangers q3",
+            )
             .await
             .unwrap();
         let bd2 = repo
-            .insert_braindump("beta helps q3", "beta helps q3")
+            .insert_braindump(BOOTSTRAP_ADMIN_USER_ID, "beta helps q3", "beta helps q3")
             .await
             .unwrap();
 
         // Maria —[endangers]→ Q3, extracted by bd1.
         repo.ingest_extraction(
+            BOOTSTRAP_ADMIN_USER_ID,
             bd1.id,
             vec![0.5, 0.5],
             extraction(&["Maria", "Q3"], &[("Maria", "endangers", "Q3")]),
@@ -5024,6 +5339,7 @@ mod tests {
         // to bd1's → accretes.
         let beta_vec = vec![0.9, (1.0_f32 - 0.9 * 0.9).sqrt()];
         repo.ingest_extraction(
+            BOOTSTRAP_ADMIN_USER_ID,
             bd2.id,
             vec![0.5, 0.5],
             extraction(&["Beta", "Q3"], &[("Beta", "helps", "Q3")]),
@@ -5032,9 +5348,21 @@ mod tests {
         .await
         .unwrap();
 
-        let maria = repo.concept_id_for_label("Maria").await.unwrap().unwrap();
-        let beta = repo.concept_id_for_label("Beta").await.unwrap().unwrap();
-        let q3 = repo.concept_id_for_label("Q3").await.unwrap().unwrap();
+        let maria = repo
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Maria")
+            .await
+            .unwrap()
+            .unwrap();
+        let beta = repo
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Beta")
+            .await
+            .unwrap()
+            .unwrap();
+        let q3 = repo
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Q3")
+            .await
+            .unwrap()
+            .unwrap();
 
         // Seed a pending suggestion: fold Beta into Maria (id 100, distinct from
         // the auto-generated suggestion the accretion created).
@@ -5050,27 +5378,40 @@ mod tests {
             created_at: 0,
         });
 
-        repo.approve_merge_suggestion(100).await.unwrap();
+        repo.approve_merge_suggestion(BOOTSTRAP_ADMIN_USER_ID, 100)
+            .await
+            .unwrap();
 
         // Union extraction provenance onto Maria.
-        let mut prov = repo.concept_provenance(maria).await.unwrap();
+        let mut prov = repo
+            .concept_provenance(BOOTSTRAP_ADMIN_USER_ID, maria)
+            .await
+            .unwrap();
         prov.sort_unstable();
         assert_eq!(prov, vec![bd1.id, bd2.id], "union provenance (ADR-0010)");
         // Fold concept (Beta) is gone.
         assert!(
-            repo.get_concept(beta).await.unwrap().is_none(),
+            repo.get_concept(BOOTSTRAP_ADMIN_USER_ID, beta)
+                .await
+                .unwrap()
+                .is_none(),
             "fold concept deleted on approve"
         );
         // Beta's edge (Beta→Q3[helps]) folded onto Maria → Maria→Q3[helps].
         let folded = repo
-            .find_edge(maria, "helps", q3)
+            .find_edge(BOOTSTRAP_ADMIN_USER_ID, maria, "helps", q3)
             .await
             .unwrap()
             .expect("folded edge present");
-        assert_eq!(repo.edge_provenance(folded.id).await.unwrap(), vec![bd2.id]);
+        assert_eq!(
+            repo.edge_provenance(BOOTSTRAP_ADMIN_USER_ID, folded.id)
+                .await
+                .unwrap(),
+            vec![bd2.id]
+        );
         // Maria's own edge (endangers) still present — contradictory edges coexist.
         assert!(
-            repo.find_edge(maria, "endangers", q3)
+            repo.find_edge(BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
                 .await
                 .unwrap()
                 .is_some(),
@@ -5079,7 +5420,7 @@ mod tests {
         // The suggestion is consumed (both the test-seeded one and the
         // accretion-generated one, which referenced Beta and cascaded away).
         assert!(
-            repo.merge_suggestions()
+            repo.merge_suggestions(BOOTSTRAP_ADMIN_USER_ID)
                 .await
                 .unwrap()
                 .iter()
@@ -5096,15 +5437,16 @@ mod tests {
         let repo = InMemoryGraphRepo::new();
         repo.add_ontology_type("helps", "Helps", "A benefits B.");
         let bd1 = repo
-            .insert_braindump("maria helps q3", "maria helps q3")
+            .insert_braindump(BOOTSTRAP_ADMIN_USER_ID, "maria helps q3", "maria helps q3")
             .await
             .unwrap();
         let bd2 = repo
-            .insert_braindump("beta helps q3", "beta helps q3")
+            .insert_braindump(BOOTSTRAP_ADMIN_USER_ID, "beta helps q3", "beta helps q3")
             .await
             .unwrap();
 
         repo.ingest_extraction(
+            BOOTSTRAP_ADMIN_USER_ID,
             bd1.id,
             vec![0.5, 0.5],
             extraction(&["Maria", "Q3"], &[("Maria", "helps", "Q3")]),
@@ -5114,6 +5456,7 @@ mod tests {
         .unwrap();
         let beta_vec = vec![0.9, (1.0_f32 - 0.9 * 0.9).sqrt()];
         repo.ingest_extraction(
+            BOOTSTRAP_ADMIN_USER_ID,
             bd2.id,
             vec![0.5, 0.5],
             extraction(&["Beta", "Q3"], &[("Beta", "helps", "Q3")]),
@@ -5122,9 +5465,21 @@ mod tests {
         .await
         .unwrap();
 
-        let maria = repo.concept_id_for_label("Maria").await.unwrap().unwrap();
-        let beta = repo.concept_id_for_label("Beta").await.unwrap().unwrap();
-        let q3 = repo.concept_id_for_label("Q3").await.unwrap().unwrap();
+        let maria = repo
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Maria")
+            .await
+            .unwrap()
+            .unwrap();
+        let beta = repo
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Beta")
+            .await
+            .unwrap()
+            .unwrap();
+        let q3 = repo
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Q3")
+            .await
+            .unwrap()
+            .unwrap();
 
         repo.add_merge_suggestion(MergeSuggestion {
             id: 200,
@@ -5138,16 +5493,21 @@ mod tests {
             created_at: 0,
         });
 
-        repo.approve_merge_suggestion(200).await.unwrap();
+        repo.approve_merge_suggestion(BOOTSTRAP_ADMIN_USER_ID, 200)
+            .await
+            .unwrap();
 
         // Both asserted →Q3[helps]; after fold they collide on (Maria, helps, Q3)
         // → one edge, provenance unioned.
         let edge = repo
-            .find_edge(maria, "helps", q3)
+            .find_edge(BOOTSTRAP_ADMIN_USER_ID, maria, "helps", q3)
             .await
             .unwrap()
             .expect("merged edge present");
-        let mut prov = repo.edge_provenance(edge.id).await.unwrap();
+        let mut prov = repo
+            .edge_provenance(BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap();
         prov.sort_unstable();
         assert_eq!(
             prov,
@@ -5155,11 +5515,18 @@ mod tests {
             "duplicate edges merged, provenance unioned"
         );
         assert_eq!(
-            repo.all_edges_with_current_type().await.unwrap().len(),
+            repo.all_edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID)
+                .await
+                .unwrap()
+                .len(),
             1,
             "one edge, not two"
         );
-        assert!(repo.get_concept(beta).await.unwrap().is_none());
+        assert!(repo
+            .get_concept(BOOTSTRAP_ADMIN_USER_ID, beta)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     /// Reject a merge suggestion: keep both concepts, drop the suggestion.
@@ -5167,10 +5534,17 @@ mod tests {
     #[tokio::test]
     async fn in_memory_reject_merge_keeps_concepts_and_drops_suggestion() {
         let repo = InMemoryGraphRepo::new();
-        let bd1 = repo.insert_braindump("maria", "maria").await.unwrap();
-        let bd2 = repo.insert_braindump("beta", "beta").await.unwrap();
+        let bd1 = repo
+            .insert_braindump(BOOTSTRAP_ADMIN_USER_ID, "maria", "maria")
+            .await
+            .unwrap();
+        let bd2 = repo
+            .insert_braindump(BOOTSTRAP_ADMIN_USER_ID, "beta", "beta")
+            .await
+            .unwrap();
 
         repo.ingest_extraction(
+            BOOTSTRAP_ADMIN_USER_ID,
             bd1.id,
             vec![0.5, 0.5],
             extraction(&["Maria"], &[]),
@@ -5179,6 +5553,7 @@ mod tests {
         .await
         .unwrap();
         repo.ingest_extraction(
+            BOOTSTRAP_ADMIN_USER_ID,
             bd2.id,
             vec![0.5, 0.5],
             extraction(&["Beta"], &[]),
@@ -5187,8 +5562,16 @@ mod tests {
         .await
         .unwrap();
 
-        let maria = repo.concept_id_for_label("Maria").await.unwrap().unwrap();
-        let beta = repo.concept_id_for_label("Beta").await.unwrap().unwrap();
+        let maria = repo
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Maria")
+            .await
+            .unwrap()
+            .unwrap();
+        let beta = repo
+            .concept_id_for_label(BOOTSTRAP_ADMIN_USER_ID, "Beta")
+            .await
+            .unwrap()
+            .unwrap();
 
         repo.add_merge_suggestion(MergeSuggestion {
             id: 300,
@@ -5202,23 +5585,33 @@ mod tests {
             created_at: 0,
         });
 
-        repo.reject_merge_suggestion(300).await.unwrap();
+        repo.reject_merge_suggestion(BOOTSTRAP_ADMIN_USER_ID, 300)
+            .await
+            .unwrap();
 
         assert!(
-            repo.get_concept(maria).await.unwrap().is_some(),
+            repo.get_concept(BOOTSTRAP_ADMIN_USER_ID, maria)
+                .await
+                .unwrap()
+                .is_some(),
             "keeper survives"
         );
         assert!(
-            repo.get_concept(beta).await.unwrap().is_some(),
+            repo.get_concept(BOOTSTRAP_ADMIN_USER_ID, beta)
+                .await
+                .unwrap()
+                .is_some(),
             "fold concept survives reject"
         );
         assert_eq!(
-            repo.concept_provenance(maria).await.unwrap(),
+            repo.concept_provenance(BOOTSTRAP_ADMIN_USER_ID, maria)
+                .await
+                .unwrap(),
             vec![bd1.id],
             "provenance unchanged on reject"
         );
         assert!(
-            repo.merge_suggestions()
+            repo.merge_suggestions(BOOTSTRAP_ADMIN_USER_ID)
                 .await
                 .unwrap()
                 .iter()
@@ -5233,12 +5626,16 @@ mod tests {
     #[tokio::test]
     async fn in_memory_approve_and_reject_missing_suggestion_is_not_found() {
         let repo = InMemoryGraphRepo::new();
-        let approve = repo.approve_merge_suggestion(9999).await;
+        let approve = repo
+            .approve_merge_suggestion(BOOTSTRAP_ADMIN_USER_ID, 9999)
+            .await;
         assert!(
             matches!(approve, Err(Error::NotFound(_))),
             "approve missing: {approve:?}"
         );
-        let reject = repo.reject_merge_suggestion(9999).await;
+        let reject = repo
+            .reject_merge_suggestion(BOOTSTRAP_ADMIN_USER_ID, 9999)
+            .await;
         assert!(
             matches!(reject, Err(Error::NotFound(_))),
             "reject missing: {reject:?}"
@@ -5284,6 +5681,7 @@ mod tests {
 
         let proposal = repo
             .propose_structural_inference(
+                BOOTSTRAP_ADMIN_USER_ID,
                 1,
                 2,
                 "causes",
@@ -5307,18 +5705,24 @@ mod tests {
         assert!(proposal.resolved_at.is_none());
 
         assert_eq!(
-            repo.list_inference_proposals().await.unwrap().len(),
+            repo.list_inference_proposals(BOOTSTRAP_ADMIN_USER_ID)
+                .await
+                .unwrap()
+                .len(),
             1,
             "exactly one proposal queued"
         );
         // No new edge persisted — the only edge is the seed 1 —[causes]→ 2.
         assert_eq!(
-            repo.all_edges_with_current_type().await.unwrap().len(),
+            repo.all_edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID)
+                .await
+                .unwrap()
+                .len(),
             1,
             "no edge persisted on a pending proposal (no auto-endorse)"
         );
         assert!(
-            repo.edge_inference_asserted_by(10)
+            repo.edge_inference_asserted_by(BOOTSTRAP_ADMIN_USER_ID, 10)
                 .await
                 .unwrap()
                 .is_empty(),
@@ -5353,7 +5757,14 @@ mod tests {
         });
 
         let err = repo
-            .propose_structural_inference(1, 2, "bogus", vec![hop(1, "causes", 2)], None)
+            .propose_structural_inference(
+                BOOTSTRAP_ADMIN_USER_ID,
+                1,
+                2,
+                "bogus",
+                vec![hop(1, "causes", 2)],
+                None,
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
@@ -5362,7 +5773,10 @@ mod tests {
             "directed to the ontology queue: {err:?}"
         );
         assert!(
-            repo.list_inference_proposals().await.unwrap().is_empty(),
+            repo.list_inference_proposals(BOOTSTRAP_ADMIN_USER_ID)
+                .await
+                .unwrap()
+                .is_empty(),
             "no proposal created for an unsanctioned type"
         );
     }
@@ -5387,6 +5801,7 @@ mod tests {
         // One braindump asserts both cluster edges → it is the snapshot evidence.
         let bd = repo
             .insert_braindump(
+                BOOTSTRAP_ADMIN_USER_ID,
                 "maria endangers q3 which beta depends on",
                 "maria endangers q3 which beta depends on",
             )
@@ -5410,7 +5825,14 @@ mod tests {
         repo.add_edge_provenance(11, bd.id);
 
         let proposal = repo
-            .propose_thematic_inference(1, 3, "endangers", vec![1, 2, 3], Some("bridge"))
+            .propose_thematic_inference(
+                BOOTSTRAP_ADMIN_USER_ID,
+                1,
+                3,
+                "endangers",
+                vec![1, 2, 3],
+                Some("bridge"),
+            )
             .await
             .unwrap();
 
@@ -5442,7 +5864,10 @@ mod tests {
         );
         // No edge persisted yet — no auto-endorse.
         assert!(
-            repo.find_edge(1, "endangers", 3).await.unwrap().is_none(),
+            repo.find_edge(BOOTSTRAP_ADMIN_USER_ID, 1, "endangers", 3)
+                .await
+                .unwrap()
+                .is_none(),
             "no edge persisted on a pending thematic proposal"
         );
     }
@@ -5475,6 +5900,7 @@ mod tests {
         });
         let proposal = repo
             .propose_structural_inference(
+                BOOTSTRAP_ADMIN_USER_ID,
                 1,
                 2,
                 "causes",
@@ -5484,29 +5910,41 @@ mod tests {
             .await
             .unwrap();
 
-        let endorsed = repo.endorse_inference_proposal(proposal.id).await.unwrap();
+        let endorsed = repo
+            .endorse_inference_proposal(BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
         assert_eq!(endorsed.status, STATUS_ENDORSED);
         assert!(endorsed.resolved_at.is_some());
 
         // The seed edge accretes the inference provenance — no duplicate edge.
         assert_eq!(
-            repo.all_edges_with_current_type().await.unwrap().len(),
+            repo.all_edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID)
+                .await
+                .unwrap()
+                .len(),
             1,
             "edge accreted, not duplicated"
         );
         let edge = repo
-            .find_edge(1, "causes", 2)
+            .find_edge(BOOTSTRAP_ADMIN_USER_ID, 1, "causes", 2)
             .await
             .unwrap()
             .expect("endorsed edge present");
         assert_eq!(edge.id, 10);
         // Type history retains its index-0 seed (ADR-0003).
-        let history = repo.edge_type_history(10).await.unwrap();
+        let history = repo
+            .edge_type_history(BOOTSTRAP_ADMIN_USER_ID, 10)
+            .await
+            .unwrap();
         assert_eq!(history.len(), 1, "type history seeded at index 0");
         assert_eq!(history[0].seq_index, 0);
         assert_eq!(history[0].type_slug, "causes");
         // Provenance: this proposal is the asserter, origin structural, no snapshot.
-        let assertions = repo.edge_inference_asserted_by(10).await.unwrap();
+        let assertions = repo
+            .edge_inference_asserted_by(BOOTSTRAP_ADMIN_USER_ID, 10)
+            .await
+            .unwrap();
         assert_eq!(assertions.len(), 1);
         assert_eq!(assertions[0].chat_inference_id, proposal.id);
         assert_eq!(assertions[0].mode, STRUCTURAL_MODE);
@@ -5534,6 +5972,7 @@ mod tests {
         }
         let bd_path = repo
             .insert_braindump(
+                BOOTSTRAP_ADMIN_USER_ID,
                 "maria endangers q3 which beta depends on",
                 "maria endangers q3 which beta depends on",
             )
@@ -5559,6 +5998,7 @@ mod tests {
         // second braindump.
         let bd_direct = repo
             .insert_braindump(
+                BOOTSTRAP_ADMIN_USER_ID,
                 "maria endangers the beta release directly",
                 "maria endangers the beta release directly",
             )
@@ -5575,6 +6015,7 @@ mod tests {
 
         let proposal = repo
             .propose_structural_inference(
+                BOOTSTRAP_ADMIN_USER_ID,
                 1,
                 3,
                 "endangers",
@@ -5583,21 +6024,28 @@ mod tests {
             )
             .await
             .unwrap();
-        repo.endorse_inference_proposal(proposal.id).await.unwrap();
+        repo.endorse_inference_proposal(BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
 
         // Same edge (no duplicate), braindump provenance preserved.
         let edge = repo
-            .find_edge(1, "endangers", 3)
+            .find_edge(BOOTSTRAP_ADMIN_USER_ID, 1, "endangers", 3)
             .await
             .unwrap()
             .expect("edge still present");
         assert_eq!(edge.id, 12, "edge accreted, not duplicated");
         assert_eq!(
-            repo.edge_provenance(edge.id).await.unwrap(),
+            repo.edge_provenance(BOOTSTRAP_ADMIN_USER_ID, edge.id)
+                .await
+                .unwrap(),
             vec![bd_direct.id],
             "braindump provenance preserved"
         );
-        let assertions = repo.edge_inference_asserted_by(edge.id).await.unwrap();
+        let assertions = repo
+            .edge_inference_asserted_by(BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap();
         assert_eq!(assertions.len(), 1);
         assert_eq!(assertions[0].chat_inference_id, proposal.id);
         assert_eq!(assertions[0].mode, STRUCTURAL_MODE);
@@ -5628,22 +6076,35 @@ mod tests {
             created_at: 0,
         });
         let proposal = repo
-            .propose_structural_inference(1, 2, "causes", vec![hop(1, "causes", 2)], None)
+            .propose_structural_inference(
+                BOOTSTRAP_ADMIN_USER_ID,
+                1,
+                2,
+                "causes",
+                vec![hop(1, "causes", 2)],
+                None,
+            )
             .await
             .unwrap();
 
-        let rejected = repo.reject_inference_proposal(proposal.id).await.unwrap();
+        let rejected = repo
+            .reject_inference_proposal(BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
         assert_eq!(rejected.status, STATUS_REJECTED);
         assert!(rejected.resolved_at.is_some());
 
         // No new edge — only the seed remains.
         assert_eq!(
-            repo.all_edges_with_current_type().await.unwrap().len(),
+            repo.all_edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID)
+                .await
+                .unwrap()
+                .len(),
             1,
             "no edge persisted on reject"
         );
         assert!(
-            repo.edge_inference_asserted_by(10)
+            repo.edge_inference_asserted_by(BOOTSTRAP_ADMIN_USER_ID, 10)
                 .await
                 .unwrap()
                 .is_empty(),
@@ -5651,7 +6112,7 @@ mod tests {
         );
         // The rejected proposal stays in the table but is no longer pending.
         let refreshed = repo
-            .get_inference_proposal(proposal.id)
+            .get_inference_proposal(BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap()
             .unwrap();
@@ -5683,18 +6144,31 @@ mod tests {
             original_type: "causes".into(),
             created_at: 0,
         });
-        let missing = repo.endorse_inference_proposal(9999).await;
+        let missing = repo
+            .endorse_inference_proposal(BOOTSTRAP_ADMIN_USER_ID, 9999)
+            .await;
         assert!(
             matches!(missing, Err(Error::NotFound(_))),
             "endorse missing: {missing:?}"
         );
 
         let proposal = repo
-            .propose_structural_inference(1, 2, "causes", vec![hop(1, "causes", 2)], None)
+            .propose_structural_inference(
+                BOOTSTRAP_ADMIN_USER_ID,
+                1,
+                2,
+                "causes",
+                vec![hop(1, "causes", 2)],
+                None,
+            )
             .await
             .unwrap();
-        repo.endorse_inference_proposal(proposal.id).await.unwrap();
-        let again = repo.endorse_inference_proposal(proposal.id).await;
+        repo.endorse_inference_proposal(BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
+        let again = repo
+            .endorse_inference_proposal(BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await;
         assert!(
             matches!(again, Err(Error::Conflict(_))),
             "endorse already-endorsed: {again:?}"
@@ -5711,6 +6185,7 @@ mod tests {
         let repo = InMemoryGraphRepo::new();
         let proposal = repo
             .insert_type_proposal(
+                BOOTSTRAP_ADMIN_USER_ID,
                 "nurtures".into(),
                 "Nurtures".into(),
                 "A nurtures B.".into(),
@@ -5730,11 +6205,14 @@ mod tests {
         assert!(proposal.near_match_similarity.is_none());
         assert!(proposal.resolved_at.is_none());
 
-        let listed = repo.list_type_proposals().await.unwrap();
+        let listed = repo
+            .list_type_proposals(BOOTSTRAP_ADMIN_USER_ID)
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 1, "exactly one proposal queued");
         assert_eq!(listed[0].id, proposal.id, "oldest-first");
         let got = repo
-            .get_type_proposal(proposal.id)
+            .get_type_proposal(BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap()
             .expect("proposal found by id");
@@ -5772,6 +6250,7 @@ mod tests {
         });
         let proposal = repo
             .insert_type_proposal(
+                BOOTSTRAP_ADMIN_USER_ID,
                 "causes_v2".into(),
                 "Causes v2".into(),
                 "A brings about B, revised.".into(),
@@ -5786,6 +6265,7 @@ mod tests {
         // it only adds the type + embedding + flips status. Run the refactor
         // explicitly against the approved proposal.
         repo.approve_type_proposal(
+            BOOTSTRAP_ADMIN_USER_ID,
             proposal.id,
             "causes_v2".into(),
             "Causes v2".into(),
@@ -5795,7 +6275,7 @@ mod tests {
         .await
         .unwrap();
         let approved = repo
-            .get_type_proposal(proposal.id)
+            .get_type_proposal(BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap()
             .expect("approved proposal present");
@@ -5803,7 +6283,7 @@ mod tests {
         assert!(approved.resolved_at.is_some());
 
         let outcome = repo
-            .run_refactor(&FakeLlm::default(), &approved)
+            .run_refactor(BOOTSTRAP_ADMIN_USER_ID, &FakeLlm::default(), &approved)
             .await
             .unwrap();
         assert_eq!(
@@ -5813,21 +6293,31 @@ mod tests {
 
         // The edge's current type is now the new slug (history appended).
         assert_eq!(
-            repo.current_edge_type(10).await.unwrap().as_deref(),
+            repo.current_edge_type(BOOTSTRAP_ADMIN_USER_ID, 10)
+                .await
+                .unwrap()
+                .as_deref(),
             Some("causes_v2"),
             "current type projected from the retag"
         );
         assert_eq!(
-            repo.edges_with_current_type("causes").await.unwrap(),
+            repo.edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID, "causes")
+                .await
+                .unwrap(),
             Vec::<i64>::new(),
             "the edge no longer wears `causes`"
         );
         assert_eq!(
-            repo.edges_with_current_type("causes_v2").await.unwrap(),
+            repo.edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID, "causes_v2")
+                .await
+                .unwrap(),
             vec![10],
             "the edge now wears `causes_v2`"
         );
-        let history = repo.edge_type_history(10).await.unwrap();
+        let history = repo
+            .edge_type_history(BOOTSTRAP_ADMIN_USER_ID, 10)
+            .await
+            .unwrap();
         assert_eq!(history.len(), 2, "original + retag");
         assert_eq!(history[0].seq_index, 0);
         assert_eq!(history[0].type_slug, "causes");
@@ -5862,6 +6352,7 @@ mod tests {
         });
         let proposal = repo
             .insert_type_proposal(
+                BOOTSTRAP_ADMIN_USER_ID,
                 "causes_v2".into(),
                 "Causes v2".into(),
                 "revised".into(),
@@ -5872,9 +6363,11 @@ mod tests {
             )
             .await
             .unwrap();
-        repo.reject_type_proposal(proposal.id).await.unwrap();
+        repo.reject_type_proposal(BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
         let rejected = repo
-            .get_type_proposal(proposal.id)
+            .get_type_proposal(BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap()
             .expect("rejected proposal present");
@@ -5883,22 +6376,30 @@ mod tests {
 
         // No retag — the edge still wears `causes`.
         assert_eq!(
-            repo.current_edge_type(10).await.unwrap().as_deref(),
+            repo.current_edge_type(BOOTSTRAP_ADMIN_USER_ID, 10)
+                .await
+                .unwrap()
+                .as_deref(),
             Some("causes"),
             "edges untouched on reject"
         );
         assert_eq!(
-            repo.edges_with_current_type("causes").await.unwrap(),
+            repo.edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID, "causes")
+                .await
+                .unwrap(),
             vec![10],
             "no edges retagged"
         );
         assert!(
-            repo.ontology_slugs().await.unwrap() == vec!["causes".to_string()],
+            repo.ontology_slugs(BOOTSTRAP_ADMIN_USER_ID).await.unwrap()
+                == vec!["causes".to_string()],
             "no ontology change on reject"
         );
 
         // Missing id → NotFound.
-        let missing = repo.reject_type_proposal(9999).await;
+        let missing = repo
+            .reject_type_proposal(BOOTSTRAP_ADMIN_USER_ID, 9999)
+            .await;
         assert!(
             matches!(missing, Err(Error::NotFound(_))),
             "reject missing: {missing:?}"
@@ -5940,6 +6441,7 @@ mod tests {
 
         let proposal = repo
             .insert_type_proposal(
+                BOOTSTRAP_ADMIN_USER_ID,
                 "causes_v2".into(),
                 "Causes v2".into(),
                 "A brings about B, revised.".into(),
@@ -5951,6 +6453,7 @@ mod tests {
             .await
             .unwrap();
         repo.approve_type_proposal(
+            BOOTSTRAP_ADMIN_USER_ID,
             proposal.id,
             "causes_v2".into(),
             "Causes v2".into(),
@@ -5960,7 +6463,7 @@ mod tests {
         .await
         .unwrap();
         let approved = repo
-            .get_type_proposal(proposal.id)
+            .get_type_proposal(BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap()
             .expect("approved proposal present");
@@ -5969,6 +6472,7 @@ mod tests {
         runner.spawn(
             Arc::clone(&repo),
             Arc::new(FakeLlm::default()) as Arc<dyn Llm>,
+            BOOTSTRAP_ADMIN_USER_ID.to_string(),
             approved,
         );
         runner.await_all().await;
@@ -5977,11 +6481,17 @@ mod tests {
         // FakeLlm echoes the prompt (not a valid slug) so the runner fell back
         // to the proposal's new slug `causes_v2`.
         assert_eq!(
-            repo.current_edge_type(10).await.unwrap().as_deref(),
+            repo.current_edge_type(BOOTSTRAP_ADMIN_USER_ID, 10)
+                .await
+                .unwrap()
+                .as_deref(),
             Some("causes_v2"),
             "RefactorRunner retagged the edge against InMemoryGraphRepo"
         );
-        let history = repo.edge_type_history(10).await.unwrap();
+        let history = repo
+            .edge_type_history(BOOTSTRAP_ADMIN_USER_ID, 10)
+            .await
+            .unwrap();
         assert_eq!(history.len(), 2, "original + retag");
         assert_eq!(history[0].type_slug, "causes");
         assert_eq!(history[1].type_slug, "causes_v2");
@@ -6020,6 +6530,7 @@ mod tests {
         // graph link is what surfaces it.
         let bd = repo
             .insert_braindump(
+                BOOTSTRAP_ADMIN_USER_ID,
                 "maria leaving tanks the timeline",
                 "maria leaving tanks the timeline",
             )
@@ -6027,7 +6538,10 @@ mod tests {
             .unwrap();
         repo.add_concept_provenance(2, bd.id);
 
-        let result = repo.retrieve(&[1.0, 0.0]).await.unwrap();
+        let result = repo
+            .retrieve(BOOTSTRAP_ADMIN_USER_ID, &[1.0, 0.0])
+            .await
+            .unwrap();
 
         assert_eq!(result.mode, RetrievalMode::SeedThenExpand);
         let found = result
@@ -6062,6 +6576,7 @@ mod tests {
         // A graph-linked braindump (in the subgraph via concept provenance).
         let bd_graph = repo
             .insert_braindump(
+                BOOTSTRAP_ADMIN_USER_ID,
                 "maria endangers the q3 launch",
                 "maria endangers the q3 launch",
             )
@@ -6070,12 +6585,19 @@ mod tests {
         repo.add_concept_provenance(1, bd_graph.id);
         // A stray braindump with no concept link, but a near-query embedding.
         let bd_stray = repo
-            .insert_braindump("q3 risk assessment notes", "q3 risk assessment notes")
+            .insert_braindump(
+                BOOTSTRAP_ADMIN_USER_ID,
+                "q3 risk assessment notes",
+                "q3 risk assessment notes",
+            )
             .await
             .unwrap();
         repo.set_braindump_embedding(bd_stray.id, vec![1.0, 0.0]);
 
-        let result = repo.retrieve(&[1.0, 0.0]).await.unwrap();
+        let result = repo
+            .retrieve(BOOTSTRAP_ADMIN_USER_ID, &[1.0, 0.0])
+            .await
+            .unwrap();
 
         let stray = result
             .braindumps
@@ -6095,7 +6617,10 @@ mod tests {
 
         let repo = InMemoryGraphRepo::new();
         let result = repo
-            .retrieve(&vec![0.0; FakeLlm::default().dim()])
+            .retrieve(
+                BOOTSTRAP_ADMIN_USER_ID,
+                &vec![0.0; FakeLlm::default().dim()],
+            )
             .await
             .unwrap();
 

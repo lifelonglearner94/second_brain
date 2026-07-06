@@ -1,9 +1,13 @@
 //! Integration tests for issue #3: `GET /ontology` returns the seeded
-//! edge-type vocabulary, read-only.
+//! edge-type vocabulary, read-only. Issue #72: `/ontology` is now behind the
+//! auth middleware (the ontology is per-user), so the tests mint a session.
 
 use axum::body::Body;
+use http::header::COOKIE;
 use http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use second_brain_backend::auth::cookie::request_cookie_header_value;
+use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::{db::Db, routes, state::AppState};
 use tower::ServiceExt;
 
@@ -23,15 +27,26 @@ const EXPECTED_SEED_SLUGS: &[&str] = &[
     "derived_from",
 ];
 
+/// Mint a session for the bootstrap admin and return the cookie header value.
+async fn session_cookie(db: &Db) -> http::HeaderValue {
+    let session = mint_session(db, "00000000-0000-0000-0000-000000000001")
+        .await
+        .unwrap();
+    let id = SessionId::parse(&session.session_id).unwrap();
+    request_cookie_header_value(&id)
+}
+
 #[tokio::test]
 async fn get_ontology_returns_seeded_edge_types() {
     let db = Db::open_in_memory().unwrap();
-    let app = routes::router(AppState::for_tests(db));
+    let app = routes::router(AppState::for_tests(db.clone()));
+    let cookie = session_cookie(&db).await;
 
     let response = app
         .oneshot(
             Request::builder()
                 .uri("/ontology")
+                .header(COOKIE, cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -88,13 +103,15 @@ async fn get_ontology_returns_seeded_edge_types() {
 #[tokio::test]
 async fn get_ontology_is_get_only() {
     let db = Db::open_in_memory().unwrap();
-    let app = routes::router(AppState::for_tests(db));
+    let app = routes::router(AppState::for_tests(db.clone()));
+    let cookie = session_cookie(&db).await;
 
     let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/ontology")
+                .header(COOKIE, cookie)
                 .body(Body::empty())
                 .unwrap(),
         )

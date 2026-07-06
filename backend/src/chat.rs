@@ -98,12 +98,12 @@ pub struct ChatResponse {
 /// (`[cluster:...]`) — violating ADR-0008's "clusters are a magnifying glass,
 /// never a source" — the response is silent with no citations, so the frontend
 /// never shows sources for an answer resting on an ephemeral projection.
-pub async fn chat(db: &Db, llm: &dyn Llm, query: &str) -> Result<ChatResponse> {
-    let retrieved = retrieval::retrieve(db, llm, query).await?;
+pub async fn chat(db: &Db, llm: &dyn Llm, user_id: &str, query: &str) -> Result<ChatResponse> {
+    let retrieved = retrieval::retrieve(db, user_id, llm, query).await?;
     if retrieved.braindumps.is_empty() {
         return Ok(silence(retrieved.mode));
     }
-    let partition = crate::thematic::partition(db).await?;
+    let partition = crate::thematic::partition(db, user_id).await?;
     let system = build_synthesis_prompt(&retrieved, &partition);
     let answer = llm.synthesize(&system, query).await?;
     if answer.trim() == SILENCE_MESSAGE {

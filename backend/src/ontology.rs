@@ -83,6 +83,7 @@ pub struct RefactorOutcome {
 /// [`GraphRepo::insert_type_proposal`] (issue #47).
 pub async fn propose_type(
     db: &Db,
+    user_id: &str,
     llm: &dyn Llm,
     slug: &str,
     label: &str,
@@ -99,14 +100,14 @@ pub async fn propose_type(
     }
     // Reject a proposal whose slug already exists in the ontology — the user
     // should edit the existing type instead.
-    if ontology_slug_exists(db, &slug).await? {
+    if ontology_slug_exists(db, user_id, &slug).await? {
         return Err(Error::BadRequest(format!(
             "type slug `{slug}` already exists in the ontology"
         )));
     }
     let merge_of = merge_of.map(|s| s.trim().to_string());
     if let Some(ref m) = merge_of {
-        if !ontology_slug_exists(db, m).await? {
+        if !ontology_slug_exists(db, user_id, m).await? {
             return Err(Error::BadRequest(format!(
                 "merge_of slug `{m}` does not exist in the ontology"
             )));
@@ -116,7 +117,7 @@ pub async fn propose_type(
     let text = type_text(&slug, &label, &description);
     let vec = llm.embed_document(&text).await?;
 
-    let near = knn_type(db, &vec).await?;
+    let near = knn_type(db, user_id, &vec).await?;
     let (status, near_match_slug, near_match_similarity) = match near {
         Some((near_slug, sim)) if sim >= TYPE_MERGE_THRESHOLD => {
             ("auto_merged".to_string(), Some(near_slug), Some(sim))
@@ -129,6 +130,7 @@ pub async fn propose_type(
 
     let proposal = SqliteGraphRepo::new(db.clone())
         .insert_type_proposal(
+            user_id,
             slug,
             label,
             description,
@@ -145,15 +147,19 @@ pub async fn propose_type(
 /// List all proposals, oldest first.
 ///
 /// Wrapper: delegates to [`GraphRepo::list_type_proposals`] (issue #47).
-pub async fn list_proposals(db: &Db) -> Result<Vec<TypeProposal>> {
-    SqliteGraphRepo::new(db.clone()).list_type_proposals().await
+pub async fn list_proposals(db: &Db, user_id: &str) -> Result<Vec<TypeProposal>> {
+    SqliteGraphRepo::new(db.clone())
+        .list_type_proposals(user_id)
+        .await
 }
 
 /// Look up a single proposal by id. `None` if no row matches.
 ///
 /// Wrapper: delegates to [`GraphRepo::get_type_proposal`] (issue #47).
-pub async fn get_proposal(db: &Db, id: i64) -> Result<Option<TypeProposal>> {
-    SqliteGraphRepo::new(db.clone()).get_type_proposal(id).await
+pub async fn get_proposal(db: &Db, user_id: &str, id: i64) -> Result<Option<TypeProposal>> {
+    SqliteGraphRepo::new(db.clone())
+        .get_type_proposal(user_id, id)
+        .await
 }
 
 /// Approve a pending proposal: add the type to the ontology, store its
@@ -164,11 +170,16 @@ pub async fn get_proposal(db: &Db, id: i64) -> Result<Option<TypeProposal>> {
 ///
 /// Wrapper: the LLM embedding runs here; the atomic INSERT+UPDATE is delegated
 /// to [`GraphRepo::approve_type_proposal`] (issue #47).
-pub async fn approve_proposal(db: &Db, llm: &dyn Llm, id: i64) -> Result<TypeProposal> {
+pub async fn approve_proposal(
+    db: &Db,
+    user_id: &str,
+    llm: &dyn Llm,
+    id: i64,
+) -> Result<TypeProposal> {
     // Load first so we can validate status and compute the embedding text
     // outside the transaction (the network call cannot live in a sync SQLite
     // transaction — same shape as `ingest_extraction`).
-    let proposal = get_proposal(db, id)
+    let proposal = get_proposal(db, user_id, id)
         .await?
         .ok_or_else(|| Error::NotFound(format!("type proposal {id} not found")))?;
     if proposal.status != "pending" {
@@ -186,6 +197,7 @@ pub async fn approve_proposal(db: &Db, llm: &dyn Llm, id: i64) -> Result<TypePro
         .await?;
     SqliteGraphRepo::new(db.clone())
         .approve_type_proposal(
+            user_id,
             id,
             proposal.slug.clone(),
             proposal.label.clone(),
@@ -194,7 +206,7 @@ pub async fn approve_proposal(db: &Db, llm: &dyn Llm, id: i64) -> Result<TypePro
         )
         .await?;
     // Return the refreshed row.
-    get_proposal(db, id)
+    get_proposal(db, user_id, id)
         .await?
         .ok_or_else(|| Error::internal("proposal vanished after approve"))
 }
@@ -204,11 +216,11 @@ pub async fn approve_proposal(db: &Db, llm: &dyn Llm, id: i64) -> Result<TypePro
 ///
 /// Wrapper: delegates to [`GraphRepo::reject_type_proposal`] (issue #47) which
 /// owns the pending-guard and the NotFound/Conflict distinction.
-pub async fn reject_proposal(db: &Db, id: i64) -> Result<TypeProposal> {
+pub async fn reject_proposal(db: &Db, user_id: &str, id: i64) -> Result<TypeProposal> {
     SqliteGraphRepo::new(db.clone())
-        .reject_type_proposal(id)
+        .reject_type_proposal(user_id, id)
         .await?;
-    get_proposal(db, id)
+    get_proposal(db, user_id, id)
         .await?
         .ok_or_else(|| Error::internal("proposal vanished after reject"))
 }
@@ -220,9 +232,9 @@ pub async fn reject_proposal(db: &Db, id: i64) -> Result<TypeProposal> {
 /// happen for a real edge — index 0 is initialised at creation).
 ///
 /// Wrapper: delegates to [`GraphRepo::current_edge_type`] (issue #47).
-pub async fn current_edge_type(db: &Db, edge_id: i64) -> Result<Option<String>> {
+pub async fn current_edge_type(db: &Db, user_id: &str, edge_id: i64) -> Result<Option<String>> {
     SqliteGraphRepo::new(db.clone())
-        .current_edge_type(edge_id)
+        .current_edge_type(user_id, edge_id)
         .await
 }
 
@@ -230,9 +242,9 @@ pub async fn current_edge_type(db: &Db, edge_id: i64) -> Result<Option<String>> 
 /// these edges when `slug` is the `merge_of` of an approved proposal.
 ///
 /// Wrapper: delegates to [`GraphRepo::edges_with_current_type`] (issue #47).
-pub async fn edges_with_current_type(db: &Db, slug: &str) -> Result<Vec<i64>> {
+pub async fn edges_with_current_type(db: &Db, user_id: &str, slug: &str) -> Result<Vec<i64>> {
     SqliteGraphRepo::new(db.clone())
-        .edges_with_current_type(slug)
+        .edges_with_current_type(user_id, slug)
         .await
 }
 
@@ -250,17 +262,21 @@ pub async fn edges_with_current_type(db: &Db, slug: &str) -> Result<Vec<i64>> {
 /// as a free function so `propose_type` (which takes `&Db`, not a repo) and
 /// the integration tests under `backend/tests/` keep compiling; #48 removes
 /// it once every caller is migrated.
-pub async fn knn_type(db: &Db, query_vec: &[f32]) -> Result<Option<(String, f32)>> {
-    SqliteGraphRepo::new(db.clone()).knn_type(query_vec).await
+pub async fn knn_type(db: &Db, user_id: &str, query_vec: &[f32]) -> Result<Option<(String, f32)>> {
+    SqliteGraphRepo::new(db.clone())
+        .knn_type(user_id, query_vec)
+        .await
 }
 
 /// Whether a slug already exists in the ontology.
 ///
 /// Wrapper: delegates to [`GraphRepo::ontology_slugs`] (issue #45) and checks
 /// membership — a governance read, not a hot path.
-pub async fn ontology_slug_exists(db: &Db, slug: &str) -> Result<bool> {
+pub async fn ontology_slug_exists(db: &Db, user_id: &str, slug: &str) -> Result<bool> {
     let slug = slug.to_string();
-    let slugs = SqliteGraphRepo::new(db.clone()).ontology_slugs().await?;
+    let slugs = SqliteGraphRepo::new(db.clone())
+        .ontology_slugs(user_id)
+        .await?;
     Ok(slugs.contains(&slug))
 }
 
@@ -272,8 +288,10 @@ pub async fn ontology_slug_exists(db: &Db, slug: &str) -> Result<bool> {
 /// description FROM ontology ORDER BY id` query exists in exactly one place
 /// now (the Sqlite adapter). Stays as a free function so the integration
 /// tests under `backend/tests/` keep compiling; #48 removes it.
-pub async fn ontology_types(db: &Db) -> Result<Vec<(String, String, String)>> {
-    SqliteGraphRepo::new(db.clone()).ontology_types().await
+pub async fn ontology_types(db: &Db, user_id: &str) -> Result<Vec<(String, String, String)>> {
+    SqliteGraphRepo::new(db.clone())
+        .ontology_types(user_id)
+        .await
 }
 
 /// Embed every ontology type not yet in the `type_embeddings` collection and
@@ -285,16 +303,16 @@ pub async fn ontology_types(db: &Db) -> Result<Vec<(String, String, String)>> {
 /// [`GraphRepo::store_type_embedding`] (issue #48); the LLM embedding
 /// computation runs here (same pattern as `ingest_extraction`: LLM in the
 /// wrapper, trait is pure-DB).
-pub async fn seed_type_embeddings(db: &Db, llm: &dyn Llm) -> Result<usize> {
+pub async fn seed_type_embeddings(db: &Db, user_id: &str, llm: &dyn Llm) -> Result<usize> {
     let repo = SqliteGraphRepo::new(db.clone());
-    let missing = repo.missing_type_rows().await?;
+    let missing = repo.missing_type_rows(user_id).await?;
 
     let mut count = 0;
     for (ontology_id, slug, label, description) in missing {
         let vec = llm
             .embed_document(&type_text(&slug, &label, &description))
             .await?;
-        repo.store_type_embedding(ontology_id, vec).await?;
+        repo.store_type_embedding(user_id, ontology_id, vec).await?;
         count += 1;
     }
     Ok(count)
@@ -320,11 +338,12 @@ pub async fn seed_type_embeddings(db: &Db, llm: &dyn Llm) -> Result<usize> {
 /// works with FakeLlm so tests are hermetic.
 pub async fn run_refactor(
     db: &Db,
+    user_id: &str,
     llm: &dyn Llm,
     proposal: &TypeProposal,
 ) -> Result<RefactorOutcome> {
     SqliteGraphRepo::new(db.clone())
-        .run_refactor(llm, proposal)
+        .run_refactor(user_id, llm, proposal)
         .await
 }
 
@@ -352,10 +371,17 @@ impl RefactorRunner {
     }
 
     /// Spawn a refactor in the background. The route returns immediately; the
-    /// job commits its type-history appends when it completes.
-    pub fn spawn(&self, repo: Arc<dyn GraphRepo>, llm: Arc<dyn Llm>, proposal: TypeProposal) {
+    /// job commits its type-history appends when it completes. Issue #72: takes
+    /// `user_id` so the refactor is scoped to the calling user's graph.
+    pub fn spawn(
+        &self,
+        repo: Arc<dyn GraphRepo>,
+        llm: Arc<dyn Llm>,
+        user_id: String,
+        proposal: TypeProposal,
+    ) {
         let handle = tokio::spawn(async move {
-            let outcome = repo.run_refactor(llm.as_ref(), &proposal).await;
+            let outcome = repo.run_refactor(&user_id, llm.as_ref(), &proposal).await;
             if let Err(e) = &outcome {
                 tracing::error!(error = %e, "ontology refactor failed");
             }
@@ -389,6 +415,7 @@ pub async fn await_pending_refactors(state: &crate::state::AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::BOOTSTRAP_ADMIN_USER_ID;
     use crate::llm::{FakeLlm, Llm};
     use rusqlite::params;
 
@@ -406,9 +433,17 @@ mod tests {
     async fn propose_with_no_existing_type_embeddings_is_pending() {
         let db = test_db();
         let llm = fake_llm();
-        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
-            .await
-            .unwrap();
+        let out = propose_type(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            "nurtures",
+            "Nurtures",
+            "A nurtures B.",
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(out.proposal.status, "pending");
         assert_eq!(out.proposal.slug, "nurtures");
         assert!(out.proposal.near_match_slug.is_none());
@@ -418,7 +453,7 @@ mod tests {
     async fn propose_with_empty_slug_is_bad_request() {
         let db = test_db();
         let llm = fake_llm();
-        let err = propose_type(&db, &llm, "  ", "X", "desc", None)
+        let err = propose_type(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, "  ", "X", "desc", None)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
@@ -428,9 +463,17 @@ mod tests {
     async fn propose_with_existing_slug_is_bad_request() {
         let db = test_db();
         let llm = fake_llm();
-        let err = propose_type(&db, &llm, "causes", "Causes", "dup", None)
-            .await
-            .unwrap_err();
+        let err = propose_type(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            "causes",
+            "Causes",
+            "dup",
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
     }
 
@@ -440,6 +483,7 @@ mod tests {
         let llm = fake_llm();
         let err = propose_type(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             "nurtures",
             "Nurtures",
@@ -455,14 +499,29 @@ mod tests {
     async fn approve_adds_type_to_ontology_and_stores_embedding() {
         let db = test_db();
         let llm = fake_llm();
-        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
+        let out = propose_type(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            "nurtures",
+            "Nurtures",
+            "A nurtures B.",
+            None,
+        )
+        .await
+        .unwrap();
+        let proposal = approve_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, out.proposal.id)
             .await
             .unwrap();
-        let proposal = approve_proposal(&db, &llm, out.proposal.id).await.unwrap();
         assert_eq!(proposal.status, "approved");
-        assert!(ontology_slug_exists(&db, "nurtures").await.unwrap());
+        assert!(
+            ontology_slug_exists(&db, BOOTSTRAP_ADMIN_USER_ID, "nurtures")
+                .await
+                .unwrap()
+        );
         let near = knn_type(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm.embed_document("nurtures Nurtures A nurtures B.")
                 .await
                 .unwrap(),
@@ -477,11 +536,21 @@ mod tests {
     async fn approve_already_resolved_is_conflict() {
         let db = test_db();
         let llm = fake_llm();
-        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
+        let out = propose_type(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            "nurtures",
+            "Nurtures",
+            "A nurtures B.",
+            None,
+        )
+        .await
+        .unwrap();
+        approve_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, out.proposal.id)
             .await
             .unwrap();
-        approve_proposal(&db, &llm, out.proposal.id).await.unwrap();
-        let err = approve_proposal(&db, &llm, out.proposal.id)
+        let err = approve_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, out.proposal.id)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Conflict(_)), "{err:?}");
@@ -491,30 +560,58 @@ mod tests {
     async fn reject_marks_pending_proposal_rejected() {
         let db = test_db();
         let llm = fake_llm();
-        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
+        let out = propose_type(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            "nurtures",
+            "Nurtures",
+            "A nurtures B.",
+            None,
+        )
+        .await
+        .unwrap();
+        let proposal = reject_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, out.proposal.id)
             .await
             .unwrap();
-        let proposal = reject_proposal(&db, out.proposal.id).await.unwrap();
         assert_eq!(proposal.status, "rejected");
-        assert!(!ontology_slug_exists(&db, "nurtures").await.unwrap());
+        assert!(
+            !ontology_slug_exists(&db, BOOTSTRAP_ADMIN_USER_ID, "nurtures")
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
     async fn reject_already_resolved_is_conflict() {
         let db = test_db();
         let llm = fake_llm();
-        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
+        let out = propose_type(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            "nurtures",
+            "Nurtures",
+            "A nurtures B.",
+            None,
+        )
+        .await
+        .unwrap();
+        reject_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, out.proposal.id)
             .await
             .unwrap();
-        reject_proposal(&db, out.proposal.id).await.unwrap();
-        let err = reject_proposal(&db, out.proposal.id).await.unwrap_err();
+        let err = reject_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, out.proposal.id)
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::Conflict(_)), "{err:?}");
     }
 
     #[tokio::test]
     async fn reject_missing_proposal_is_not_found() {
         let db = test_db();
-        let err = reject_proposal(&db, 9999).await.unwrap_err();
+        let err = reject_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, 9999)
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::NotFound(_)), "{err:?}");
     }
 
@@ -526,20 +623,20 @@ mod tests {
         // Build a minimal edge + history by hand.
         db.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO braindumps (verbatim, cleaned, created_at) VALUES ('v', 'c', 0)",
+                "INSERT INTO braindumps (user_id, verbatim, cleaned, created_at) VALUES ('00000000-0000-0000-0000-000000000001', 'v', 'c', 0)",
                 [],
             )?;
             conn.execute(
-                "INSERT INTO concepts (label, created_at) VALUES ('A', 0)",
+                "INSERT INTO concepts (user_id, label, created_at) VALUES ('00000000-0000-0000-0000-000000000001', 'A', 0)",
                 [],
             )?;
             conn.execute(
-                "INSERT INTO concepts (label, created_at) VALUES ('B', 0)",
+                "INSERT INTO concepts (user_id, label, created_at) VALUES ('00000000-0000-0000-0000-000000000001', 'B', 0)",
                 [],
             )?;
             conn.execute(
-                "INSERT INTO edges (source_concept_id, target_concept_id, original_type, created_at)
-                 VALUES (1, 2, 'helps', 0)",
+                "INSERT INTO edges (user_id, source_concept_id, target_concept_id, original_type, created_at)
+                 VALUES ('00000000-0000-0000-0000-000000000001', 1, 2, 'helps', 0)",
                 [],
             )?;
             conn.execute(
@@ -552,7 +649,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            current_edge_type(&db, 1).await.unwrap().as_deref(),
+            current_edge_type(&db, BOOTSTRAP_ADMIN_USER_ID, 1)
+                .await
+                .unwrap()
+                .as_deref(),
             Some("helps")
         );
         db.with_conn(|conn| {
@@ -566,7 +666,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            current_edge_type(&db, 1).await.unwrap().as_deref(),
+            current_edge_type(&db, BOOTSTRAP_ADMIN_USER_ID, 1)
+                .await
+                .unwrap()
+                .as_deref(),
             Some("nurtures"),
             "projection reads the last entry"
         );
@@ -577,19 +680,19 @@ mod tests {
         let db = test_db();
         db.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO braindumps (verbatim, cleaned, created_at) VALUES ('v', 'c', 0)",
+                "INSERT INTO braindumps (user_id, verbatim, cleaned, created_at) VALUES ('00000000-0000-0000-0000-000000000001', 'v', 'c', 0)",
                 [],
             )?;
             for label in ["A", "B", "C"] {
                 conn.execute(
-                    "INSERT INTO concepts (label, created_at) VALUES (?1, 0)",
+                    "INSERT INTO concepts (user_id, label, created_at) VALUES ('00000000-0000-0000-0000-000000000001', ?1, 0)",
                     params![label],
                 )?;
             }
             // Edge 1: helps (not retagged).
             conn.execute(
-                "INSERT INTO edges (source_concept_id, target_concept_id, original_type, created_at)
-                 VALUES (1, 2, 'helps', 0)",
+                "INSERT INTO edges (user_id, source_concept_id, target_concept_id, original_type, created_at)
+                 VALUES ('00000000-0000-0000-0000-000000000001', 1, 2, 'helps', 0)",
                 [],
             )?;
             conn.execute(
@@ -599,8 +702,8 @@ mod tests {
             )?;
             // Edge 2: helps → nurtures (refactored; current type is nurtures).
             conn.execute(
-                "INSERT INTO edges (source_concept_id, target_concept_id, original_type, created_at)
-                 VALUES (1, 3, 'helps', 0)",
+                "INSERT INTO edges (user_id, source_concept_id, target_concept_id, original_type, created_at)
+                 VALUES ('00000000-0000-0000-0000-000000000001', 1, 3, 'helps', 0)",
                 [],
             )?;
             conn.execute(
@@ -617,8 +720,12 @@ mod tests {
         })
         .await
         .unwrap();
-        let helps = edges_with_current_type(&db, "helps").await.unwrap();
-        let nurtures = edges_with_current_type(&db, "nurtures").await.unwrap();
+        let helps = edges_with_current_type(&db, BOOTSTRAP_ADMIN_USER_ID, "helps")
+            .await
+            .unwrap();
+        let nurtures = edges_with_current_type(&db, BOOTSTRAP_ADMIN_USER_ID, "nurtures")
+            .await
+            .unwrap();
         assert_eq!(helps, vec![1], "only the un-refactored edge: {helps:?}");
         assert_eq!(
             nurtures,
@@ -631,11 +738,23 @@ mod tests {
     async fn run_refactor_with_no_merge_of_is_noop() {
         let db = test_db();
         let llm = fake_llm();
-        let out = propose_type(&db, &llm, "nurtures", "Nurtures", "A nurtures B.", None)
+        let out = propose_type(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            "nurtures",
+            "Nurtures",
+            "A nurtures B.",
+            None,
+        )
+        .await
+        .unwrap();
+        let proposal = approve_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, out.proposal.id)
             .await
             .unwrap();
-        let proposal = approve_proposal(&db, &llm, out.proposal.id).await.unwrap();
-        let outcome = run_refactor(&db, &llm, &proposal).await.unwrap();
+        let outcome = run_refactor(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, &proposal)
+            .await
+            .unwrap();
         assert_eq!(outcome.edges_retagged, 0);
     }
 
@@ -645,6 +764,7 @@ mod tests {
         let llm = fake_llm();
         let out = propose_type(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             "nurtures",
             "Nurtures",
@@ -653,8 +773,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let proposal = approve_proposal(&db, &llm, out.proposal.id).await.unwrap();
-        let outcome = run_refactor(&db, &llm, &proposal).await.unwrap();
+        let proposal = approve_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, out.proposal.id)
+            .await
+            .unwrap();
+        let outcome = run_refactor(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, &proposal)
+            .await
+            .unwrap();
         assert_eq!(outcome.edges_retagged, 0);
     }
 }

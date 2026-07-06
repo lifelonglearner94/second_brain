@@ -164,6 +164,7 @@ pub struct InferenceAssertion {
 /// [`GraphRepo::propose_structural_inference`] (issue #47).
 pub async fn propose_structural_inference(
     db: &Db,
+    user_id: &str,
     source_concept_id: i64,
     target_concept_id: i64,
     proposed_type: &str,
@@ -176,6 +177,7 @@ pub async fn propose_structural_inference(
     validate_path(&evidence_path, source_concept_id, target_concept_id)?;
     SqliteGraphRepo::new(db.clone())
         .propose_structural_inference(
+            user_id,
             source_concept_id,
             target_concept_id,
             proposed_type,
@@ -259,6 +261,7 @@ pub(crate) fn validate_path(
 /// are delegated to [`GraphRepo::propose_thematic_inference`] (issue #47).
 pub async fn propose_thematic_inference(
     db: &Db,
+    user_id: &str,
     source_concept_id: i64,
     target_concept_id: i64,
     proposed_type: &str,
@@ -291,6 +294,7 @@ pub async fn propose_thematic_inference(
     }
     SqliteGraphRepo::new(db.clone())
         .propose_thematic_inference(
+            user_id,
             source_concept_id,
             target_concept_id,
             proposed_type,
@@ -317,9 +321,13 @@ pub async fn propose_thematic_inference(
 /// second chance). Returns the refreshed proposal.
 ///
 /// Wrapper: delegates to [`GraphRepo::endorse_inference_proposal`] (issue #47).
-pub async fn endorse_inference_proposal(db: &Db, id: i64) -> Result<ChatInferenceProposal> {
+pub async fn endorse_inference_proposal(
+    db: &Db,
+    user_id: &str,
+    id: i64,
+) -> Result<ChatInferenceProposal> {
     SqliteGraphRepo::new(db.clone())
-        .endorse_inference_proposal(id)
+        .endorse_inference_proposal(user_id, id)
         .await
 }
 
@@ -330,27 +338,38 @@ pub async fn endorse_inference_proposal(db: &Db, id: i64) -> Result<ChatInferenc
 /// proposal.
 ///
 /// Wrapper: delegates to [`GraphRepo::reject_inference_proposal`] (issue #47).
-pub async fn reject_inference_proposal(db: &Db, id: i64) -> Result<ChatInferenceProposal> {
+pub async fn reject_inference_proposal(
+    db: &Db,
+    user_id: &str,
+    id: i64,
+) -> Result<ChatInferenceProposal> {
     SqliteGraphRepo::new(db.clone())
-        .reject_inference_proposal(id)
+        .reject_inference_proposal(user_id, id)
         .await
 }
 
 /// List all chat-inference proposals, oldest first.
 ///
 /// Wrapper: delegates to [`GraphRepo::list_inference_proposals`] (issue #47).
-pub async fn list_inference_proposals(db: &Db) -> Result<Vec<ChatInferenceProposal>> {
+pub async fn list_inference_proposals(
+    db: &Db,
+    user_id: &str,
+) -> Result<Vec<ChatInferenceProposal>> {
     SqliteGraphRepo::new(db.clone())
-        .list_inference_proposals()
+        .list_inference_proposals(user_id)
         .await
 }
 
 /// Look up a single proposal by id. `None` if no row matches.
 ///
 /// Wrapper: delegates to [`GraphRepo::get_inference_proposal`] (issue #47).
-pub async fn get_inference_proposal(db: &Db, id: i64) -> Result<Option<ChatInferenceProposal>> {
+pub async fn get_inference_proposal(
+    db: &Db,
+    user_id: &str,
+    id: i64,
+) -> Result<Option<ChatInferenceProposal>> {
     SqliteGraphRepo::new(db.clone())
-        .get_inference_proposal(id)
+        .get_inference_proposal(user_id, id)
         .await
 }
 
@@ -361,9 +380,13 @@ pub async fn get_inference_proposal(db: &Db, id: i64) -> Result<Option<ChatInfer
 /// Thematic Snapshot for thematic assertions (ADR-0009); `None` for structural.
 ///
 /// Wrapper: delegates to [`GraphRepo::edge_inference_asserted_by`] (issue #47).
-pub async fn edge_inference_asserted_by(db: &Db, edge_id: i64) -> Result<Vec<InferenceAssertion>> {
+pub async fn edge_inference_asserted_by(
+    db: &Db,
+    user_id: &str,
+    edge_id: i64,
+) -> Result<Vec<InferenceAssertion>> {
     SqliteGraphRepo::new(db.clone())
-        .edge_inference_asserted_by(edge_id)
+        .edge_inference_asserted_by(user_id, edge_id)
         .await
 }
 
@@ -371,6 +394,7 @@ pub async fn edge_inference_asserted_by(db: &Db, edge_id: i64) -> Result<Vec<Inf
 mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
+    use crate::db::BOOTSTRAP_ADMIN_USER_ID;
     use crate::error::Error;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::ingest_extraction;
@@ -406,12 +430,14 @@ mod tests {
     }
 
     async fn seed_braindump(db: &Db, text: &str) -> i64 {
-        let b = insert_braindump(db, text, text).await.unwrap();
+        let b = insert_braindump(db, BOOTSTRAP_ADMIN_USER_ID, text, text)
+            .await
+            .unwrap();
         b.id
     }
 
     async fn concept_id(db: &Db, label: &str) -> i64 {
-        crate::graph::concept_id_for_label(db, label)
+        crate::graph::concept_id_for_label(db, BOOTSTRAP_ADMIN_USER_ID, label)
             .await
             .unwrap()
             .unwrap()
@@ -425,6 +451,7 @@ mod tests {
         let bd = seed_braindump(db, "maria endangers q3 which beta depends on").await;
         ingest_extraction(
             db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd,
             "maria endangers q3 which beta depends on",
@@ -495,6 +522,7 @@ mod tests {
 
         let proposal = propose_structural_inference(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             maria,
             beta,
             "endangers",
@@ -519,14 +547,14 @@ mod tests {
         // No edge Maria —[endangers]→ Beta release exists yet — the claim is
         // not endorsed, so the graph is untouched.
         assert!(
-            crate::graph::find_edge(&db, maria, "endangers", beta)
+            crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
                 .await
                 .unwrap()
                 .is_none(),
             "no edge persisted on a pending proposal (no auto-endorse)"
         );
         assert!(
-            edge_inference_asserted_by(&db, 9999)
+            edge_inference_asserted_by(&db, BOOTSTRAP_ADMIN_USER_ID, 9999)
                 .await
                 .unwrap()
                 .is_empty(),
@@ -543,6 +571,7 @@ mod tests {
 
         let err = propose_structural_inference(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             maria,
             beta,
             "endangers",
@@ -558,7 +587,10 @@ mod tests {
             "{err:?}"
         );
         assert!(
-            list_inference_proposals(&db).await.unwrap().is_empty(),
+            list_inference_proposals(&db, BOOTSTRAP_ADMIN_USER_ID)
+                .await
+                .unwrap()
+                .is_empty(),
             "no proposal created for a non-traversable path"
         );
     }
@@ -572,6 +604,7 @@ mod tests {
 
         let err = propose_structural_inference(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             maria,
             beta,
             "bamboozles",
@@ -585,7 +618,10 @@ mod tests {
             err.to_string().contains("/ontology/propose"),
             "directed to the ontology queue: {err:?}"
         );
-        assert!(list_inference_proposals(&db).await.unwrap().is_empty());
+        assert!(list_inference_proposals(&db, BOOTSTRAP_ADMIN_USER_ID)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -594,6 +630,7 @@ mod tests {
         let (maria, q3, beta) = seed_path(&db).await;
         let err = propose_structural_inference(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             maria,
             beta,
             "  ",
@@ -611,6 +648,7 @@ mod tests {
         let (maria, q3, beta) = seed_path(&db).await;
         let proposal = propose_structural_inference(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             maria,
             beta,
             "endangers",
@@ -623,6 +661,7 @@ mod tests {
 
         let blank = propose_structural_inference(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             maria,
             beta,
             "helps",
@@ -643,9 +682,17 @@ mod tests {
         proposed_type: &str,
         path: Vec<EvidenceEdge>,
     ) -> ChatInferenceProposal {
-        propose_structural_inference(db, source, target, proposed_type, path, None)
-            .await
-            .unwrap()
+        propose_structural_inference(
+            db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            source,
+            target,
+            proposed_type,
+            path,
+            None,
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -663,29 +710,35 @@ mod tests {
         )
         .await;
 
-        let endorsed = endorse_inference_proposal(&db, proposal.id).await.unwrap();
+        let endorsed = endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
         assert_eq!(endorsed.status, STATUS_ENDORSED);
         assert!(endorsed.resolved_at.is_some());
 
         // The direct edge Maria —[endangers]→ Beta release now exists.
-        let edge = crate::graph::find_edge(&db, maria, "endangers", beta)
+        let edge = crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
             .expect("endorsed edge persisted");
         assert_eq!(edge.original_type, "endangers");
         // Type history initialised at index 0 (ADR-0003).
-        let history = crate::graph::edge_type_history(&db, edge.id).await.unwrap();
+        let history = crate::graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].seq_index, 0);
         assert_eq!(history[0].type_slug, "endangers");
         // Provenance: this proposal is the asserter, origin structural.
-        let assertions = edge_inference_asserted_by(&db, edge.id).await.unwrap();
+        let assertions = edge_inference_asserted_by(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap();
         assert_eq!(assertions.len(), 1);
         assert_eq!(assertions[0].chat_inference_id, proposal.id);
         assert_eq!(assertions[0].mode, STRUCTURAL_MODE);
         // No braindump provenance — the inference is the sole origin.
         assert!(
-            crate::graph::edge_provenance(&db, edge.id)
+            crate::graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
                 .await
                 .unwrap()
                 .is_empty(),
@@ -705,6 +758,7 @@ mod tests {
         let bd_path = seed_braindump(&db, "maria endangers q3 which beta depends on").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd_path,
             "maria endangers q3 which beta depends on",
@@ -727,6 +781,7 @@ mod tests {
         let bd_direct = seed_braindump(&db, "maria endangers the beta release directly").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd_direct,
             "maria endangers the beta release directly",
@@ -738,12 +793,13 @@ mod tests {
         .await
         .unwrap();
 
-        let existing_edge = crate::graph::find_edge(&db, maria, "endangers", beta)
-            .await
-            .unwrap()
-            .expect("direct edge pre-exists");
+        let existing_edge =
+            crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
+                .await
+                .unwrap()
+                .expect("direct edge pre-exists");
         assert_eq!(
-            crate::graph::edge_provenance(&db, existing_edge.id)
+            crate::graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, existing_edge.id)
                 .await
                 .unwrap(),
             vec![bd_direct]
@@ -757,21 +813,27 @@ mod tests {
             vec![hop(maria, "endangers", q3), hop(q3, "depends_on", beta)],
         )
         .await;
-        endorse_inference_proposal(&db, proposal.id).await.unwrap();
+        endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
 
         // Same edge (no duplicate), now asserted by both the braindump and
         // the structural inference.
-        let edge = crate::graph::find_edge(&db, maria, "endangers", beta)
+        let edge = crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
             .expect("edge still present");
         assert_eq!(edge.id, existing_edge.id, "edge accreted, not duplicated");
         assert_eq!(
-            crate::graph::edge_provenance(&db, edge.id).await.unwrap(),
+            crate::graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+                .await
+                .unwrap(),
             vec![bd_direct],
             "braindump provenance preserved"
         );
-        let assertions = edge_inference_asserted_by(&db, edge.id).await.unwrap();
+        let assertions = edge_inference_asserted_by(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap();
         assert_eq!(assertions.len(), 1);
         assert_eq!(assertions[0].chat_inference_id, proposal.id);
         assert_eq!(assertions[0].mode, STRUCTURAL_MODE);
@@ -791,12 +853,14 @@ mod tests {
         )
         .await;
 
-        let rejected = reject_inference_proposal(&db, proposal.id).await.unwrap();
+        let rejected = reject_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
         assert_eq!(rejected.status, STATUS_REJECTED);
         assert!(rejected.resolved_at.is_some());
 
         assert!(
-            crate::graph::find_edge(&db, maria, "endangers", beta)
+            crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
                 .await
                 .unwrap()
                 .is_none(),
@@ -804,7 +868,7 @@ mod tests {
         );
         // The rejected proposal stays in the table (audit trail) but is no
         // longer pending.
-        let refreshed = get_inference_proposal(&db, proposal.id)
+        let refreshed = get_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap()
             .unwrap();
@@ -814,14 +878,18 @@ mod tests {
     #[tokio::test]
     async fn endorse_missing_proposal_is_not_found() {
         let db = test_db();
-        let err = endorse_inference_proposal(&db, 9999).await.unwrap_err();
+        let err = endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, 9999)
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::NotFound(_)), "{err:?}");
     }
 
     #[tokio::test]
     async fn reject_missing_proposal_is_not_found() {
         let db = test_db();
-        let err = reject_inference_proposal(&db, 9999).await.unwrap_err();
+        let err = reject_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, 9999)
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::NotFound(_)), "{err:?}");
     }
 
@@ -838,8 +906,10 @@ mod tests {
             vec![hop(maria, "endangers", q3), hop(q3, "depends_on", beta)],
         )
         .await;
-        endorse_inference_proposal(&db, proposal.id).await.unwrap();
-        let err = endorse_inference_proposal(&db, proposal.id)
+        endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
+        let err = endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Conflict(_)), "{err:?}");
@@ -857,8 +927,10 @@ mod tests {
             vec![hop(maria, "endangers", q3), hop(q3, "depends_on", beta)],
         )
         .await;
-        endorse_inference_proposal(&db, proposal.id).await.unwrap();
-        let err = reject_inference_proposal(&db, proposal.id)
+        endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
+        let err = reject_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Conflict(_)), "{err:?}");
@@ -877,6 +949,7 @@ mod tests {
         let bd = seed_braindump(&db, "maria endangers q3 which beta depends on").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd,
             "maria endangers q3 which beta depends on",
@@ -902,14 +975,17 @@ mod tests {
             vec![hop(maria, "endangers", q3), hop(q3, "depends_on", beta)],
         )
         .await;
-        endorse_inference_proposal(&db, proposal.id).await.unwrap();
-        let inferred = crate::graph::find_edge(&db, maria, "endangers", beta)
+        endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
-            .unwrap()
-            .expect("inferred edge persisted");
+            .unwrap();
+        let inferred =
+            crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
+                .await
+                .unwrap()
+                .expect("inferred edge persisted");
         // It has only an inference asserter — no braindump provenance.
         assert!(
-            crate::graph::edge_provenance(&db, inferred.id)
+            crate::graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, inferred.id)
                 .await
                 .unwrap()
                 .is_empty(),
@@ -926,6 +1002,7 @@ mod tests {
         let bd_keep = seed_braindump(&db, "maria and the beta release").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd_keep,
             "maria and the beta release",
@@ -934,16 +1011,21 @@ mod tests {
         .await
         .unwrap();
 
-        crate::graph::delete_braindump(&db, bd).await.unwrap();
+        crate::graph::delete_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, bd)
+            .await
+            .unwrap();
 
         // The inferred direct edge survives — the inference origin still
         // backs it, and Maria/Beta survive (bd_keep extracts them).
-        let survivor = crate::graph::find_edge(&db, maria, "endangers", beta)
-            .await
-            .unwrap()
-            .expect("inferred edge survives braindump deletion");
+        let survivor =
+            crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
+                .await
+                .unwrap()
+                .expect("inferred edge survives braindump deletion");
         assert_eq!(survivor.id, inferred.id);
-        let assertions = edge_inference_asserted_by(&db, survivor.id).await.unwrap();
+        let assertions = edge_inference_asserted_by(&db, BOOTSTRAP_ADMIN_USER_ID, survivor.id)
+            .await
+            .unwrap();
         assert_eq!(assertions.len(), 1);
         assert_eq!(assertions[0].chat_inference_id, proposal.id);
         assert_eq!(assertions[0].mode, STRUCTURAL_MODE);
@@ -962,7 +1044,9 @@ mod tests {
         )
         .await;
         let p2 = seed_pending(&db, maria, q3, "helps", vec![hop(maria, "endangers", q3)]).await;
-        let listed = list_inference_proposals(&db).await.unwrap();
+        let listed = list_inference_proposals(&db, BOOTSTRAP_ADMIN_USER_ID)
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].id, p1.id);
         assert_eq!(listed[1].id, p2.id);
@@ -986,7 +1070,9 @@ mod tests {
             vec![hop(maria, "endangers", q3), hop(q3, "depends_on", beta)],
         )
         .await;
-        endorse_inference_proposal(&db, proposal.id).await.unwrap();
+        endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
 
         // Structural mode writes no snapshot rows.
         let snapshot_rows: i64 = db
@@ -1002,11 +1088,13 @@ mod tests {
             "structural proposal has no snapshot"
         );
         // The provenance assertion carries the mode but no snapshot.
-        let edge = crate::graph::find_edge(&db, maria, "endangers", beta)
+        let edge = crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
             .unwrap();
-        let assertions = edge_inference_asserted_by(&db, edge.id).await.unwrap();
+        let assertions = edge_inference_asserted_by(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap();
         assert_eq!(assertions[0].mode, STRUCTURAL_MODE);
         assert!(
             assertions[0].snapshot_id.is_none(),
@@ -1053,6 +1141,7 @@ mod tests {
 
         let proposal = propose_thematic_inference(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             maria,
             beta,
             "endangers",
@@ -1096,7 +1185,7 @@ mod tests {
         );
         // No edge persisted yet — no auto-endorse.
         assert!(
-            crate::graph::find_edge(&db, maria, "endangers", beta)
+            crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
                 .await
                 .unwrap()
                 .is_none(),
@@ -1120,9 +1209,17 @@ mod tests {
         proposed_type: &str,
         cluster: Vec<i64>,
     ) -> ChatInferenceProposal {
-        propose_thematic_inference(db, source, target, proposed_type, cluster, None)
-            .await
-            .unwrap()
+        propose_thematic_inference(
+            db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            source,
+            target,
+            proposed_type,
+            cluster,
+            None,
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -1139,23 +1236,29 @@ mod tests {
             seed_pending_thematic(&db, maria, beta, "endangers", vec![maria, q3, beta]).await;
         let snapshot_id = proposal.snapshot.as_ref().expect("snapshot present").id;
 
-        let endorsed = endorse_inference_proposal(&db, proposal.id).await.unwrap();
+        let endorsed = endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
         assert_eq!(endorsed.status, STATUS_ENDORSED);
         assert!(endorsed.resolved_at.is_some());
 
         // The direct edge Maria —[endangers]→ Beta persists.
-        let edge = crate::graph::find_edge(&db, maria, "endangers", beta)
+        let edge = crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
             .expect("endorsed thematic edge persisted");
         assert_eq!(edge.original_type, "endangers");
         // Type history initialised at index 0 (ADR-0003).
-        let history = crate::graph::edge_type_history(&db, edge.id).await.unwrap();
+        let history = crate::graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].seq_index, 0);
         assert_eq!(history[0].type_slug, "endangers");
         // Provenance: this proposal is the asserter, origin thematic, with snapshot.
-        let assertions = edge_inference_asserted_by(&db, edge.id).await.unwrap();
+        let assertions = edge_inference_asserted_by(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap();
         assert_eq!(assertions.len(), 1);
         assert_eq!(assertions[0].chat_inference_id, proposal.id);
         assert_eq!(assertions[0].mode, THEMATIC_MODE);
@@ -1166,14 +1269,14 @@ mod tests {
         );
         // No braindump provenance — the inference is the sole origin.
         assert!(
-            crate::graph::edge_provenance(&db, edge.id)
+            crate::graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
                 .await
                 .unwrap()
                 .is_empty(),
             "thematic inference edge has no braindump asserter"
         );
         // The snapshot row is unchanged (frozen receipt, not re-evaluated).
-        let refreshed = get_inference_proposal(&db, proposal.id)
+        let refreshed = get_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap()
             .unwrap();
@@ -1195,6 +1298,7 @@ mod tests {
         let bd_path = seed_braindump(&db, "maria endangers q3 which beta depends on").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd_path,
             "maria endangers q3 which beta depends on",
@@ -1215,6 +1319,7 @@ mod tests {
         let bd_direct = seed_braindump(&db, "maria endangers the beta release directly").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd_direct,
             "maria endangers the beta release directly",
@@ -1225,23 +1330,28 @@ mod tests {
         )
         .await
         .unwrap();
-        let existing_edge = crate::graph::find_edge(&db, maria, "endangers", beta)
-            .await
-            .unwrap()
-            .expect("direct edge pre-exists");
+        let existing_edge =
+            crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
+                .await
+                .unwrap()
+                .expect("direct edge pre-exists");
 
         let proposal =
             seed_pending_thematic(&db, maria, beta, "endangers", vec![maria, q3, beta]).await;
-        endorse_inference_proposal(&db, proposal.id).await.unwrap();
+        endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
 
         // Same edge (no duplicate), now asserted by both the braindump and
         // the thematic inference with its snapshot.
-        let edge = crate::graph::find_edge(&db, maria, "endangers", beta)
+        let edge = crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
             .expect("edge still present");
         assert_eq!(edge.id, existing_edge.id, "edge accreted, not duplicated");
-        let assertions = edge_inference_asserted_by(&db, edge.id).await.unwrap();
+        let assertions = edge_inference_asserted_by(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap();
         assert_eq!(assertions.len(), 1);
         assert_eq!(assertions[0].chat_inference_id, proposal.id);
         assert_eq!(assertions[0].mode, THEMATIC_MODE);
@@ -1264,7 +1374,9 @@ mod tests {
         let proposal =
             seed_pending_thematic(&db, maria, beta, "endangers", vec![maria, q3, beta]).await;
         let snapshot_before = proposal.snapshot.clone().unwrap();
-        endorse_inference_proposal(&db, proposal.id).await.unwrap();
+        endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
 
         // Add a new braindump that changes the graph topology (a new concept
         // + edge). The partition that motivated the proposal is now stale.
@@ -1272,6 +1384,7 @@ mod tests {
         let bd_new = seed_braindump(&db, "gamma produces delta").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd_new,
             "gamma produces delta",
@@ -1281,7 +1394,7 @@ mod tests {
         .unwrap();
 
         // The endorsed proposal's snapshot is unchanged — frozen receipt.
-        let refreshed = get_inference_proposal(&db, proposal.id)
+        let refreshed = get_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap()
             .unwrap();
@@ -1296,11 +1409,13 @@ mod tests {
             "concept_ids frozen — not recomputed"
         );
         // The edge's provenance snapshot_id is also stable.
-        let edge = crate::graph::find_edge(&db, maria, "endangers", beta)
+        let edge = crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
             .unwrap();
-        let assertions = edge_inference_asserted_by(&db, edge.id).await.unwrap();
+        let assertions = edge_inference_asserted_by(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap();
         assert_eq!(assertions[0].snapshot_id, Some(snapshot_before.id));
     }
 
@@ -1336,25 +1451,31 @@ mod tests {
 
         // Endorse both — they persist as different typed edges (endangers vs
         // helps) with distinguishable provenance origins.
-        endorse_inference_proposal(&db, structural.id)
+        endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, structural.id)
             .await
             .unwrap();
-        endorse_inference_proposal(&db, thematic.id).await.unwrap();
+        endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, thematic.id)
+            .await
+            .unwrap();
 
-        let endanger_edge = crate::graph::find_edge(&db, maria, "endangers", beta)
-            .await
-            .unwrap()
-            .unwrap();
-        let helps_edge = crate::graph::find_edge(&db, maria, "helps", beta)
-            .await
-            .unwrap()
-            .unwrap();
-        let endanger_assertions = edge_inference_asserted_by(&db, endanger_edge.id)
-            .await
-            .unwrap();
-        let helps_assertions = edge_inference_asserted_by(&db, helps_edge.id)
-            .await
-            .unwrap();
+        let endanger_edge =
+            crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
+                .await
+                .unwrap()
+                .unwrap();
+        let helps_edge =
+            crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "helps", beta)
+                .await
+                .unwrap()
+                .unwrap();
+        let endanger_assertions =
+            edge_inference_asserted_by(&db, BOOTSTRAP_ADMIN_USER_ID, endanger_edge.id)
+                .await
+                .unwrap();
+        let helps_assertions =
+            edge_inference_asserted_by(&db, BOOTSTRAP_ADMIN_USER_ID, helps_edge.id)
+                .await
+                .unwrap();
         assert_eq!(endanger_assertions[0].mode, STRUCTURAL_MODE);
         assert!(endanger_assertions[0].snapshot_id.is_none());
         assert_eq!(helps_assertions[0].mode, THEMATIC_MODE);
@@ -1365,9 +1486,17 @@ mod tests {
     async fn propose_thematic_rejects_self_edge() {
         let db = test_db();
         let (maria, q3, _beta, _bd) = seed_cluster(&db).await;
-        let err = propose_thematic_inference(&db, maria, maria, "endangers", vec![maria, q3], None)
-            .await
-            .unwrap_err();
+        let err = propose_thematic_inference(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            maria,
+            maria,
+            "endangers",
+            vec![maria, q3],
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
         assert!(err.to_string().contains("distinct"), "{err:?}");
     }
@@ -1378,9 +1507,17 @@ mod tests {
         let (maria, q3, beta, _bd) = seed_cluster(&db).await;
         // Maria is in the cluster but the cluster list omits Beta — a
         // thematic inference must bridge cluster-mates.
-        let err = propose_thematic_inference(&db, maria, beta, "endangers", vec![maria, q3], None)
-            .await
-            .unwrap_err();
+        let err = propose_thematic_inference(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            maria,
+            beta,
+            "endangers",
+            vec![maria, q3],
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
         assert!(err.to_string().contains("cluster-mates"), "{err:?}");
     }
@@ -1389,10 +1526,17 @@ mod tests {
     async fn propose_thematic_rejects_unsanctioned_type() {
         let db = test_db();
         let (maria, q3, beta, _bd) = seed_cluster(&db).await;
-        let err =
-            propose_thematic_inference(&db, maria, beta, "bamboozles", vec![maria, q3, beta], None)
-                .await
-                .unwrap_err();
+        let err = propose_thematic_inference(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            maria,
+            beta,
+            "bamboozles",
+            vec![maria, q3, beta],
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
         assert!(err.to_string().contains("/ontology/propose"), "{err:?}");
     }
@@ -1404,6 +1548,7 @@ mod tests {
         let ghost = 9999;
         let err = propose_thematic_inference(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             maria,
             beta,
             "endangers",
@@ -1427,6 +1572,7 @@ mod tests {
         let bd1 = seed_braindump(&db, "thinking about alpha").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd1,
             "thinking about alpha",
@@ -1437,6 +1583,7 @@ mod tests {
         let bd2 = seed_braindump(&db, "thinking about beta").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd2,
             "thinking about beta",
@@ -1447,10 +1594,17 @@ mod tests {
         let alpha = concept_id(&db, "Alpha").await;
         let beta = concept_id(&db, "Beta").await;
 
-        let err =
-            propose_thematic_inference(&db, alpha, beta, "endangers", vec![alpha, beta], None)
-                .await
-                .unwrap_err();
+        let err = propose_thematic_inference(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            alpha,
+            beta,
+            "endangers",
+            vec![alpha, beta],
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
         assert!(
             err.to_string().contains("no braindump-backed edges"),
@@ -1464,16 +1618,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(snapshot_rows, 0, "no snapshot written on rejection");
-        assert!(list_inference_proposals(&db).await.unwrap().is_empty());
+        assert!(list_inference_proposals(&db, BOOTSTRAP_ADMIN_USER_ID)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
     async fn propose_thematic_rejects_empty_type() {
         let db = test_db();
         let (maria, q3, beta, _bd) = seed_cluster(&db).await;
-        let err = propose_thematic_inference(&db, maria, beta, "  ", vec![maria, q3, beta], None)
-            .await
-            .unwrap_err();
+        let err = propose_thematic_inference(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            maria,
+            beta,
+            "  ",
+            vec![maria, q3, beta],
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
     }
 
@@ -1481,9 +1646,17 @@ mod tests {
     async fn propose_thematic_rejects_empty_cluster() {
         let db = test_db();
         let (maria, _q3, beta, _bd) = seed_cluster(&db).await;
-        let err = propose_thematic_inference(&db, maria, beta, "endangers", vec![], None)
-            .await
-            .unwrap_err();
+        let err = propose_thematic_inference(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            maria,
+            beta,
+            "endangers",
+            vec![],
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
     }
 
@@ -1500,7 +1673,9 @@ mod tests {
         )
         .await;
         let p2 = seed_pending_thematic(&db, maria, beta, "helps", vec![maria, q3, beta]).await;
-        let listed = list_inference_proposals(&db).await.unwrap();
+        let listed = list_inference_proposals(&db, BOOTSTRAP_ADMIN_USER_ID)
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].id, p1.id);
         assert_eq!(listed[1].id, p2.id);
@@ -1517,11 +1692,13 @@ mod tests {
         let proposal =
             seed_pending_thematic(&db, maria, beta, "endangers", vec![maria, q3, beta]).await;
 
-        let rejected = reject_inference_proposal(&db, proposal.id).await.unwrap();
+        let rejected = reject_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
+            .await
+            .unwrap();
         assert_eq!(rejected.status, STATUS_REJECTED);
         assert!(rejected.resolved_at.is_some());
         assert!(
-            crate::graph::find_edge(&db, maria, "endangers", beta)
+            crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
                 .await
                 .unwrap()
                 .is_none(),
@@ -1529,7 +1706,7 @@ mod tests {
         );
         // The snapshot row remains (audit trail of what was proposed) but the
         // proposal is no longer pending.
-        let refreshed = get_inference_proposal(&db, proposal.id)
+        let refreshed = get_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap()
             .unwrap();

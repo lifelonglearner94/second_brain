@@ -27,16 +27,14 @@ use webauthn_rs::prelude::{
     RegisterPublicKeyCredential, Url, Uuid, Webauthn, WebauthnBuilder,
 };
 
-use crate::db::{now_seconds, Db};
+use crate::db::{now_seconds, Db, BOOTSTRAP_ADMIN_USER_ID};
 use crate::error::{Error, Result};
 
-/// The single account a registered passkey binds to. This app is single-user;
-/// a real multi-tenant split would source this from a users table. We use a
-/// stable UUID so passkeys stay associated with the same account across
-/// restarts — the literal id is arbitrary but must be constant.
-const SINGLE_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
-
-/// Friendly name shown on the authenticator's UI; arbitrary but constant.
+/// The stable id of the bootstrap admin — the single account the deploy-time
+/// singleton lock mints on first passkey registration. Issue #72 migrates this
+/// into a real row on the `users` table; the constant lives in `db` so the
+/// migration and the auth layer agree on the literal. The display name and
+/// friendly name are kept here for the WebAuthn registration challenge only.
 const SINGLE_USER_NAME: &str = "me";
 const SINGLE_USER_DISPLAY_NAME: &str = "me";
 
@@ -182,9 +180,11 @@ impl AuthService {
         }
     }
 
-    /// The account id all registered passkeys attach to.
+    /// The account id all registered passkeys attach to. Issue #72: this is
+    /// now a real row on the `users` table (the bootstrap admin), not a
+    /// hardcoded constant detached from the schema.
     pub fn user_id(&self) -> &'static str {
-        SINGLE_USER_ID
+        BOOTSTRAP_ADMIN_USER_ID
     }
 
     pub async fn register_begin(&self, db: &Db) -> Result<RegistrationBegin> {
@@ -193,7 +193,7 @@ impl AuthService {
         // race-proof gate lives in `store_first_passkey` (count + insert under
         // one DB-closure hold); this one only closes the door early for UX.
         let count = {
-            let user_id = SINGLE_USER_ID.to_string();
+            let user_id = BOOTSTRAP_ADMIN_USER_ID.to_string();
             db.with_conn(move |conn| count_passkeys_sync(conn, &user_id))
                 .await?
         };
@@ -202,8 +202,8 @@ impl AuthService {
                 "registration is closed: a passkey already exists".into(),
             ));
         }
-        let user_unique_id = Uuid::parse_str(SINGLE_USER_ID)
-            .map_err(|e| Error::Internal(format!("bad SINGLE_USER_ID: {e}")))?;
+        let user_unique_id = Uuid::parse_str(BOOTSTRAP_ADMIN_USER_ID)
+            .map_err(|e| Error::Internal(format!("bad BOOTSTRAP_ADMIN_USER_ID: {e}")))?;
         // Show no already-registered credentials to exclude — we want each
         // passkey independent (device-loss tolerance). This is single-user.
         let webauthn = self.webauthn.clone();
@@ -227,11 +227,11 @@ impl AuthService {
         // park on the calling task. It's not Send in a way that needs
         // spawn_blocking — it's pure computation on already-received data.
         let passkey = webauthn.finish_passkey_registration(&body.credential, &state)?;
-        store_first_passkey(db, SINGLE_USER_ID, &passkey).await
+        store_first_passkey(db, BOOTSTRAP_ADMIN_USER_ID, &passkey).await
     }
 
     pub async fn login_begin(&self, db: &Db) -> Result<LoginBegin> {
-        let passkeys = load_passkeys(db, SINGLE_USER_ID).await?;
+        let passkeys = load_passkeys(db, BOOTSTRAP_ADMIN_USER_ID).await?;
         if passkeys.is_empty() {
             return Err(Error::NotFound("no registered passkey".into()));
         }
@@ -254,7 +254,7 @@ impl AuthService {
         let result = webauthn.finish_passkey_authentication(&body.credential, &state)?;
         // Counter check: if the authenticator reports a counter we must ensure
         // it advanced past the stored value (cloned-credential defence).
-        update_passkey_counter(db, SINGLE_USER_ID, &result).await?;
+        update_passkey_counter(db, BOOTSTRAP_ADMIN_USER_ID, &result).await?;
         Ok(result)
     }
 }

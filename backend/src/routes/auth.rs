@@ -63,11 +63,15 @@ struct LoginOk {
     user_id: String,
 }
 
-/// What `/me` hands back. Deliberately **only** the account id — never the
-/// session id or expiry, so JS-accessible responses leak no bearer material.
+/// What `/me` hands back. Issue #72: carries `is_admin` and `display_name`
+/// (sourced from the `users` table via the session lookup) alongside the
+/// account id. Never the session id or expiry, so JS-accessible responses
+/// leak no bearer material.
 #[derive(Serialize)]
 pub struct MeResponse {
     pub user_id: String,
+    pub display_name: String,
+    pub is_admin: bool,
 }
 
 /// Logout: invalidate the session row and clear the cookie. Protected — without
@@ -84,11 +88,13 @@ pub async fn logout(
 }
 
 /// `GET /me` — the protected-route demonstrator. Returns the validated session's
-/// account id only (never the session id — see [`MeResponse`]). If you can read
-/// this, the middleware let you through.
+/// account id, display name, and admin flag (issue #72). If you can read this,
+/// the middleware let you through.
 pub async fn me(Extension(session): Extension<SessionInfo>) -> Json<MeResponse> {
     Json(MeResponse {
         user_id: session.user_id,
+        display_name: session.display_name,
+        is_admin: session.is_admin,
     })
 }
 

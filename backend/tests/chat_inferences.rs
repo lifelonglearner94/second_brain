@@ -22,6 +22,7 @@ use http_body_util::BodyExt;
 use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
+use second_brain_backend::db::BOOTSTRAP_ADMIN_USER_ID;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
 use second_brain_backend::graph;
@@ -203,15 +204,15 @@ async fn seed() -> (axum::Router, Db, http::HeaderValue, i64, i64, i64) {
     let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
     let _bd = submit(&app, &cookie, "maria endangers q3 which beta depends on").await;
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
-    let beta = graph::concept_id_for_label(&db, "Beta release")
+    let beta = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Beta release")
         .await
         .unwrap()
         .unwrap();
@@ -260,7 +261,7 @@ async fn propose_with_traversable_path_creates_pending_proposal() {
     assert_eq!(path.len(), 2);
     // No edge persisted yet — no auto-endorse.
     assert!(
-        graph::find_edge(&db, maria, "endangers", beta)
+        graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
             .is_none(),
@@ -323,13 +324,17 @@ async fn endorse_persists_edge_with_structural_inference_provenance() {
     assert_eq!(body["status"], "endorsed");
 
     // The direct edge persists, asserted by this inference (structural).
-    let edge = graph::find_edge(&db, maria, "endangers", beta)
+    let edge = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
         .await
         .unwrap()
         .expect("endorsed edge persisted");
-    let assertions = second_brain_backend::chat_inference::edge_inference_asserted_by(&db, edge.id)
-        .await
-        .unwrap();
+    let assertions = second_brain_backend::chat_inference::edge_inference_asserted_by(
+        &db,
+        BOOTSTRAP_ADMIN_USER_ID,
+        edge.id,
+    )
+    .await
+    .unwrap();
     assert_eq!(assertions.len(), 1);
     assert_eq!(assertions[0].chat_inference_id, id);
     assert_eq!(assertions[0].mode, "structural_inference");
@@ -363,7 +368,7 @@ async fn reject_drops_the_proposal_and_persists_no_edge() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "reject: {body}");
     assert!(
-        graph::find_edge(&db, maria, "endangers", beta)
+        graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
             .is_none(),
@@ -552,24 +557,26 @@ async fn endorse_accretes_onto_pre_existing_direct_edge() {
     let cookie = session_cookie(&db).await;
     let _bd1 = submit(&app, &cookie, "maria endangers q3 which beta depends on").await;
     let bd2 = submit(&app, &cookie, "maria endangers the beta release directly").await;
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
-    let beta = graph::concept_id_for_label(&db, "Beta release")
+    let beta = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Beta release")
         .await
         .unwrap()
         .unwrap();
-    let pre_existing = graph::find_edge(&db, maria, "endangers", beta)
+    let pre_existing = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
         .await
         .unwrap()
         .expect("direct edge pre-exists");
     assert_eq!(
-        graph::edge_provenance(&db, pre_existing.id).await.unwrap(),
+        graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, pre_existing.id)
+            .await
+            .unwrap(),
         vec![bd2]
     );
 
@@ -599,14 +606,18 @@ async fn endorse_accretes_onto_pre_existing_direct_edge() {
     assert_eq!(status, StatusCode::OK, "endorse: {_body}");
 
     // Same edge, now asserted by both the braindump and the inference.
-    let edge = graph::find_edge(&db, maria, "endangers", beta)
+    let edge = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
         .await
         .unwrap()
         .expect("edge still present");
     assert_eq!(edge.id, pre_existing.id, "edge accreted, not duplicated");
-    let assertions = second_brain_backend::chat_inference::edge_inference_asserted_by(&db, edge.id)
-        .await
-        .unwrap();
+    let assertions = second_brain_backend::chat_inference::edge_inference_asserted_by(
+        &db,
+        BOOTSTRAP_ADMIN_USER_ID,
+        edge.id,
+    )
+    .await
+    .unwrap();
     assert_eq!(assertions.len(), 1);
     assert_eq!(assertions[0].chat_inference_id, id);
     assert_eq!(assertions[0].mode, "structural_inference");
@@ -632,15 +643,15 @@ async fn seed_thematic_cluster() -> (axum::Router, Db, http::HeaderValue, i64, i
     let app = app_with_llm(db.clone(), llm);
     let cookie = session_cookie(&db).await;
     let _bd = submit(&app, &cookie, "maria endangers q3 which beta depends on").await;
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
-    let beta = graph::concept_id_for_label(&db, "Beta release")
+    let beta = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Beta release")
         .await
         .unwrap()
         .unwrap();
@@ -705,7 +716,7 @@ async fn propose_thematic_creates_pending_proposal_with_snapshot() {
     );
     // No edge persisted yet — no auto-endorse.
     assert!(
-        graph::find_edge(&db, maria, "endangers", beta)
+        graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
             .is_none(),
@@ -743,13 +754,17 @@ async fn endorse_thematic_persists_edge_with_snapshot_in_provenance() {
     assert_eq!(status, StatusCode::OK, "endorse thematic: {body}");
     assert_eq!(body["status"], "endorsed");
 
-    let edge = graph::find_edge(&db, maria, "endangers", beta)
+    let edge = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
         .await
         .unwrap()
         .expect("endorsed thematic edge persisted");
-    let assertions = second_brain_backend::chat_inference::edge_inference_asserted_by(&db, edge.id)
-        .await
-        .unwrap();
+    let assertions = second_brain_backend::chat_inference::edge_inference_asserted_by(
+        &db,
+        BOOTSTRAP_ADMIN_USER_ID,
+        edge.id,
+    )
+    .await
+    .unwrap();
     assert_eq!(assertions.len(), 1);
     assert_eq!(assertions[0].chat_inference_id, id);
     assert_eq!(assertions[0].mode, "thematic_inference");
@@ -838,7 +853,7 @@ async fn reject_thematic_keeps_graph_untouched() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "reject thematic");
     assert!(
-        graph::find_edge(&db, maria, "endangers", beta)
+        graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
             .is_none(),

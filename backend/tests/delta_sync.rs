@@ -18,6 +18,7 @@ use http_body_util::BodyExt;
 use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
+use second_brain_backend::db::BOOTSTRAP_ADMIN_USER_ID;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
 use second_brain_backend::graph;
@@ -271,15 +272,15 @@ async fn delta_returns_deletions_after_braindump_delete() {
     let cookie = session_cookie(&db).await;
 
     let bd = submit(&app, &cookie, "maria endangers q3 launch").await;
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
-    let edge_row = graph::find_edge(&db, maria, "endangers", q3)
+    let edge_row = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
         .await
         .unwrap()
         .expect("edge exists");
@@ -324,15 +325,15 @@ async fn delta_returns_retags_after_edge_type_refactor() {
     let cookie = session_cookie(&db).await;
 
     submit(&app, &cookie, "maria helps q3 launch").await;
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
-    let edge_row = graph::find_edge(&db, maria, "helps", q3)
+    let edge_row = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "helps", q3)
         .await
         .unwrap()
         .expect("edge exists");
@@ -399,12 +400,13 @@ async fn delta_demo_returns_all_three_change_types() {
     let bd2 = submit(&app, &cookie, "beta endangers risk").await;
     let helps_edge = graph::find_edge(
         &db,
-        graph::concept_id_for_label(&db, "Maria")
+        BOOTSTRAP_ADMIN_USER_ID,
+        graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
             .await
             .unwrap()
             .unwrap(),
         "helps",
-        graph::concept_id_for_label(&db, "Q3 launch")
+        graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
             .await
             .unwrap()
             .unwrap(),
@@ -412,15 +414,15 @@ async fn delta_demo_returns_all_three_change_types() {
     .await
     .unwrap()
     .expect("helps edge");
-    let beta = graph::concept_id_for_label(&db, "Beta")
+    let beta = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Beta")
         .await
         .unwrap()
         .unwrap();
-    let risk = graph::concept_id_for_label(&db, "Risk")
+    let risk = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Risk")
         .await
         .unwrap()
         .unwrap();
-    let endangers_edge = graph::find_edge(&db, beta, "endangers", risk)
+    let endangers_edge = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, beta, "endangers", risk)
         .await
         .unwrap()
         .expect("endangers edge");
@@ -497,7 +499,8 @@ async fn delta_demo_returns_all_three_change_types() {
     // bd1 was not deleted — confirm it still exists so the retag is meaningful.
     assert!(graph::get_concept(
         &db,
-        graph::concept_id_for_label(&db, "Maria")
+        BOOTSTRAP_ADMIN_USER_ID,
+        graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
             .await
             .unwrap()
             .unwrap()

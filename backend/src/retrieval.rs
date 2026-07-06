@@ -100,16 +100,24 @@ pub struct RetrievalResult {
 /// on a [`SqliteGraphRepo`]. The trait method takes the precomputed `query_vec`
 /// and owns the pure-DB pipeline; the petgraph BFS is private to the adapter's
 /// retrieval impl.
-pub async fn retrieve(db: &Db, llm: &dyn Llm, query: &str) -> Result<RetrievalResult> {
+pub async fn retrieve(
+    db: &Db,
+    user_id: &str,
+    llm: &dyn Llm,
+    query: &str,
+) -> Result<RetrievalResult> {
     let query_vec = llm.embed_query(query).await?;
     db.ensure_vec_tables(llm.dim())?;
-    SqliteGraphRepo::new(db.clone()).retrieve(&query_vec).await
+    SqliteGraphRepo::new(db.clone())
+        .retrieve(user_id, &query_vec)
+        .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
+    use crate::db::BOOTSTRAP_ADMIN_USER_ID;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::ingest_extraction;
     use crate::llm::{FakeLlm, Llm};
@@ -143,8 +151,10 @@ mod tests {
         }
     }
 
-    async fn seed_braindump(db: &Db, text: &str) -> i64 {
-        let b = insert_braindump(db, text, text).await.unwrap();
+    async fn seed_braindump(db: &Db, _user_id: &str, text: &str) -> i64 {
+        let b = insert_braindump(db, BOOTSTRAP_ADMIN_USER_ID, text, text)
+            .await
+            .unwrap();
         b.id
     }
 
@@ -152,9 +162,15 @@ mod tests {
     async fn seed_finds_braindumps_of_the_matched_concept() {
         let db = test_db();
         let llm = fake_llm();
-        let bd = seed_braindump(&db, "the q3 review went off the rails").await;
+        let bd = seed_braindump(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            "the q3 review went off the rails",
+        )
+        .await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd,
             "the q3 review went off the rails",
@@ -163,7 +179,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result = retrieve(&db, &llm, "Q3 review").await.unwrap();
+        let result = retrieve(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, "Q3 review")
+            .await
+            .unwrap();
 
         assert_eq!(result.mode, RetrievalMode::SeedThenExpand);
         let found = result
@@ -178,9 +196,15 @@ mod tests {
     async fn expand_finds_braindump_connected_by_edge_but_not_containing_query_word() {
         let db = test_db();
         let llm = fake_llm();
-        let bd = seed_braindump(&db, "maria leaving tanks the timeline").await;
+        let bd = seed_braindump(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            "maria leaving tanks the timeline",
+        )
+        .await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd,
             "maria leaving tanks the timeline",
@@ -192,7 +216,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result = retrieve(&db, &llm, "Q3").await.unwrap();
+        let result = retrieve(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, "Q3")
+            .await
+            .unwrap();
 
         assert_eq!(result.mode, RetrievalMode::SeedThenExpand);
         let found = result
@@ -221,9 +247,15 @@ mod tests {
         let db = test_db();
         let llm = fake_llm();
 
-        let bd_graph = seed_braindump(&db, "maria endangers the q3 launch").await;
+        let bd_graph = seed_braindump(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            "maria endangers the q3 launch",
+        )
+        .await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd_graph,
             "maria endangers the q3 launch",
@@ -235,9 +267,11 @@ mod tests {
         .await
         .unwrap();
 
-        let bd_stray = seed_braindump(&db, "q3 risk assessment notes").await;
+        let bd_stray =
+            seed_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "q3 risk assessment notes").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd_stray,
             "q3 risk assessment notes",
@@ -246,7 +280,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result = retrieve(&db, &llm, "Q3").await.unwrap();
+        let result = retrieve(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, "Q3")
+            .await
+            .unwrap();
 
         let stray = result
             .braindumps
@@ -262,10 +298,15 @@ mod tests {
         let db = test_db();
         let llm = fake_llm();
 
-        let bd_reflective =
-            seed_braindump(&db, "feeling overwhelmed but my mind is full lately").await;
+        let bd_reflective = seed_braindump(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            "feeling overwhelmed but my mind is full lately",
+        )
+        .await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd_reflective,
             "feeling overwhelmed but my mind is full lately",
@@ -274,9 +315,11 @@ mod tests {
         .await
         .unwrap();
 
-        let bd_unrelated = seed_braindump(&db, "the q3 launch timeline").await;
+        let bd_unrelated =
+            seed_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "the q3 launch timeline").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd_unrelated,
             "the q3 launch timeline",
@@ -285,9 +328,14 @@ mod tests {
         .await
         .unwrap();
 
-        let result = retrieve(&db, &llm, "what is on my mind lately")
-            .await
-            .unwrap();
+        let result = retrieve(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            "what is on my mind lately",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.mode, RetrievalMode::NoSeedFallback);
         assert!(result.paths.is_empty(), "no graph traversal in fallback");

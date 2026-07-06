@@ -5,7 +5,7 @@ import {
 } from '../../src/lib/state/session.svelte';
 import type { Me } from '../../src/lib/api/client';
 
-const ME: Me = { user_id: '00000000-0000-0000-0000-000000000001' };
+const ME: Me = { user_id: '00000000-0000-0000-0000-000000000001', display_name: 'me', is_admin: true };
 
 function apiStub(getMe: SessionApi['getMe']): SessionApi {
 	return { getMe };

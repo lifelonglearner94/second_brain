@@ -7,7 +7,7 @@ use std::sync::Arc;
 use second_brain_backend::{
     auth,
     config::{Config, LogFormat},
-    db::Db,
+    db::{self, Db, BOOTSTRAP_ADMIN_USER_ID},
     gemini::GeminiClient,
     graph_repo::{GraphRepo, SqliteGraphRepo},
     llm::{FakeLlm, Llm},
@@ -58,9 +58,17 @@ async fn main() -> anyhow::Result<()> {
 
     // Seed type-embeddings for any ontology types missing one (the day-zero
     // vocabulary has no embeddings until the first run — ADR-0003 dedup needs
-    // them to auto-merge duplicate proposals). Idempotent: already-embedded
-    // types are skipped.
-    let seeded = second_brain_backend::ontology::seed_type_embeddings(&db, llm.as_ref()).await?;
+    // them to auto-merge duplicate proposals). Issue #72: the ontology is
+    // per-user; the seed runs for the bootstrap admin at startup. Each new
+    // user's vocabulary is seeded on first activity via
+    // `db::seed_ontology_for_user`.
+    let _ = db::seed_ontology_for_user(&db, BOOTSTRAP_ADMIN_USER_ID).await;
+    let seeded = second_brain_backend::ontology::seed_type_embeddings(
+        &db,
+        BOOTSTRAP_ADMIN_USER_ID,
+        llm.as_ref(),
+    )
+    .await?;
     if seeded > 0 {
         tracing::info!(count = seeded, "seeded type embeddings for ontology dedup");
     }

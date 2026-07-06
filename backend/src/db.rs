@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use rusqlite::auto_extension::RawAutoExtension;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 
 use crate::error::{Error, Result};
 
@@ -119,105 +119,138 @@ pub fn now_seconds() -> i64 {
         .unwrap_or(0)
 }
 
+/// The stable id of the bootstrap admin — the single account the deploy-time
+/// singleton lock (issue #2) mints on first passkey registration. Issue #72
+/// migrates this from a hardcoded constant in `auth::webauthn` into a real row
+/// on the `users` table, so every graph row can carry a non-null `user_id` FK
+/// to it. The literal is arbitrary but must be constant across restarts so
+/// passkeys and graph rows stay associated with the same account.
+pub const BOOTSTRAP_ADMIN_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
+
+/// Add a column to `table` if it does not already exist. SQLite has no
+/// `ALTER TABLE … ADD COLUMN IF NOT EXISTS`, so we introspect
+/// `pragma_table_info` first. Forward-only: once added, the column stays.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    type_def: &str,
+) -> Result<()> {
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+        params![table, column],
+        |r| r.get(0),
+    )?;
+    if exists == 0 {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {type_def}"),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Whether a vec0 virtual table has a `user_id` partition-key column (issue #72).
+/// Used by [`ensure_vec_tables`] to decide whether the pre-issue-72 vec0
+/// collections need dropping + recreating with the partition key.
+fn vec_table_has_user_id(conn: &Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = 'user_id'",
+        params![table],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
 /// Idempotent schema migrations. Each slice appends its `CREATE TABLE IF NOT
-/// EXISTS` block; no destructive ALTERs — this is a personal-scale, single-connection
-/// app where forward-only additive migrations suffice.
+/// EXISTS` block; forward-only additive — no destructive ALTERs that lose data.
+/// Issue #72 threads a non-null `user_id` FK through every graph table so the
+/// knowledge graph is multi-user-capable: each user gets their own Braindumps,
+/// Concepts, Edges, Provenance, and inference proposals, isolated from every
+/// other user. The existing single-user account (the [`BOOTSTRAP_ADMIN_USER_ID`]
+/// constant) is migrated into a real admin row on the `users` table — the
+/// bootstrap admin — so no existing data is orphaned.
 fn migrate(conn: &Connection) -> Result<()> {
-    // Issue #2 — passkey auth + opaque sessions.
-    //
-    // `passkeys` holds the registered WebAuthn credentials (one row per
-    // credential id). The `Passkey` value is JSON-serialisable so we store it
-    // verbatim and reconstruct it for authentication.
+    // Issue #72 — the `users` table. `passkeys.user_id` and `sessions.user_id`
+    // reference it (forward-only: the FK is added on fresh DBs; existing DBs
+    // keep the TEXT column and rely on the matching row). The bootstrap admin
+    // row is inserted idempotently so the existing single-user account maps to
+    // a real `users` row.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS users (
+            id           TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            is_admin     INTEGER NOT NULL DEFAULT 0,
+            created_at   INTEGER NOT NULL
+        );
+
+        INSERT OR IGNORE INTO users (id, display_name, is_admin, created_at)
+        VALUES ('00000000-0000-0000-0000-000000000001', 'me', 1, unixepoch());",
+    )?;
+
+    // Issue #2 — passkey auth + opaque sessions. The `user_id` columns now
+    // reference `users(id)` (fresh DBs get the FK; existing DBs keep the TEXT
+    // column — forward-only).
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS passkeys (
             cred_id      BLOB PRIMARY KEY,
-            user_id      TEXT NOT NULL,
+            user_id      TEXT NOT NULL REFERENCES users(id),
             passkey_json TEXT NOT NULL,
             created_at   INTEGER NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
             session_id  TEXT PRIMARY KEY,
-            user_id     TEXT NOT NULL,
+            user_id     TEXT NOT NULL REFERENCES users(id),
             created_at  INTEGER NOT NULL,
-            expires_at   INTEGER
+            expires_at  INTEGER
         );
 
         CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);",
     )?;
 
+    // Issue #72 — scope every graph table by `user_id`. The `users` table and
+    // bootstrap admin row already exist (above), so the backfill
+    // `UPDATE … SET user_id = BOOTSTRAP_ADMIN_USER_ID WHERE user_id IS NULL`
+    // assigns the existing single-user data to the admin. Fresh DBs create
+    // the column non-null directly; existing DBs get a nullable column that is
+    // backfilled immediately (a later slice may enforce non-null).
+    //
     // Issue #5 — braindump ingest skeleton (ADR-0007). A braindump is an
     // immutable thought-snapshot: verbatim (user-confirmed text at submit,
     // overwritable only for error-correction), cleaned (LLM-produced rendering
     // shown by default), and created_at (the original submit instant — edits
-    // overwrite in place but never bump the timestamp). Extraction is stubbed
-    // in this slice; concepts/edges tables land with the real extraction slice.
+    // overwrite in place but never bump the timestamp).
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS braindumps (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     TEXT NOT NULL REFERENCES users(id),
             verbatim    TEXT NOT NULL,
             cleaned     TEXT NOT NULL,
             created_at  INTEGER NOT NULL
         );",
     )?;
+    add_column_if_missing(conn, "braindumps", "user_id", "TEXT")?;
+    backfill_user_id(conn, "braindumps")?;
 
-    // Issue #3 — the governed edge-type vocabulary (ontology). The LLM draws
-    // types from here and never invents beyond it; governance (propose/approve,
-    // type-embeddings, event-sourced refactor — ADR-0003) is a later slice.
-    //
-    // `id` is a stable surrogate primary key. The future type-embeddings vec
-    // table and the per-edge event-sourced type-history log both FK-reference
-    // `ontology.id`, so those slices append new tables and never re-migrate
-    // this one. `slug` is the machine key the LLM emits; governance may rename
-    // a slug via a refactor (recorded in the history log), but the `id` it
-    // anchors on is immutable. Seeds use `INSERT OR IGNORE` so re-opening a
-    // database is idempotent and never duplicates the day-zero vocabulary.
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS ontology (
-            id           INTEGER PRIMARY KEY,
-            slug         TEXT NOT NULL UNIQUE,
-            label        TEXT NOT NULL,
-            description  TEXT NOT NULL,
-            created_at   INTEGER NOT NULL
-        );
+    // Issue #3 + #72 — the governed edge-type vocabulary (ontology), now
+    // per-user. Fresh DBs create the table with `user_id` and a
+    // `(user_id, slug)` unique constraint (replacing the old `slug`-only
+    // UNIQUE). Existing DBs are migrated: a new table is created, data is
+    // copied with the bootstrap admin's user_id, the old table is dropped,
+    // and the new one renamed. The day-zero seed runs per-user on first
+    // activity (see `seed_ontology_for_user`); the migration seeds the
+    // bootstrap admin so existing data is consistent.
+    migrate_ontology_to_per_user(conn)?;
 
-        INSERT OR IGNORE INTO ontology (slug, label, description, created_at) VALUES
-        ('relates_to', 'Relates to', 'Generic association between two concepts; the fallback when no more specific type fits.', unixepoch()),
-        ('causes', 'Causes', 'A brings about B; B would not have occurred without A.', unixepoch()),
-        ('affects', 'Affects', 'A influences or has an effect on B, without strictly causing it.', unixepoch()),
-        ('endangers', 'Endangers', 'A puts B at risk or under threat.', unixepoch()),
-        ('helps', 'Helps', 'A benefits, aids, or contributes positively to B.', unixepoch()),
-        ('part_of', 'Part of', 'A is a component or member of the larger whole B.', unixepoch()),
-        ('depends_on', 'Depends on', 'A requires or relies on B to exist or function.', unixepoch()),
-        ('supports', 'Supports', 'A backs, justifies, or lends weight to B.', unixepoch()),
-        ('contradicts', 'Contradicts', 'A is in tension with or opposes B.', unixepoch()),
-        ('precedes', 'Precedes', 'A comes before B in time or sequence.', unixepoch()),
-        ('enables', 'Enables', 'A makes B possible or allows it to happen.', unixepoch()),
-        ('produces', 'Produces', 'A generates, creates, or yields B.', unixepoch()),
-        ('derived_from', 'Derived from', 'A originates from or is abstracted out of B.', unixepoch());",
-    )?;
-
-    // Issue #6 — concept identity, edge accretion, provenance, type history
-    // (ADR-0001 / ADR-0002 / ADR-0003 / ADR-0010). Forward-only additive: new
-    // tables only, the existing ontology/braindumps tables are untouched.
-    //
-    // Concepts accrete by embedding match (ADR-0001); identity is not label
-    // equality. `concept_provenance` is the extraction provenance symmetric to
-    // edge provenance (ADR-0010): deleting a braindump drops its row here, and a
-    // concept vanishes when its last extractor is removed.
-    //
-    // Edges accrete by (source, original_type, target) — the original_type is
-    // the LLM's first assertion and anchors identity; the *current* type is a
-    // projection off `edge_type_history` (ADR-0003), never a stored field.
-    // `edge_provenance` is the asserted_by list (ADR-0002). Type-history rows
-    // cascade on edge deletion; provenance rows cascade on concept/edge/braindump
-    // deletion.
-    //
-    // `merge_suggestions` surfaces borderline identity pairs for human
-    // confirm/reject (ADR-0001); the queue/approval UI is a later slice.
+    // Issue #6 + #72 — concept identity, edge accretion, provenance, type
+    // history (ADR-0001 / ADR-0002 / ADR-0003 / ADR-0010), now scoped by
+    // `user_id`.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS concepts (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     TEXT NOT NULL REFERENCES users(id),
             label       TEXT NOT NULL,
             created_at  INTEGER NOT NULL
         );
@@ -230,6 +263,7 @@ fn migrate(conn: &Connection) -> Result<()> {
 
         CREATE TABLE IF NOT EXISTS edges (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           TEXT NOT NULL REFERENCES users(id),
             source_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
             target_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
             original_type     TEXT NOT NULL,
@@ -253,6 +287,7 @@ fn migrate(conn: &Connection) -> Result<()> {
 
         CREATE TABLE IF NOT EXISTS merge_suggestions (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id             TEXT NOT NULL REFERENCES users(id),
             kind                TEXT NOT NULL,
             braindump_id        INTEGER NOT NULL REFERENCES braindumps(id) ON DELETE CASCADE,
             new_concept_label   TEXT NOT NULL,
@@ -263,20 +298,18 @@ fn migrate(conn: &Connection) -> Result<()> {
             created_at          INTEGER NOT NULL
         );",
     )?;
+    for table in ["concepts", "edges", "merge_suggestions"] {
+        add_column_if_missing(conn, table, "user_id", "TEXT")?;
+        backfill_user_id(conn, table)?;
+    }
 
-    // Issue #9 — ontology governance (ADR-0003). Forward-only additive: a new
-    // `type_proposals` table for the propose/approve/reject queue + dedup
-    // metadata. The type-embeddings vec0 collection is created in
-    // `ensure_vec_tables` (it is dim-dependent, like the concept/braindump
-    // collections). The existing `ontology` table is NOT re-migrated.
-    //
-    // `merge_of` references an ontology slug (not id) the proposed type
-    // replaces; on approve, the refactor retags edges whose current type is
-    // `merge_of` to the new slug. `near_match_*` records the dedup decision
-    // for the human reviewer (auto-merged above 99.5%, else pending).
+    // Issue #9 + #72 — ontology governance (ADR-0003), now per-user. The
+    // `type_proposals` queue is scoped by `user_id` so each user evolves their
+    // own vocabulary.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS type_proposals (
             id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id                 TEXT NOT NULL REFERENCES users(id),
             slug                    TEXT NOT NULL,
             label                   TEXT NOT NULL,
             description             TEXT NOT NULL,
@@ -288,22 +321,14 @@ fn migrate(conn: &Connection) -> Result<()> {
              resolved_at             INTEGER
          );",
     )?;
+    add_column_if_missing(conn, "type_proposals", "user_id", "TEXT")?;
+    backfill_user_id(conn, "type_proposals")?;
 
-    // Issue #28 — delta sync (pull-on-focus reconciliation). Forward-only
-    // additive: a new `graph_tombstones` append-only log records concepts/edges
-    // that vanished via the deletion cascade (ADR-0007/0010). The cascade
-    // deletes rows outright, so without a tombstone log a delta-since-timestamp
-    // read could report additions and retags (both already carry `created_at`)
-    // but not what disappeared. Existing tables are NOT re-migrated; the
-    // tombstone log is written from the cascade in `graph::retract_extraction`
-    // and read by `delta::graph_delta`.
-    //
-    // `kind` discriminates 'concept' vs 'edge'; `entity_id` is the vanished
-    // row's surrogate id (kept as a plain integer — the row is gone, so no FK).
-    // Append-only: nothing ever DELETEs from here.
+    // Issue #28 + #72 — delta sync tombstones, now scoped by `user_id`.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS graph_tombstones (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     TEXT NOT NULL REFERENCES users(id),
             kind        TEXT NOT NULL,
             entity_id   INTEGER NOT NULL,
             created_at  INTEGER NOT NULL
@@ -312,65 +337,27 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS graph_tombstones_kind_created_at_idx
             ON graph_tombstones(kind, created_at);",
     )?;
+    add_column_if_missing(conn, "graph_tombstones", "user_id", "TEXT")?;
+    backfill_user_id(conn, "graph_tombstones")?;
 
-    // Issue #13 — thematic-inference proposals with frozen Thematic Snapshot
-    // (ADR-0006 thematic mode + ADR-0009). Forward-only additive: one new
-    // table and two nullable columns on the #11 tables. `thematic_snapshots`
-    // is the immutable audit receipt for a thematic-origin proposal — a frozen
-    // capture of the motivating cluster's composition (the braindump ids whose
-    // edges formed the thematic density) at proposal time. The cluster that
-    // motivated the proposal is ephemeral (Louvain is non-deterministic,
-    // ADR-0008) and will not exist tomorrow; the snapshot is the historical
-    // receipt that lets the user audit, months later, exactly why they
-    // endorsed a thematic proposal. Endorsement is immutable — the snapshot is
-    // a frozen receipt, never re-evaluated as the partition evolves
-    // (ADR-0009). The braindump_ids are computed backend-side from
-    // `edge_provenance` (the braindump asserters of edges between cluster
-    // concepts) so the receipt is a verifiable computation, not an LLM claim;
-    // the concept_ids come from the LLM's cluster observation (the partition is
-    // session-scoped and non-deterministic, so the backend cannot re-derive
-    // it). No FK to braindumps/concepts: the snapshot must survive the
-    // deletion of its constituent braindumps/concepts (frozen receipt,
-    // ADR-0009).
+    // Issue #13 + #72 — thematic-inference snapshots, now scoped by `user_id`.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS thematic_snapshots (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       TEXT NOT NULL REFERENCES users(id),
             braindump_ids TEXT NOT NULL,
             concept_ids   TEXT NOT NULL,
             captured_at   INTEGER NOT NULL
         );",
     )?;
+    add_column_if_missing(conn, "thematic_snapshots", "user_id", "TEXT")?;
+    backfill_user_id(conn, "thematic_snapshots")?;
 
-    // Issue #11 — chat write-back, structural mode (ADR-0006). Forward-only
-    // additive: two new tables. `chat_inference_proposals` is the
-    // human-gated queue for chat's proposed inferences — a proposal is a
-    // candidate direct edge summarizing a traversable multi-hop path
-    // (structural) or a thematic gap (thematic, issue #13). The
-    // inference-claim is ALWAYS human-gated: no auto-endorse (endorsing an
-    // LLM deduction is the highest-stakes graph mutation), so every row
-    // starts `pending` and only flips to `endorsed`/`rejected` via the
-    // explicit HITL endpoints. `mode` origin-tags the proposal
-    // (`structural_inference` vs `thematic_inference`); structural proposals
-    // carry no Thematic Snapshot (ADR-0009 — their evidence is the graph
-    // itself, captured in `evidence_path`). `snapshot_id` is NULL for
-    // structural proposals and points at the frozen receipt for thematic
-    // (issue #13, ADR-0009).
-    //
-    // `edge_inference_provenance` is the chat-inference half of edge
-    // provenance, origin-typed by `mode` (ADR-0006). It sits beside the
-    // braindump-origin `edge_provenance` (ADR-0002) so user thoughts and LLM
-    // deductions stay distinguishable: an edge's full `asserted_by` is the
-    // union of both tables. On endorse, a row is inserted linking the
-    // persisted edge to the proposal id; the orphan-edge cascade must
-    // consult both provenance tables so an inference-backed edge survives a
-    // braindump deletion (the inference is its own origin). `snapshot_id` is
-    // NULL for structural assertions and carries the frozen Thematic
-    // Snapshot for thematic assertions (issue #13, ADR-0009 — the snapshot
-    // attaches to the persisted edge's provenance so the user can audit the
-    // ephemeral cluster that motivated it, even after the cluster dissolves).
+    // Issue #11 + #72 — chat write-back (ADR-0006), now scoped by `user_id`.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS chat_inference_proposals (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           TEXT NOT NULL REFERENCES users(id),
             mode              TEXT NOT NULL,
             source_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
             target_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
@@ -395,25 +382,194 @@ fn migrate(conn: &Connection) -> Result<()> {
             PRIMARY KEY (edge_id, chat_inference_id)
         );",
     )?;
+    add_column_if_missing(conn, "chat_inference_proposals", "user_id", "TEXT")?;
+    backfill_user_id(conn, "chat_inference_proposals")?;
+
     Ok(())
 }
 
+/// Backfill `user_id` on `table` with the bootstrap admin's id where it is
+/// NULL. Forward-only: assigns the existing single-user data to the admin so
+/// no row is orphaned. Idempotent — rows already carrying a `user_id` are
+/// untouched.
+fn backfill_user_id(conn: &Connection, table: &str) -> Result<()> {
+    conn.execute(
+        &format!("UPDATE {table} SET user_id = ?1 WHERE user_id IS NULL"),
+        params![BOOTSTRAP_ADMIN_USER_ID],
+    )?;
+    Ok(())
+}
+
+/// Migrate the `ontology` table from the pre-issue-72 single-shared-vocabulary
+/// schema (`slug UNIQUE`) to the per-user schema (`(user_id, slug) UNIQUE`).
+///
+/// On a fresh DB the table does not exist yet, so this function creates it
+/// with the per-user schema and seeds the bootstrap admin's day-zero
+/// vocabulary. On an existing DB the old table has `slug UNIQUE` and no
+/// `user_id`; this function creates a new table with the per-user schema,
+/// copies the old rows with the bootstrap admin's `user_id`, drops the old
+/// table, and renames the new one. No data is lost.
+fn migrate_ontology_to_per_user(conn: &Connection) -> Result<()> {
+    // Check whether the `ontology` table exists at all.
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = 'ontology'",
+        [],
+        |r| r.get(0),
+    )?;
+
+    if table_exists == 0 {
+        // Fresh DB: create the table with the per-user schema and seed the
+        // bootstrap admin's day-zero vocabulary.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS ontology (
+                id           INTEGER PRIMARY KEY,
+                user_id      TEXT NOT NULL REFERENCES users(id),
+                slug         TEXT NOT NULL,
+                label        TEXT NOT NULL,
+                description  TEXT NOT NULL,
+                created_at   INTEGER NOT NULL,
+                UNIQUE (user_id, slug)
+            );",
+        )?;
+        seed_ontology_for_user_conn(conn, BOOTSTRAP_ADMIN_USER_ID)?;
+        return Ok(());
+    }
+
+    // The table exists. Check whether it already has a `user_id` column.
+    let has_user_id: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('ontology') WHERE name = 'user_id'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_user_id > 0 {
+        // Already migrated: seed the bootstrap admin idempotently (no-op if
+        // already seeded).
+        seed_ontology_for_user_conn(conn, BOOTSTRAP_ADMIN_USER_ID)?;
+        return Ok(());
+    }
+
+    // Existing DB with the old schema: recreate the table with the per-user
+    // schema, preserving all data. Standard SQLite migration pattern: create
+    // new, copy, drop old, rename.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS ontology_new (
+            id           INTEGER PRIMARY KEY,
+            user_id      TEXT NOT NULL REFERENCES users(id),
+            slug         TEXT NOT NULL,
+            label        TEXT NOT NULL,
+            description  TEXT NOT NULL,
+            created_at   INTEGER NOT NULL,
+            UNIQUE (user_id, slug)
+        );
+
+        INSERT INTO ontology_new (id, user_id, slug, label, description, created_at)
+        SELECT id, '00000000-0000-0000-0000-000000000001', slug, label, description, created_at
+        FROM ontology;
+
+        DROP TABLE ontology;
+
+        ALTER TABLE ontology_new RENAME TO ontology;",
+    )?;
+    Ok(())
+}
+
+/// Seed the day-zero edge-type vocabulary for `user_id` (idempotent
+/// `INSERT OR IGNORE` scoped to that user). Issue #72: every user starts from
+/// the same governed vocabulary and may evolve their own thereafter. Called
+/// from the migration for the bootstrap admin and from
+/// `seed_ontology_for_user` for new users on first activity.
+pub(crate) fn seed_ontology_for_user_conn(conn: &Connection, user_id: &str) -> Result<()> {
+    let user_id = user_id.to_string();
+    conn.execute(
+        "INSERT OR IGNORE INTO ontology (user_id, slug, label, description, created_at) VALUES
+        (?1, 'relates_to', 'Relates to', 'Generic association between two concepts; the fallback when no more specific type fits.', unixepoch()),
+        (?1, 'causes', 'Causes', 'A brings about B; B would not have occurred without A.', unixepoch()),
+        (?1, 'affects', 'Affects', 'A influences or has an effect on B, without strictly causing it.', unixepoch()),
+        (?1, 'endangers', 'Endangers', 'A puts B at risk or under threat.', unixepoch()),
+        (?1, 'helps', 'Helps', 'A benefits, aids, or contributes positively to B.', unixepoch()),
+        (?1, 'part_of', 'Part of', 'A is a component or member of the larger whole B.', unixepoch()),
+        (?1, 'depends_on', 'Depends on', 'A requires or relies on B to exist or function.', unixepoch()),
+        (?1, 'supports', 'Supports', 'A backs, justifies, or lends weight to B.', unixepoch()),
+        (?1, 'contradicts', 'Contradicts', 'A is in tension with or opposes B.', unixepoch()),
+        (?1, 'precedes', 'Precedes', 'A comes before B in time or sequence.', unixepoch()),
+        (?1, 'enables', 'Enables', 'A makes B possible or allows it to happen.', unixepoch()),
+        (?1, 'produces', 'Produces', 'A generates, creates, or yields B.', unixepoch()),
+        (?1, 'derived_from', 'Derived from', 'A originates from or is abstracted out of B.', unixepoch())",
+        params![user_id],
+    )?;
+    Ok(())
+}
+
+/// Seed the day-zero edge-type vocabulary for `user_id` if it has not been
+/// seeded yet. Issue #72: each user starts from the same governed vocabulary
+/// on first activity and evolves their own thereafter. Called by the domain
+/// layer (ingest, retrieval, ontology reads) on first access for a user.
+pub async fn seed_ontology_for_user(db: &Db, user_id: &str) -> Result<()> {
+    let user_id = user_id.to_string();
+    db.with_conn(move |conn| {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM ontology WHERE user_id = ?1",
+            params![user_id],
+            |r| r.get(0),
+        )?;
+        if count == 0 {
+            seed_ontology_for_user_conn(conn, &user_id)?;
+        }
+        Ok(())
+    })
+    .await
+}
+
 /// Create the embedding vec0 virtual tables at the given dimensionality.
-/// Idempotent. A model swap (different dim) requires a migration that drops
-/// and recreates these tables — out of scope for this slice.
+/// Idempotent. Issue #72: the collections are partitioned by `user_id` so KNN
+/// is scoped per-user by construction — a Retrieval KNN seed for one user
+/// never returns another user's concepts/braindumps (ADR-0004). If pre-issue-72
+/// vec0 collections exist (without the `user_id` partition key), they are
+/// dropped and recreated with the partition key; the bootstrap admin's
+/// embeddings are re-derived at startup via the type/concept/braindump
+/// embedding seed (same shape as `seed_type_embeddings`).
+///
+/// A model swap (different dim) requires a migration that drops and recreates
+/// these tables — out of scope for this slice.
 pub(crate) fn ensure_vec_tables(conn: &Connection, dim: usize) -> Result<()> {
     assert!(dim > 0, "embedding dimension must be positive");
+
+    // If pre-issue-72 vec0 collections exist (no `user_id` partition key),
+    // drop them so the `CREATE … IF NOT EXISTS` below recreates them with the
+    // partition key. The embeddings are re-derived at startup (issue #72
+    // backfill); no source data is lost — the braindumps/concepts/ontology
+    // rows persist, only the derived vectors are recomputed.
+    for table in [
+        "concept_embeddings",
+        "braindump_embeddings",
+        "type_embeddings",
+    ] {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                params![table],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if exists > 0 && !vec_table_has_user_id(conn, table) {
+            conn.execute(&format!("DROP TABLE {table}"), [])?;
+        }
+    }
+
     let ddl = format!(
         "CREATE VIRTUAL TABLE IF NOT EXISTS concept_embeddings USING vec0(
             concept_id INTEGER PRIMARY KEY,
+            user_id TEXT PARTITION KEY,
             embedding float[{dim}] distance_metric=cosine
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS braindump_embeddings USING vec0(
             braindump_id INTEGER PRIMARY KEY,
+            user_id TEXT PARTITION KEY,
             embedding float[{dim}] distance_metric=cosine
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS type_embeddings USING vec0(
             ontology_id INTEGER PRIMARY KEY,
+            user_id TEXT PARTITION KEY,
             embedding float[{dim}] distance_metric=cosine
         );"
     );
@@ -424,6 +580,7 @@ pub(crate) fn ensure_vec_tables(conn: &Connection, dim: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::BOOTSTRAP_ADMIN_USER_ID;
 
     #[tokio::test]
     async fn migrate_is_idempotent() {
@@ -444,9 +601,30 @@ mod tests {
                 .query_map([], |r| r.get::<_, String>(0))?
                 .filter_map(std::result::Result::ok)
                 .collect();
+            assert!(names.contains(&"users".to_string()));
             assert!(names.contains(&"passkeys".to_string()));
             assert!(names.contains(&"sessions".to_string()));
             assert!(names.contains(&"ontology".to_string()));
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    /// Issue #72: the bootstrap admin row must exist on the `users` table so
+    /// the existing single-user account maps to a real `users` row.
+    #[tokio::test]
+    async fn bootstrap_admin_row_exists() {
+        let db = Db::open_in_memory().unwrap();
+        db.with_conn(|conn| {
+            let row: (String, String, i64) = conn.query_row(
+                "SELECT id, display_name, is_admin FROM users WHERE id = ?1",
+                params![BOOTSTRAP_ADMIN_USER_ID],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            assert_eq!(row.0, BOOTSTRAP_ADMIN_USER_ID);
+            assert_eq!(row.1, "me");
+            assert_eq!(row.2, 1, "bootstrap admin must be is_admin=1");
             Ok(())
         })
         .await
@@ -558,6 +736,7 @@ mod tests {
                 .filter_map(std::result::Result::ok)
                 .collect();
             for expected in [
+                "users",
                 "concepts",
                 "concept_provenance",
                 "edges",
@@ -610,9 +789,105 @@ mod tests {
                 ],
                 "all three vec0 virtual tables must exist"
             );
+            // Issue #72: each vec0 collection must have a `user_id` partition
+            // key column so KNN is scoped per-user by construction.
+            for table in [
+                "concept_embeddings",
+                "braindump_embeddings",
+                "type_embeddings",
+            ] {
+                assert!(
+                    vec_table_has_user_id(conn, table),
+                    "vec0 table `{table}` must have a user_id partition key"
+                );
+            }
             Ok(())
         })
         .await
         .unwrap();
+    }
+
+    /// Issue #72: `seed_ontology_for_user` seeds the day-zero vocabulary for a
+    /// new user idempotently. Each user starts from the same governed
+    /// vocabulary and evolves their own thereafter.
+    #[tokio::test]
+    async fn seed_ontology_for_user_seeds_and_is_idempotent() {
+        let db = Db::open_in_memory().unwrap();
+        let user = "00000000-0000-0000-0000-000000000002".to_string();
+        db.with_conn(move |conn| {
+            conn.execute(
+                "INSERT INTO users (id, display_name, is_admin, created_at)
+                 VALUES (?1, 'user2', 0, unixepoch())",
+                params![user],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        seed_ontology_for_user(&db, "00000000-0000-0000-0000-000000000002")
+            .await
+            .unwrap();
+        let u = "00000000-0000-0000-0000-000000000002".to_string();
+        let count_first = db
+            .with_conn(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM ontology WHERE user_id = ?1",
+                    params![u],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            count_first,
+            EXPECTED_SEED_SLUGS.len() as i64,
+            "new user must get the full day-zero vocabulary"
+        );
+
+        // Idempotent: seeding again does not duplicate.
+        seed_ontology_for_user(&db, "00000000-0000-0000-0000-000000000002")
+            .await
+            .unwrap();
+        let u = "00000000-0000-0000-0000-000000000002".to_string();
+        let count_second = db
+            .with_conn(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM ontology WHERE user_id = ?1",
+                    params![u],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count_first, count_second, "re-seeding must not duplicate");
+
+        // A second user gets their own independent vocabulary.
+        let user_b = "00000000-0000-0000-0000-000000000003".to_string();
+        db.with_conn(move |conn| {
+            conn.execute(
+                "INSERT INTO users (id, display_name, is_admin, created_at)
+                 VALUES (?1, 'user3', 0, unixepoch())",
+                params![user_b],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        seed_ontology_for_user(&db, "00000000-0000-0000-0000-000000000003")
+            .await
+            .unwrap();
+        let ub = "00000000-0000-0000-0000-000000000003".to_string();
+        let count_b = db
+            .with_conn(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM ontology WHERE user_id = ?1",
+                    params![ub],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count_b, count_first, "second user gets the same vocabulary");
     }
 }

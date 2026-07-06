@@ -50,7 +50,7 @@ export type LoginFinishBody = {
 
 export type LoginOk = { user_id: string };
 
-export type Me = { user_id: string };
+export type Me = { user_id: string; display_name: string; is_admin: boolean };
 
 export type LogoutOk = { logged_out: true };
 

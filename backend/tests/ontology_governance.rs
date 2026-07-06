@@ -17,6 +17,7 @@ use http_body_util::BodyExt;
 use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
+use second_brain_backend::db::BOOTSTRAP_ADMIN_USER_ID;
 use second_brain_backend::error::Result;
 use second_brain_backend::graph;
 use second_brain_backend::llm::Llm;
@@ -139,7 +140,7 @@ async fn set_ontology_vectors<F>(llm: &ScriptedLlm, db: &Db, mapper: F)
 where
     F: Fn(&str) -> Vec<f32>,
 {
-    let types = second_brain_backend::ontology::ontology_types(db)
+    let types = second_brain_backend::ontology::ontology_types(db, BOOTSTRAP_ADMIN_USER_ID)
         .await
         .unwrap();
     for (slug, label, desc) in types {
@@ -158,9 +159,13 @@ async fn app_with_state(db: Db, llm: ScriptedLlm) -> (axum::Router, AppState) {
     db.ensure_vec_tables(llm.dim()).unwrap();
     let mut state = AppState::for_tests(db.clone());
     state.llm = Arc::new(llm);
-    second_brain_backend::ontology::seed_type_embeddings(&state.db, state.llm.as_ref())
-        .await
-        .unwrap();
+    second_brain_backend::ontology::seed_type_embeddings(
+        &state.db,
+        BOOTSTRAP_ADMIN_USER_ID,
+        state.llm.as_ref(),
+    )
+    .await
+    .unwrap();
     let app = routes::router(state.clone());
     (app, state)
 }
@@ -192,7 +197,7 @@ async fn seed_edge(
     use second_brain_backend::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use second_brain_backend::graph::ingest_extraction;
 
-    let bd = insert_braindump(&state.db, verbatim, verbatim)
+    let bd = insert_braindump(&state.db, BOOTSTRAP_ADMIN_USER_ID, verbatim, verbatim)
         .await
         .unwrap();
     let extraction = ExtractionResult {
@@ -210,23 +215,36 @@ async fn seed_edge(
             to_label: target_label.to_string(),
         }],
     };
-    ingest_extraction(&state.db, state.llm.as_ref(), bd.id, verbatim, extraction)
-        .await
-        .unwrap();
+    ingest_extraction(
+        &state.db,
+        BOOTSTRAP_ADMIN_USER_ID,
+        state.llm.as_ref(),
+        bd.id,
+        verbatim,
+        extraction,
+    )
+    .await
+    .unwrap();
 
-    let source = graph::concept_id_for_label(&state.db, source_label)
+    let source = graph::concept_id_for_label(&state.db, BOOTSTRAP_ADMIN_USER_ID, source_label)
         .await
         .unwrap()
         .unwrap();
-    let target = graph::concept_id_for_label(&state.db, target_label)
+    let target = graph::concept_id_for_label(&state.db, BOOTSTRAP_ADMIN_USER_ID, target_label)
         .await
         .unwrap()
         .unwrap();
-    graph::find_edge(&state.db, source, type_slug, target)
-        .await
-        .unwrap()
-        .expect("seeded edge exists")
-        .id
+    graph::find_edge(
+        &state.db,
+        BOOTSTRAP_ADMIN_USER_ID,
+        source,
+        type_slug,
+        target,
+    )
+    .await
+    .unwrap()
+    .expect("seeded edge exists")
+    .id
 }
 
 // --- propose + dedup ---
@@ -263,7 +281,9 @@ async fn propose_new_type_with_no_near_match_is_queued_pending() {
     assert_eq!(body["status"], "pending", "no near match → queued: {body}");
     assert_eq!(body["slug"], "nurtures");
     // Not yet in the ontology.
-    let slugs = graph::ontology_slugs(&db).await.unwrap();
+    let slugs = graph::ontology_slugs(&db, BOOTSTRAP_ADMIN_USER_ID)
+        .await
+        .unwrap();
     assert!(
         !slugs.iter().any(|s| s == "nurtures"),
         "pending type is not in the ontology yet: {slugs:?}"
@@ -312,7 +332,9 @@ async fn propose_duplicate_type_above_threshold_auto_merges() {
     );
     assert_eq!(body["near_match_slug"], "causes");
     // The new slug was NOT added — it's the same as the existing type.
-    let slugs = graph::ontology_slugs(&db).await.unwrap();
+    let slugs = graph::ontology_slugs(&db, BOOTSTRAP_ADMIN_USER_ID)
+        .await
+        .unwrap();
     assert!(
         !slugs.iter().any(|s| s == "brings_about"),
         "auto-merged type must not enter the ontology: {slugs:?}"
@@ -480,7 +502,9 @@ async fn approve_pending_type_adds_it_to_ontology_and_stores_embedding() {
     assert_eq!(status, StatusCode::OK, "approve: {body}");
     assert_eq!(body["status"], "approved");
 
-    let slugs = graph::ontology_slugs(&db).await.unwrap();
+    let slugs = graph::ontology_slugs(&db, BOOTSTRAP_ADMIN_USER_ID)
+        .await
+        .unwrap();
     assert!(
         slugs.iter().any(|s| s == "nurtures"),
         "approved type is in the ontology: {slugs:?}"
@@ -490,6 +514,7 @@ async fn approve_pending_type_adds_it_to_ontology_and_stores_embedding() {
     // (Tests that the type-embedding collection was populated on approve.)
     let near = second_brain_backend::ontology::knn_type(
         &db,
+        BOOTSTRAP_ADMIN_USER_ID,
         &llm.embed_document("nurtures Nurtures A nurtures or cares for B.")
             .await
             .unwrap(),
@@ -539,7 +564,9 @@ async fn reject_pending_type_does_not_add_it() {
     assert_eq!(status, StatusCode::OK, "reject: {body}");
     assert_eq!(body["status"], "rejected");
 
-    let slugs = graph::ontology_slugs(&db).await.unwrap();
+    let slugs = graph::ontology_slugs(&db, BOOTSTRAP_ADMIN_USER_ID)
+        .await
+        .unwrap();
     assert!(
         !slugs.iter().any(|s| s == "nurtures"),
         "rejected type must not enter the ontology: {slugs:?}"
@@ -654,7 +681,9 @@ async fn approve_merge_refactor_retags_existing_edges_appending_to_history() {
         "Q3 launch",
     )
     .await;
-    let before = graph::edge_type_history(&db, edge_id).await.unwrap();
+    let before = graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, edge_id)
+        .await
+        .unwrap();
     assert_eq!(
         before.len(),
         1,
@@ -693,7 +722,9 @@ async fn approve_merge_refactor_retags_existing_edges_appending_to_history() {
     // via tokio::spawn; here we call the public entry point directly.
     second_brain_backend::ontology::await_pending_refactors(&state).await;
 
-    let after = graph::edge_type_history(&db, edge_id).await.unwrap();
+    let after = graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, edge_id)
+        .await
+        .unwrap();
     assert_eq!(
         after.len(),
         2,
@@ -706,10 +737,11 @@ async fn approve_merge_refactor_retags_existing_edges_appending_to_history() {
     assert_eq!(after[1].seq_index, 1);
     assert_eq!(after[1].type_slug, "nurtures", "retagged to the new type");
     // The edge's current type is the projection of the last entry.
-    let current = second_brain_backend::ontology::current_edge_type(&db, edge_id)
-        .await
-        .unwrap()
-        .expect("edge has a current type");
+    let current =
+        second_brain_backend::ontology::current_edge_type(&db, BOOTSTRAP_ADMIN_USER_ID, edge_id)
+            .await
+            .unwrap()
+            .expect("edge has a current type");
     assert_eq!(current, "nurtures");
 }
 
@@ -773,7 +805,10 @@ async fn second_refactor_over_already_retagged_edge_appends_a_third_entry() {
     .await;
     second_brain_backend::ontology::await_pending_refactors(&state).await;
     assert_eq!(
-        graph::edge_type_history(&db, edge_id).await.unwrap().len(),
+        graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, edge_id)
+            .await
+            .unwrap()
+            .len(),
         2
     );
 
@@ -803,7 +838,9 @@ async fn second_refactor_over_already_retagged_edge_appends_a_third_entry() {
     .await;
     second_brain_backend::ontology::await_pending_refactors(&state).await;
 
-    let history = graph::edge_type_history(&db, edge_id).await.unwrap();
+    let history = graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, edge_id)
+        .await
+        .unwrap();
     assert_eq!(
         history.len(),
         3,
@@ -816,7 +853,7 @@ async fn second_refactor_over_already_retagged_edge_appends_a_third_entry() {
     assert_eq!(history[1].type_slug, "nurtures", "first refactor preserved");
     assert_eq!(history[2].type_slug, "sustains", "second refactor appended");
     assert_eq!(
-        second_brain_backend::ontology::current_edge_type(&db, edge_id)
+        second_brain_backend::ontology::current_edge_type(&db, BOOTSTRAP_ADMIN_USER_ID, edge_id)
             .await
             .unwrap()
             .unwrap(),
@@ -884,7 +921,7 @@ async fn refactor_only_retags_edges_of_the_merged_type() {
 
     // The "helps" edge was retagged; the "endangers" edge was not.
     assert_eq!(
-        graph::edge_type_history(&db, helps_edge)
+        graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, helps_edge)
             .await
             .unwrap()
             .len(),
@@ -892,7 +929,7 @@ async fn refactor_only_retags_edges_of_the_merged_type() {
         "helps edge retagged"
     );
     assert_eq!(
-        graph::edge_type_history(&db, endangers_edge)
+        graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, endangers_edge)
             .await
             .unwrap()
             .len(),
@@ -949,7 +986,10 @@ async fn approve_new_type_with_no_merge_of_does_not_retag_anything() {
     second_brain_backend::ontology::await_pending_refactors(&state).await;
 
     assert_eq!(
-        graph::edge_type_history(&db, edge_id).await.unwrap().len(),
+        graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, edge_id)
+            .await
+            .unwrap()
+            .len(),
         1,
         "no merge_of → no refactor"
     );

@@ -15,7 +15,7 @@ use http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
-use second_brain_backend::db::{now_seconds, Db};
+use second_brain_backend::db::{now_seconds, Db, BOOTSTRAP_ADMIN_USER_ID};
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{ExtractedConcept, ExtractionResult};
 use second_brain_backend::graph;
@@ -178,9 +178,9 @@ async fn seed_suggestion(
         let created_at = now_seconds();
         conn.execute(
             "INSERT INTO merge_suggestions
-                (kind, braindump_id, new_concept_label, new_concept_id,
+                (user_id, kind, braindump_id, new_concept_label, new_concept_id,
                  existing_concept_id, similarity, status, created_at)
-             VALUES ('concept', ?1, 'label', ?2, ?3, 0.9, 'pending', ?4)",
+             VALUES ('00000000-0000-0000-0000-000000000001', 'concept', ?1, 'label', ?2, ?3, 0.9, 'pending', ?4)",
             rusqlite::params![
                 braindump_id,
                 new_concept_id,
@@ -216,11 +216,11 @@ async fn seed_queue() -> (axum::Router, Db, http::HeaderValue, i64, i64, i64, i6
     let cookie = session_cookie(&db).await;
     let bd1 = submit(&app, &cookie, "maria").await;
     let bd2 = submit(&app, &cookie, "beta").await;
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let beta = graph::concept_id_for_label(&db, "Beta")
+    let beta = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Beta")
         .await
         .unwrap()
         .unwrap();
@@ -259,12 +259,17 @@ async fn approve_merges_concepts_unions_provenance_and_drops_suggestion() {
     assert_eq!(status, StatusCode::NO_CONTENT, "approve: {body}");
 
     // Union extraction provenance onto the surviving concept (ADR-0010).
-    let mut prov = graph::concept_provenance(&db, maria).await.unwrap();
+    let mut prov = graph::concept_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, maria)
+        .await
+        .unwrap();
     prov.sort_unstable();
     assert_eq!(prov, vec![bd1, bd2]);
     // The fold concept is gone.
     assert!(
-        graph::get_concept(&db, beta).await.unwrap().is_none(),
+        graph::get_concept(&db, BOOTSTRAP_ADMIN_USER_ID, beta)
+            .await
+            .unwrap()
+            .is_none(),
         "fold concept deleted on approve"
     );
     // The queue no longer lists the actioned suggestion.
@@ -288,15 +293,23 @@ async fn reject_keeps_concepts_separate_and_drops_suggestion() {
 
     // Both concepts survive; provenance unchanged.
     assert!(
-        graph::get_concept(&db, maria).await.unwrap().is_some(),
+        graph::get_concept(&db, BOOTSTRAP_ADMIN_USER_ID, maria)
+            .await
+            .unwrap()
+            .is_some(),
         "keeper survives reject"
     );
     assert!(
-        graph::get_concept(&db, beta).await.unwrap().is_some(),
+        graph::get_concept(&db, BOOTSTRAP_ADMIN_USER_ID, beta)
+            .await
+            .unwrap()
+            .is_some(),
         "fold concept survives reject"
     );
     assert_eq!(
-        graph::concept_provenance(&db, maria).await.unwrap(),
+        graph::concept_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, maria)
+            .await
+            .unwrap(),
         vec![bd1],
         "provenance unchanged on reject"
     );
