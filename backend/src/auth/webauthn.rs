@@ -82,9 +82,11 @@ impl ChallengeStore {
 
     /// Insert a state and return the token the client must echo.
     fn put(&self, state: ChallengeState) -> ChallengeToken {
-        use rand::RngCore;
+        use rand::TryRng;
         let mut bytes = vec![0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        rand::rngs::SysRng
+            .try_fill_bytes(&mut bytes)
+            .expect("filling challenge bytes from OS entropy");
         let token = super::session::base64url_encode(&bytes);
 
         let mut map = self.inner.lock().expect("challenge store poisoned");

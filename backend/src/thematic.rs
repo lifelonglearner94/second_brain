@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 
-use rand::rngs::{OsRng, StdRng};
+use rand::rngs::{StdRng, SysRng};
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use serde::Serialize;
@@ -55,7 +55,8 @@ pub struct Partition {
 /// `thread_rng` helper is `!Send` because it holds an `Rc`). Pure read: nothing
 /// is persisted.
 pub async fn partition(db: &Db) -> Result<Partition> {
-    let mut rng = StdRng::from_rng(OsRng).expect("seeding StdRng from OS entropy");
+    let mut sys = SysRng;
+    let mut rng = StdRng::try_from_rng(&mut sys).expect("seeding StdRng from OS entropy");
     partition_with(db, &mut rng).await
 }
 
