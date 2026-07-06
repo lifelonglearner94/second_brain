@@ -83,7 +83,7 @@ but is destroyed by `docker compose down -v`:
   HTTPS downtime (or wait for the cert handshake, ~seconds once LE is
   reachable). There is no offsite copy to restore from — `caddy_data` is not the
   Brain File; the trade is a one-time re-issuance vs. the cost of backing up ACME
-  state, which is not worth it for a single-user system.
+  state, which is not worth it for a personal-scale system.
 
 ## Recovery procedure
 

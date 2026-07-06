@@ -13,7 +13,7 @@ The unit of bootstrap fetch — a single compressed JSON payload from the backen
 _Avoid_: graph dump, full graph response, initial load
 
 **Delta Sync**:
-The unit of incremental fetch — a payload of changes since last_sync_timestamp, pulled on window focus (and overlaid after a braindump ingestion response) to reconcile the Spatial View-Graph with backend truth. Carries additions (new concepts/edges from ingests the user didn't trigger, and retags from async ontology refactors — backend ADR-0003) as well as deletions. Replaces real-time push: the backend stays a stateless Axum server because the system is single-user — there is no collaborating actor to sync against, so brief visual staleness between focus events is an acceptable cost for not running WebSocket/SSE infrastructure. (See ADR-0002.)
+The unit of incremental fetch — a payload of changes since last_sync_timestamp, pulled on window focus (and overlaid after a braindump ingestion response) to reconcile the Spatial View-Graph with backend truth. Carries additions (new concepts/edges from ingests the user didn't trigger, and retags from async ontology refactors — backend ADR-0003) as well as deletions. Replaces real-time push: the backend stays a stateless Axum server because each user's graph is only mutated by that user themselves (per-user isolation, issues #72–74) — there is no cross-user sync surface, so brief visual staleness between focus events is an acceptable cost for not running WebSocket/SSE infrastructure. (See ADR-0002.)
 _Avoid_: refresh, sync, poll, update
 
 **Active Capture**:

@@ -3,7 +3,7 @@
 //! this buffer so the hidden admin tab can surface backend errors (e.g. Gemini
 //! generation failures) on the phone — the backend reading its own logs.
 //!
-//! Bounded by capacity: fixed memory, VPS-safe for the 8 GB single-user box.
+//! Bounded by capacity: fixed memory, VPS-safe for the 8 GB box.
 //! Logs are operational, not epistemic state, so they live in RAM (never the
 //! Brain File) and are lost on restart — the admin tab is a live tail, not an
 //! audit log.

@@ -8,7 +8,7 @@
 //! read backend internals. `/admin/invites*` is additionally behind
 //! `require_admin` (issue #73) — only an admin can mint or list invitations.
 //! The buffer is bounded (fixed capacity) and the `?limit` query caps the log
-//! response, so the endpoint is VPS-safe on the 8 GB single-user box.
+//! response, so the endpoint is VPS-safe on the 8 GB box.
 
 use axum::extract::{Extension, Query, State};
 use axum::response::Json;

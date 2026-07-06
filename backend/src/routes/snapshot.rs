@@ -8,8 +8,8 @@
 //! partition IDs (the frontend never runs Louvain). This is the full read;
 //! the incremental read is `GET /graph/delta` (issue #28).
 //!
-//! The payload is always gzipped (single-user scale, but the frontend fetches
-//! it all at once on app load). Sits behind the auth middleware (registered in
+//! The payload is always gzipped (per-user graphs are small at Personal-Scale,
+//! but the frontend fetches it all at once on app load). Sits behind the auth middleware (registered in
 //! [`crate::routes`] under the protected layer), like the other graph reads.
 
 use std::io::Write;

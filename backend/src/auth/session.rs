@@ -30,8 +30,8 @@ pub const SESSION_COOKIE_NAME: &str = "__Host-sb_session";
 /// room to spare; `URL_SAFE_NO_PAD` encoding yields a 43-char string.
 const SESSION_ID_BYTES: usize = 32;
 
-/// Session lifetime in seconds. Personal-scale, single-user: a long-lived
-/// session is fine here, but bounded so stale rows can be reaped.
+/// Session lifetime in seconds. Personal-scale: a long-lived session is fine
+/// here, but bounded so stale rows can be reaped.
 const SESSION_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 /// A base64url-encoded opaque session id. Construction is the only mint path.

@@ -13,7 +13,7 @@ The build output of the frontend (SvelteKit `adapter-static`), baked into the Ed
 _Avoid_: static files, build folder, dist, frontend image, static assets
 
 **Brain File**:
-The single SQLite database file holding the entire persistent state of the Second Brain — every braindump, concept, edge, provenance entry, type-history entry, and embedding (sqlite-vec, in-process with the graph). One file, one brain; the load-bearing artifact the rest of the infrastructure orbits. Lives on a named Docker volume mounted into the backend container; never bind-mounted, never baked into an image.
+The single SQLite database file holding the entire persistent state of the Second Brain — every user's braindumps, concepts, edges, provenance entries, type-history entries, and embeddings (sqlite-vec, in-process with the graph, partitioned by `user_id`). One file, many per-user brains; the load-bearing artifact the rest of the infrastructure orbits. Lives on a named Docker volume mounted into the backend container; never bind-mounted, never baked into an image.
 _Avoid_: the database, the DB, sqlite file, data volume, datastore
 
 **Brain Replica**:

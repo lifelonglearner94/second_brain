@@ -1,10 +1,10 @@
 # Second Brain
 
-A single-user, voice-first **Progressive Web App** that turns your stream of thoughts into a living knowledge graph — and lets you chat with your own mind.
+A voice-first **Progressive Web App** that turns each user's stream of thoughts into a living knowledge graph — and lets them chat with their own mind. Invite-gated multi-user: every user carries their own isolated brain.
 
 Speak or type a thought (a *braindump*); a hosted LLM extracts *concepts* and typed *edges* out of it, the graph accretes over time, and you navigate it as an interactive 3D/2D force-directed visualization or query it through grounded, cited chat. The graph is load-bearing; vectors are seed and backfill. Nothing the LLM deduces enters the graph silently — every inference is a human-gated proposal.
 
-> **Personal-Scale, Single-User.** One brain, one user, one 8 GB VPS. The entire persistent state of the system is a single SQLite file — the **Brain File** — streamed second-by-second to offsite object storage. The architecture is deliberately sized to one human's decade of thinking, not to a fleet.
+> **Personal-Scale, Multi-User.** One brain per user, one 8 GB VPS. Each user's persistent state is scoped by `user_id` within a single SQLite file — the **Brain File** — streamed second-by-second to offsite object storage. The architecture is deliberately sized to one human's decade of thinking per user, not to a fleet.
 
 ---
 
@@ -84,7 +84,7 @@ Every non-auth handler is a thin HTTP adapter — the pipeline logic lives in do
 
 ### Auth
 
-WebAuthn **passkey** (primary) via `webauthn-rs`, with an opaque session cookie — **no JWT in `localStorage`** (rejected as an XSS anti-pattern). The server mints a ≥256-bit opaque session id stored in a SQLite row, set as `__Host-sb_session` `httpOnly; Secure; SameSite=Strict`. A deploy-time **singleton lock** closes registration once one passkey exists (one user, one passkey). `require_session` middleware guards protected routes.
+WebAuthn **passkey** (primary) via `webauthn-rs`, with an opaque session cookie — **no JWT in `localStorage`** (rejected as an XSS anti-pattern). The server mints a ≥256-bit opaque session id stored in a SQLite row, set as `__Host-sb_session` `httpOnly; Secure; SameSite=Strict`. Registration is **invite-gated**: an admin-issued invitation token is required to bind a passkey, with a one-time bootstrap exception that creates the admin when zero users exist (issues #72–74). `require_session` middleware guards protected routes, and every domain read/write is scoped by the calling session's `user_id` (per-user graph isolation).
 
 ### Ingest → extraction → accretion pipeline
 
@@ -179,7 +179,7 @@ Measured on the live VPS (2 vCPU, 3.8 GiB RAM) with a 1-user browsing mix hittin
 | **Litestream** | ~31.3 MiB | ~0.08% | +0.3 MiB, peak 1.4% | — |
 | **Host** | 650 MiB used, 3.27 GiB available | — | delta within noise | — |
 
-**Headline:** at current scale (1 braindump, 5 concepts, 4 edges) the three services cost **~51 MiB of container RAM and ~0% CPU** — i.e. essentially their idle footprint. The expensive work is the **Gemini LLM calls** (`/braindumps` extraction, `/retrieve`, `/chat`), and those run on Google's servers — they cost latency + API spend + egress, *not* local RAM/CPU. As the brain grows, `/graph` (full gzipped snapshot) and `/thematic` (Louvain over `petgraph`) become the local cost centers. The `docker stats` (cgroup) vs `VmRSS` gap is real: most of the Rust binary's RSS is shared, evictable code pages; its unique heap is ~3–4 MiB. **Theoretical parallel capacity:** the 2 vCPU / 3.8 GiB box can sustain ~2000 local read requests per second (CPU-bound at ~1 ms each, with ~3 GiB free RAM allowing far more idle connections) — enough for thousands of concurrently-browsing users on reads — but the single-user Brain File architecture and the offloaded Gemini rate limits, not the VPS, are the real ceiling, so the box is nowhere near saturated.
+**Headline:** at current scale (1 braindump, 5 concepts, 4 edges) the three services cost **~51 MiB of container RAM and ~0% CPU** — i.e. essentially their idle footprint. The expensive work is the **Gemini LLM calls** (`/braindumps` extraction, `/retrieve`, `/chat`), and those run on Google's servers — they cost latency + API spend + egress, *not* local RAM/CPU. As the brain grows, `/graph` (full gzipped snapshot) and `/thematic` (Louvain over `petgraph`) become the local cost centers. The `docker stats` (cgroup) vs `VmRSS` gap is real: most of the Rust binary's RSS is shared, evictable code pages; its unique heap is ~3–4 MiB. **Theoretical parallel capacity:** the 2 vCPU / 3.8 GiB box can sustain ~2000 local read requests per second (CPU-bound at ~1 ms each, with ~3 GiB free RAM allowing far more idle connections) — enough for thousands of concurrently-browsing users on reads — but the single-writer SQLite Brain File (one writer, per-user isolated) and the offloaded Gemini rate limits, not the VPS, are the real ceiling, so the box is nowhere near saturated.
 
 ---
 
@@ -341,7 +341,7 @@ This repo is set up for the Matt Pocock engineering skills. [`AGENTS.md`](./AGEN
 
 ## Notes
 
-- The project is **single-user, German-first** (`docs/first_draft.md` is the vision doc, written in German). Deepgram STT defaults to `de`; Web Speech fallback uses `de-DE`.
+- The project is **invite-gated multi-user, German-first** (`docs/first_draft.md` is the vision doc, written in German). Deepgram STT defaults to `de`; Web Speech fallback uses `de-DE`.
 - **No LLM is self-hosted.** Extraction, cleaning, synthesis, and embeddings all go through hosted Gemini APIs; the VPS stays slim and the pipeline stays deterministic. The custom Rust graph engine is intentionally stricter than LightRAG (typed edges, origin-typed provenance, governed ontology, event-sourced type history) — the project borrows LightRAG's retrieval *algorithm*, not its library.
 - The repo is **public**, which is what makes ADR-0010's config-sync-on-deploy safe (fetch from `raw.githubusercontent.com` needs no auth and introduces no new secret).
 
