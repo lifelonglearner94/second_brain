@@ -10,8 +10,8 @@
 //! mints, looks up, and invalidates ids. The routes attach the cookie.
 
 use base64::Engine;
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::TryRng;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -93,9 +93,10 @@ fn encode_id(bytes: &[u8]) -> String {
 pub async fn mint_session(db: &Db, user_id: &str) -> Result<SessionInfo> {
     let user_id = user_id.to_string();
     db.with_conn(move |conn| {
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         let mut bytes = vec![0u8; SESSION_ID_BYTES];
-        rng.fill_bytes(&mut bytes);
+        rng.try_fill_bytes(&mut bytes)
+            .expect("filling session id bytes from OS entropy");
         let id = encode_id(&bytes);
         // Uniqueness: 256-bit CSPRNG collision is astronomically unlikely; the
         // PRIMARY KEY is the backstop. On the (impossible) collision we re-roll.
@@ -193,7 +194,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalidated_session_id_is_not_reused_for_a_new_mint() {
-        // Mint two sessions and confirm distinct ids — sanity check OsRng.
+        // Mint two sessions and confirm distinct ids — sanity check SysRng.
         let db = Db::open_in_memory().unwrap();
         let a = mint_session(&db, "me").await.unwrap();
         let b = mint_session(&db, "me").await.unwrap();
