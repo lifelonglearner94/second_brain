@@ -1,5 +1,5 @@
 # --- build stage -------------------------------------------------------------
-FROM rust:1.96-bookworm AS build
+FROM rust:1.96-trixie AS build
 WORKDIR /app
 # sqlite-vec and bundled SQLite compile C; we use rustls (no system SSL).
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,7 +12,7 @@ COPY tests ./tests
 RUN cargo build --release
 
 # --- runtime stage -----------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
