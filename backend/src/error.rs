@@ -25,6 +25,11 @@ pub enum Error {
     #[error("conflict: {0}")]
     Conflict(String),
 
+    /// Issue #74: an invitation was already consumed (or is being reused). 410
+    /// Gone — the resource existed but is no longer available for this purpose.
+    #[error("gone: {0}")]
+    Gone(String),
+
     #[error("unauthorized")]
     Unauthorized,
 
@@ -53,6 +58,7 @@ impl IntoResponse for Error {
             Error::NotFound(_) => StatusCode::NOT_FOUND,
             Error::BadRequest(_) => StatusCode::BAD_REQUEST,
             Error::Conflict(_) => StatusCode::CONFLICT,
+            Error::Gone(_) => StatusCode::GONE,
             Error::WebAuthn(_) => StatusCode::BAD_REQUEST,
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
             Error::Forbidden => StatusCode::FORBIDDEN,

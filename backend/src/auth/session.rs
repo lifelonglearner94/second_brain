@@ -213,7 +213,13 @@ mod tests {
 
     #[tokio::test]
     async fn mint_then_lookup_then_invalidate() {
-        let db = Db::open_in_memory().unwrap();
+        // `Db::open(":memory:")` starts with zero users (the migration no longer
+        // seeds the admin); stand the admin up explicitly the way the bootstrap
+        // registration does before minting.
+        let db = Db::open(":memory:").unwrap();
+        crate::db::seed_bootstrap_admin_for_tests(&db)
+            .await
+            .unwrap();
         let s = mint_session(&db, "00000000-0000-0000-0000-000000000001")
             .await
             .unwrap();
@@ -232,7 +238,10 @@ mod tests {
     #[tokio::test]
     async fn invalidated_session_id_is_not_reused_for_a_new_mint() {
         // Mint two sessions and confirm distinct ids — sanity check SysRng.
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open(":memory:").unwrap();
+        crate::db::seed_bootstrap_admin_for_tests(&db)
+            .await
+            .unwrap();
         let a = mint_session(&db, "00000000-0000-0000-0000-000000000001")
             .await
             .unwrap();

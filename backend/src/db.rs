@@ -52,9 +52,23 @@ impl Db {
         Ok(Self(Arc::new(Mutex::new(conn))))
     }
 
-    /// Convenience for tests and ephemeral instances.
+    /// Convenience for tests and ephemeral instances. Issue #74: under the
+    /// `test-support` feature (active for every `cargo test` target — unit and
+    /// integration — via the dev-dependency self-link), this also stands the
+    /// bootstrap admin up (the `users` row with `is_admin = 1` plus its
+    /// day-zero ontology) the way the bootstrap `register_finish` would, so
+    /// the many tests that mint admin sessions or submit admin braindumps
+    /// without driving the WebAuthn dance keep working. Production uses
+    /// [`Db::open`](Self::open) with a file path and never calls this, so the
+    /// bootstrap exception still fires on a fresh deploy (zero users).
     pub fn open_in_memory() -> Result<Self> {
-        Self::open(":memory:")
+        let db = Self::open(":memory:")?;
+        #[cfg(feature = "test-support")]
+        {
+            let conn = db.0.lock().expect("db mutex poisoned");
+            seed_bootstrap_admin_conn(&conn)?;
+        }
+        Ok(db)
     }
 
     /// Create the `sqlite-vec` vec0 virtual tables for concept and braindump
@@ -172,21 +186,22 @@ fn vec_table_has_user_id(conn: &Connection, table: &str) -> bool {
 /// constant) is migrated into a real admin row on the `users` table — the
 /// bootstrap admin — so no existing data is orphaned.
 fn migrate(conn: &Connection) -> Result<()> {
-    // Issue #72 — the `users` table. `passkeys.user_id` and `sessions.user_id`
-    // reference it (forward-only: the FK is added on fresh DBs; existing DBs
-    // keep the TEXT column and rely on the matching row). The bootstrap admin
-    // row is inserted idempotently so the existing single-user account maps to
-    // a real `users` row.
+    // Issue #72 / #74 — the `users` table. Issue #72 seeded the bootstrap
+    // admin row here idempotently; issue #74 removes that seed so a fresh
+    // deploy starts with zero users and the bootstrap exception (first
+    // `register_finish` with no invitation, `SELECT COUNT(*) FROM users == 0`)
+    // can fire to create the admin. Existing databases already ran the #72
+    // seed, so their admin row persists (forward-only: removing the
+    // `INSERT OR IGNORE` does not delete existing rows). `passkeys.user_id`
+    // and `sessions.user_id` reference this table; fresh DBs create the
+    // columns with the FK, existing DBs keep the TEXT column.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS users (
             id           TEXT PRIMARY KEY,
             display_name TEXT NOT NULL,
             is_admin     INTEGER NOT NULL DEFAULT 0,
             created_at   INTEGER NOT NULL
-        );
-
-        INSERT OR IGNORE INTO users (id, display_name, is_admin, created_at)
-        VALUES ('00000000-0000-0000-0000-000000000001', 'me', 1, unixepoch());",
+        );",
     )?;
 
     // Issue #2 — passkey auth + opaque sessions. The `user_id` columns now
@@ -422,15 +437,67 @@ fn backfill_user_id(conn: &Connection, table: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether a `users` row with `id` exists. Used by the ontology migration to
+/// decide whether seeding the bootstrap admin's vocabulary would FK-violate
+/// (issue #74: a fresh DB has no admin row until the bootstrap registration
+/// creates it).
+fn admin_row_exists(conn: &Connection, id: &str) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM users WHERE id = ?1",
+        params![id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
+/// Test-only sync core: insert the bootstrap admin row (id
+/// `BOOTSTRAP_ADMIN_USER_ID`, `is_admin = 1`) and seed its day-zero ontology,
+/// mirroring what the bootstrap `register_finish` does on a fresh deploy.
+/// Idempotent — safe to call multiple times. Used by [`Db::open_in_memory`]
+/// under `test-support` and by [`seed_bootstrap_admin_for_tests`].
+#[cfg(any(test, feature = "test-support"))]
+fn seed_bootstrap_admin_conn(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO users (id, display_name, is_admin, created_at)
+         VALUES (?1, 'me', 1, unixepoch())",
+        params![BOOTSTRAP_ADMIN_USER_ID],
+    )?;
+    seed_ontology_for_user_conn(conn, BOOTSTRAP_ADMIN_USER_ID)?;
+    Ok(())
+}
+
+/// Test-only: insert the bootstrap admin row (id `BOOTSTRAP_ADMIN_USER_ID`,
+/// `is_admin = 1`) and seed its day-zero ontology, mirroring what the
+/// bootstrap `register_finish` does on a fresh deploy. Issue #74 removed the
+/// migration's automatic admin seed so the bootstrap exception can fire on
+/// fresh DBs; integration tests that exercise the admin account (minting
+/// sessions, submitting braindumps as the admin) without going through the
+/// WebAuthn registration dance call this to stand the admin up. Idempotent —
+/// safe to call multiple times. Available under `cfg(test)` and the
+/// `test-support` feature. (Most tests get this for free via
+/// [`Db::open_in_memory`], which seeds under `test-support`; this helper is
+/// for tests that open a DB via [`Db::open`](Db::open) and later need the
+/// admin.)
+#[cfg(any(test, feature = "test-support"))]
+pub async fn seed_bootstrap_admin_for_tests(db: &Db) -> Result<()> {
+    db.with_conn(|conn| seed_bootstrap_admin_conn(conn).map(|_| ()))
+        .await
+}
+
 /// Migrate the `ontology` table from the pre-issue-72 single-shared-vocabulary
 /// schema (`slug UNIQUE`) to the per-user schema (`(user_id, slug) UNIQUE`).
 ///
 /// On a fresh DB the table does not exist yet, so this function creates it
-/// with the per-user schema and seeds the bootstrap admin's day-zero
-/// vocabulary. On an existing DB the old table has `slug UNIQUE` and no
-/// `user_id`; this function creates a new table with the per-user schema,
-/// copies the old rows with the bootstrap admin's `user_id`, drops the old
-/// table, and renames the new one. No data is lost.
+/// with the per-user schema. Issue #74: the bootstrap admin's day-zero
+/// vocabulary is no longer seeded here on a fresh DB (the admin row does not
+/// exist until the bootstrap registration creates it); instead the bootstrap
+/// `register_finish` seeds the admin's ontology after inserting the `users`
+/// row. On an existing DB the old table has `slug UNIQUE` and no `user_id`;
+/// this function creates a new table with the per-user schema, copies the old
+/// rows with the bootstrap admin's `user_id`, drops the old table, and renames
+/// the new one. No data is lost. On already-migrated existing DBs the admin
+/// row exists (from the #72 migration), so the idempotent re-seed is safe.
 fn migrate_ontology_to_per_user(conn: &Connection) -> Result<()> {
     // Check whether the `ontology` table exists at all.
     let table_exists: i64 = conn.query_row(
@@ -440,8 +507,10 @@ fn migrate_ontology_to_per_user(conn: &Connection) -> Result<()> {
     )?;
 
     if table_exists == 0 {
-        // Fresh DB: create the table with the per-user schema and seed the
-        // bootstrap admin's day-zero vocabulary.
+        // Fresh DB: create the table with the per-user schema. The bootstrap
+        // admin's vocabulary is seeded by `register_finish` (issue #74) once
+        // the admin row exists — seeding here would FK-violate on a fresh DB
+        // with no users.
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS ontology (
                 id           INTEGER PRIMARY KEY,
@@ -453,7 +522,6 @@ fn migrate_ontology_to_per_user(conn: &Connection) -> Result<()> {
                 UNIQUE (user_id, slug)
             );",
         )?;
-        seed_ontology_for_user_conn(conn, BOOTSTRAP_ADMIN_USER_ID)?;
         return Ok(());
     }
 
@@ -464,9 +532,12 @@ fn migrate_ontology_to_per_user(conn: &Connection) -> Result<()> {
         |r| r.get(0),
     )?;
     if has_user_id > 0 {
-        // Already migrated: seed the bootstrap admin idempotently (no-op if
-        // already seeded).
-        seed_ontology_for_user_conn(conn, BOOTSTRAP_ADMIN_USER_ID)?;
+        // Already migrated. Re-seed the bootstrap admin idempotently, but only
+        // if the admin row exists (issue #74: a fresh DB may have the table
+        // from a prior partial state with no admin yet).
+        if admin_row_exists(conn, BOOTSTRAP_ADMIN_USER_ID) {
+            seed_ontology_for_user_conn(conn, BOOTSTRAP_ADMIN_USER_ID)?;
+        }
         return Ok(());
     }
 
@@ -633,24 +704,59 @@ mod tests {
         .unwrap();
     }
 
-    /// Issue #72: the bootstrap admin row must exist on the `users` table so
-    /// the existing single-user account maps to a real `users` row.
+    /// Issue #74: the bootstrap admin row is NO longer seeded by the
+    /// migration (the bootstrap `register_finish` creates it on first
+    /// registration when `SELECT COUNT(*) FROM users == 0`). A fresh DB
+    /// starts with zero users so the bootstrap exception can fire. Uses
+    /// [`Db::open`](Db::open) directly (not `open_in_memory`, which seeds the
+    /// admin under `test-support` for the convenience of the other tests).
     #[tokio::test]
-    async fn bootstrap_admin_row_exists() {
-        let db = Db::open_in_memory().unwrap();
+    async fn bootstrap_admin_row_not_seeded_by_migration() {
+        let db = Db::open(":memory:").unwrap();
         db.with_conn(|conn| {
-            let row: (String, String, i64) = conn.query_row(
-                "SELECT id, display_name, is_admin FROM users WHERE id = ?1",
-                params![BOOTSTRAP_ADMIN_USER_ID],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )?;
-            assert_eq!(row.0, BOOTSTRAP_ADMIN_USER_ID);
-            assert_eq!(row.1, "me");
-            assert_eq!(row.2, 1, "bootstrap admin must be is_admin=1");
+            let count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
+            assert_eq!(count, 0, "fresh DB must start with zero users");
+            assert!(
+                !admin_row_exists(conn, BOOTSTRAP_ADMIN_USER_ID),
+                "bootstrap admin must not exist until registration creates it"
+            );
             Ok(())
         })
         .await
         .unwrap();
+    }
+
+    /// Issue #74: `seed_bootstrap_admin_for_tests` stands the admin up the way
+    /// the bootstrap registration does — inserts the `users` row with
+    /// `is_admin = 1` and seeds the day-zero ontology. Idempotent. Uses
+    /// `Db::open(":memory:")` (zero users) so the helper is the thing under
+    /// test, not `open_in_memory`'s test-support seed.
+    #[tokio::test]
+    async fn seed_bootstrap_admin_for_tests_creates_admin_and_seeds_ontology() {
+        let db = Db::open(":memory:").unwrap();
+        // Before: zero users (the migration no longer seeds the admin).
+        db.with_conn(|conn| {
+            assert!(!admin_row_exists(conn, BOOTSTRAP_ADMIN_USER_ID));
+            Ok(())
+        })
+        .await
+        .unwrap();
+        seed_bootstrap_admin_for_tests(&db).await.unwrap();
+        db.with_conn(|conn| {
+            let row: (String, i64) = conn.query_row(
+                "SELECT display_name, is_admin FROM users WHERE id = ?1",
+                params![BOOTSTRAP_ADMIN_USER_ID],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            assert_eq!(row.0, "me");
+            assert_eq!(row.1, 1, "bootstrap admin must be is_admin=1");
+            assert!(admin_row_exists(conn, BOOTSTRAP_ADMIN_USER_ID));
+            Ok(())
+        })
+        .await
+        .unwrap();
+        // Idempotent: a second call is a no-op.
+        seed_bootstrap_admin_for_tests(&db).await.unwrap();
     }
 
     /// The day-zero edge-type vocabulary the LLM draws from. Independent of the
@@ -674,7 +780,11 @@ mod tests {
 
     #[tokio::test]
     async fn ontology_table_is_seeded_with_edge_types() {
-        let db = Db::open_in_memory().unwrap();
+        // `Db::open(":memory:")` starts with zero users (the migration no longer
+        // seeds the admin); stand the admin up explicitly the way the bootstrap
+        // registration does, then assert the seed landed.
+        let db = Db::open(":memory:").unwrap();
+        seed_bootstrap_admin_for_tests(&db).await.unwrap();
         db.with_conn(|conn| {
             let mut stmt =
                 conn.prepare("SELECT slug, label, description FROM ontology ORDER BY id")?;
@@ -724,7 +834,11 @@ mod tests {
 
     #[tokio::test]
     async fn ontology_seed_is_idempotent() {
-        let db = Db::open_in_memory().unwrap();
+        // `Db::open(":memory:")` starts with zero users; stand the admin up
+        // explicitly (the bootstrap registration path), then assert the
+        // ontology seed is idempotent across re-migration.
+        let db = Db::open(":memory:").unwrap();
+        seed_bootstrap_admin_for_tests(&db).await.unwrap();
         let count_first = db
             .with_conn(|conn| {
                 Ok(conn.query_row("SELECT COUNT(*) FROM ontology", [], |r| r.get::<_, i64>(0))?)
@@ -740,7 +854,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(count_first > 0, "ontology must be seeded on first open");
+        assert!(count_first > 0, "ontology must be seeded for the admin");
         assert_eq!(
             count_first, count_second,
             "re-migrating must not duplicate seeds"

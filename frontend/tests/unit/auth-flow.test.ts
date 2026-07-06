@@ -79,7 +79,10 @@ const LOGIN_BEGIN: LoginBegin = {
 	challenge: { publicKey: REQUEST_OPTIONS },
 	state: 'state-2'
 };
-const REGISTRATION_FINISH_OK = { registered: true } as const;
+const REGISTRATION_FINISH_OK = {
+	registered: true,
+	user_id: '00000000-0000-0000-0000-000000000001'
+} as const;
 const LOGIN_OK: LoginOk = { user_id: '00000000-0000-0000-0000-000000000001' };
 const RECOVER_RES: RecoverResponse = {
 	error: 'recovery_not_implemented',
@@ -90,13 +93,13 @@ const RECOVER_RES: RecoverResponse = {
 describe('registerPasskey — the begin→WebAuthn→finish orchestration', () => {
 	beforeEach(() => vi.clearAllMocks());
 
-	it('forwards the begin challenge to startRegistration and posts the credential + state to finish', async () => {
+	it('threads the invite token through begin and posts the credential + state to finish, returning user_id', async () => {
 		vi.mocked(startRegistration).mockResolvedValue(REGISTRATION_RESPONSE);
 		const api = flowApiStub();
 		api.registerBegin.mockResolvedValue(REGISTRATION_BEGIN);
 		api.registerFinish.mockResolvedValue(REGISTRATION_FINISH_OK);
-		await registerPasskey(api);
-		expect(api.registerBegin).toHaveBeenCalledOnce();
+		const res = await registerPasskey(api, 'invite-token-abc');
+		expect(api.registerBegin).toHaveBeenCalledWith('invite-token-abc');
 		expect(startRegistration).toHaveBeenCalledWith({
 			optionsJSON: CREATION_OPTIONS
 		});
@@ -104,6 +107,16 @@ describe('registerPasskey — the begin→WebAuthn→finish orchestration', () =
 			credential: REGISTRATION_RESPONSE,
 			state: 'state-1'
 		} satisfies RegistrationFinishBody);
+		expect(res).toEqual({ user_id: '00000000-0000-0000-0000-000000000001' });
+	});
+
+	it('passes no invite (undefined) to begin when none is supplied (bootstrap path)', async () => {
+		vi.mocked(startRegistration).mockResolvedValue(REGISTRATION_RESPONSE);
+		const api = flowApiStub();
+		api.registerBegin.mockResolvedValue(REGISTRATION_BEGIN);
+		api.registerFinish.mockResolvedValue(REGISTRATION_FINISH_OK);
+		await registerPasskey(api);
+		expect(api.registerBegin).toHaveBeenCalledWith(undefined);
 	});
 
 	it('does not call finish when the user cancels the authenticator prompt (error propagates)', async () => {
