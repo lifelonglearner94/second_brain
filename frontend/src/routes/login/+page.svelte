@@ -60,116 +60,217 @@
 	}
 </script>
 
-<main>
-	<header>
-		<h1>Sign in</h1>
+<main class="page page-narrow login">
+	<section class="login-card rise">
+		<header class="login-head">
+			<div class="brand-mark" aria-hidden="true">
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="1.6"
+				>
+					<circle cx="6" cy="7" r="2.2" />
+					<circle cx="18" cy="7" r="2.2" />
+					<circle cx="12" cy="17" r="2.6" />
+					<path d="M7.6 8.4 10.6 15" />
+					<path d="M16.4 8.4 13.4 15" />
+					<path d="M8.2 7 15.8 7" />
+				</svg>
+			</div>
+			<div>
+				<p class="eyebrow">Second Brain</p>
+				<h1>Sign in</h1>
+			</div>
+		</header>
 		<p class="tagline">Passkey-only authentication. No passwords.</p>
-	</header>
 
-	{#if !supported}
-		<p data-testid="webauthn-unsupported" class="warn">
-			This browser does not support passkeys (WebAuthn).
+		{#if !supported}
+			<p class="warn pill pill-warn" data-testid="webauthn-unsupported">
+				This browser does not support passkeys (WebAuthn).
+			</p>
+		{/if}
+
+		<form
+			class="auth-form"
+			data-testid="auth-form"
+			onsubmit={(e) => e.preventDefault()}
+		>
+			<button
+				type="button"
+				class="btn btn-primary auth-action"
+				data-testid="login-button"
+				onclick={onLogin}
+				disabled={busy !== null}
+			>
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="1.8"
+					aria-hidden="true"
+				>
+					<rect x="4" y="10" width="16" height="11" rx="2.5" />
+					<path d="M8 10V7a4 4 0 1 1 8 0v3" />
+				</svg>
+				{busy === 'login' ? 'Signing in…' : 'Sign in with passkey'}
+			</button>
+
+			<button
+				type="button"
+				class="btn auth-action"
+				data-testid="register-button"
+				onclick={onRegister}
+				disabled={busy !== null}
+			>
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="1.8"
+					aria-hidden="true"
+				>
+					<path d="M12 5v14M5 12h14" />
+				</svg>
+				{busy === 'register' ? 'Registering…' : 'Register a passkey'}
+			</button>
+
+			<button
+				type="button"
+				class="btn btn-secondary auth-action"
+				data-testid="recover-button"
+				onclick={onRecover}
+				disabled={busy !== null}
+			>
+				{busy === 'recover' ? 'Recovering…' : 'Recover with master passphrase'}
+			</button>
+
+			{#if status}
+				<p class="status pill pill-info" data-testid="auth-status">
+					{status}
+				</p>
+			{/if}
+			{#if recoverMessage}
+				<p class="status pill pill-info" data-testid="recover-message">
+					{recoverMessage}
+				</p>
+			{/if}
+			{#if error}
+				<p class="error pill pill-danger" data-testid="auth-error">
+					{error}
+				</p>
+			{/if}
+		</form>
+
+		<p class="back">
+			<a href="/" data-testid="goto-home">
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					aria-hidden="true"
+				>
+					<path d="M15 18l-6-6 6-6" />
+				</svg>
+				Back to home
+			</a>
 		</p>
-	{/if}
-
-	<form data-testid="auth-form" onsubmit={(e) => e.preventDefault()}>
-		<button
-			type="button"
-			data-testid="register-button"
-			onclick={onRegister}
-			disabled={busy !== null}
-		>
-			{busy === 'register' ? 'Registering…' : 'Register a passkey'}
-		</button>
-
-		<button
-			type="button"
-			data-testid="login-button"
-			onclick={onLogin}
-			disabled={busy !== null}
-		>
-			{busy === 'login' ? 'Signing in…' : 'Sign in with passkey'}
-		</button>
-
-		<button
-			type="button"
-			data-testid="recover-button"
-			class="secondary"
-			onclick={onRecover}
-			disabled={busy !== null}
-		>
-			{busy === 'recover' ? 'Recovering…' : 'Recover with master passphrase'}
-		</button>
-
-		{#if status}
-			<p data-testid="auth-status" class="status">{status}</p>
-		{/if}
-		{#if recoverMessage}
-			<p data-testid="recover-message" class="status">{recoverMessage}</p>
-		{/if}
-		{#if error}
-			<p data-testid="auth-error" class="error">{error}</p>
-		{/if}
-	</form>
-
-	<p><a href="/" data-testid="goto-home">Back to home</a></p>
+	</section>
 </main>
 
 <style>
-	main {
-		max-inline-size: 28rem;
-		margin-inline: auto;
-		padding: 2rem 1rem;
-		font-family:
-			system-ui,
-			-apple-system,
-			sans-serif;
-		color: #e6e8ec;
-		background: #0b0d12;
-		min-block-size: 100vh;
-		box-sizing: border-box;
+	.login {
+		display: grid;
+		place-items: center;
+		min-block-size: 100dvh;
 	}
-	h1 {
-		margin: 0 0 0.25rem;
-		font-size: clamp(1.5rem, 4vw, 2rem);
+	.login-card {
+		width: 100%;
+		display: grid;
+		gap: var(--space-4);
+		padding: var(--space-8);
+		background: var(--surface-glass);
+		border: 1px solid var(--border-hairline);
+		border-radius: var(--radius-xl);
+		box-shadow: var(--shadow-2);
+		backdrop-filter: blur(14px) saturate(120%);
+		-webkit-backdrop-filter: blur(14px) saturate(120%);
+	}
+	.login-head {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+	}
+	.brand-mark {
+		display: grid;
+		place-items: center;
+		inline-size: 2.5rem;
+		block-size: 2.5rem;
+		flex: 0 0 auto;
+		color: var(--accent);
+		background: var(--accent-soft);
+		border: 1px solid var(--border-accent);
+		border-radius: var(--radius-md);
+		box-shadow: 0 0 24px -10px var(--accent-glow);
+	}
+	.brand-mark svg {
+		inline-size: 1.4rem;
+		block-size: 1.4rem;
+	}
+	.login-head h1 {
+		font-size: var(--fs-22);
+		font-weight: 600;
 	}
 	.tagline {
-		margin: 0 0 1.5rem;
-		color: #9aa3b2;
-	}
-	form {
-		display: grid;
-		gap: 0.75rem;
-	}
-	button {
-		padding: 0.75rem 1rem;
-		font-size: 1rem;
-		border: 1px solid #2a2f3a;
-		border-radius: 0.5rem;
-		background: #1a1f2b;
-		color: #e6e8ec;
-		cursor: pointer;
-	}
-	button:disabled {
-		opacity: 0.6;
-		cursor: progress;
-	}
-	button.secondary {
-		background: transparent;
-		color: #9aa3b2;
-	}
-	.status {
-		color: #7ab7ff;
-		margin: 0;
+		color: var(--fg-muted);
+		font-size: var(--fs-14);
+		margin-block-end: var(--space-2);
 	}
 	.warn {
-		color: #ffb077;
+		padding: 0.5rem 0.8rem;
+		font-size: var(--fs-13);
+		text-transform: none;
+		letter-spacing: normal;
 	}
+	.auth-form {
+		display: grid;
+		gap: var(--space-3);
+		padding-block: var(--space-2);
+	}
+	.auth-action {
+		min-block-size: 48px;
+		justify-content: center;
+		font-size: var(--fs-16);
+	}
+	.auth-action svg {
+		inline-size: 1.15rem;
+		block-size: 1.15rem;
+	}
+	.status,
 	.error {
-		color: #ff7a7a;
-		margin: 0;
+		padding: 0.5rem 0.8rem;
+		font-size: var(--fs-13);
+		text-transform: none;
+		letter-spacing: normal;
+		line-height: 1.4;
 	}
-	a {
-		color: #7ab7ff;
+	.back {
+		margin-block-start: var(--space-2);
+		text-align: center;
+	}
+	.back a {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1);
+		color: var(--fg-muted);
+		font-size: var(--fs-13);
+	}
+	.back a:hover {
+		color: var(--fg);
+	}
+	.back svg {
+		inline-size: 1rem;
+		block-size: 1rem;
 	}
 </style>

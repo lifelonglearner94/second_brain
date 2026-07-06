@@ -262,31 +262,50 @@
 	});
 </script>
 
-<main>
+<main class="graph-page">
 	<section class="graph-section" data-testid="graph-view" aria-live="polite">
 		<div class="graph-canvas" bind:this={graphContainer}></div>
+		<div class="graph-vignette" aria-hidden="true"></div>
 
 		{#if status === 'loading'}
-			<p class="status" data-testid="graph-loading">
-				Loading the Spatial View-Graph…
-			</p>
+			<div class="overlay overlay-status glass" data-testid="graph-loading">
+				<span class="dot-pulse" aria-hidden="true"></span>
+				<span>Loading the Spatial View-Graph…</span>
+			</div>
 		{:else if status === 'offline'}
-			<p class="status stale" data-testid="graph-offline">
-				{fetchedAtLabel}
-			</p>
+			<div
+				class="overlay overlay-status glass warn"
+				data-testid="graph-offline"
+			>
+				<span class="dot" aria-hidden="true"></span>
+				<span>{fetchedAtLabel}</span>
+			</div>
 		{:else if status === 'error'}
-			<p class="status error" data-testid="graph-error">
-				{fetchedAtLabel}
-			</p>
+			<div
+				class="overlay overlay-status glass danger"
+				data-testid="graph-error"
+			>
+				<span class="dot" aria-hidden="true"></span>
+				<span>{fetchedAtLabel}</span>
+			</div>
 		{:else}
-			<p class="status" data-testid="graph-ready">Spatial View-Graph ready.</p>
+			<div class="overlay overlay-status glass" data-testid="graph-ready">
+				<span class="dot ok" aria-hidden="true"></span>
+				<span>Spatial View-Graph ready.</span>
+			</div>
 		{/if}
 
-		<aside class="selected" data-testid="selected-node-panel">
+		<aside
+			class="overlay overlay-selected glass"
+			data-testid="selected-node-panel"
+		>
 			{#if selectedLabel}
-				<span data-testid="selected-node-label">{selectedLabel}</span>
+				<span class="selected-dot" aria-hidden="true"></span>
+				<span class="selected-label" data-testid="selected-node-label"
+					>{selectedLabel}</span
+				>
 			{:else}
-				<span class="muted" data-testid="selected-node-label"
+				<span class="selected-label muted" data-testid="selected-node-label"
 					>No concept selected.</span
 				>
 			{/if}
@@ -295,64 +314,105 @@
 </main>
 
 <style>
-	main {
-		padding: 1rem;
-		font-family:
-			system-ui,
-			-apple-system,
-			sans-serif;
-		color: #e6e8ec;
-		background: #0b0d12;
-		min-block-size: 100vh;
-		box-sizing: border-box;
+	.graph-page {
+		padding: var(--space-4);
+		min-block-size: 100dvh;
 	}
 	.graph-section {
 		position: relative;
-		border: 1px solid #2a2f3a;
-		border-radius: 0.5rem;
+		border: 1px solid var(--border-hairline);
+		border-radius: var(--radius-lg);
 		overflow: hidden;
-		block-size: calc(100vh - 6rem);
-		min-block-size: 20rem;
-		background: #0b0d12;
+		block-size: calc(100dvh - 6rem);
+		min-block-size: 22rem;
+		background: var(--bg-base);
+		box-shadow: var(--shadow-2);
 	}
 	.graph-canvas {
 		position: absolute;
 		inset: 0;
 	}
-	.status {
+	.graph-vignette {
 		position: absolute;
-		top: 0.75rem;
-		left: 0.75rem;
-		margin: 0;
-		padding: 0.4rem 0.6rem;
-		font-size: 0.85rem;
-		color: #9aa3b2;
-		background: rgba(11, 13, 18, 0.7);
-		border-radius: 0.4rem;
+		inset: 0;
+		pointer-events: none;
+		background: radial-gradient(
+			120% 80% at 50% 50%,
+			transparent 60%,
+			rgba(0, 0, 0, 0.45) 100%
+		);
+	}
+	.overlay {
+		position: absolute;
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: 0.45rem 0.75rem;
+		font-size: var(--fs-13);
+		color: var(--fg-muted);
 		pointer-events: none;
 	}
-	.status.stale {
-		color: #f0c674;
+	.overlay-status {
+		top: var(--space-3);
+		left: var(--space-3);
 	}
-	.status.error {
-		color: #ff7a7a;
+	.overlay-selected {
+		bottom: var(--space-3);
+		left: var(--space-3);
+		max-inline-size: calc(100% - 1.5rem);
+		color: var(--fg);
+		font-size: var(--fs-14);
 	}
-	.selected {
-		position: absolute;
-		bottom: 0.75rem;
-		left: 0.75rem;
-		margin: 0;
-		padding: 0.4rem 0.6rem;
-		font-size: 0.95rem;
-		color: #e6e8ec;
-		background: rgba(11, 13, 18, 0.7);
-		border-radius: 0.4rem;
-		pointer-events: none;
+	.overlay-status.warn {
+		color: var(--warn);
 	}
-	.selected .muted {
-		color: #9aa3b2;
+	.overlay-status.danger {
+		color: var(--danger);
 	}
-	.error {
-		color: #ff7a7a;
+	.dot {
+		inline-size: 7px;
+		block-size: 7px;
+		border-radius: 50%;
+		background: currentColor;
+		flex: 0 0 auto;
+	}
+	.dot.ok {
+		background: var(--success);
+		box-shadow: 0 0 8px -1px var(--success);
+	}
+	.dot-pulse {
+		inline-size: 7px;
+		block-size: 7px;
+		border-radius: 50%;
+		background: var(--accent);
+		box-shadow: 0 0 0 0 var(--accent-glow);
+		animation: pulse 1.6s var(--ease) infinite;
+	}
+	@keyframes pulse {
+		0% {
+			box-shadow: 0 0 0 0 var(--accent-glow);
+		}
+		70% {
+			box-shadow: 0 0 0 8px transparent;
+		}
+		100% {
+			box-shadow: 0 0 0 0 transparent;
+		}
+	}
+	.selected-dot {
+		inline-size: 7px;
+		block-size: 7px;
+		border-radius: 50%;
+		background: var(--accent);
+		box-shadow: 0 0 10px -1px var(--accent-glow);
+		flex: 0 0 auto;
+	}
+	.selected-label {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.selected-label.muted {
+		color: var(--fg-muted);
 	}
 </style>

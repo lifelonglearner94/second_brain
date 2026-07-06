@@ -58,38 +58,60 @@
 	});
 </script>
 
-<main>
-	<header>
-		<h1>
+<main class="page app-home">
+	<header class="appbar rise">
+		<div class="appbar-brand">
 			<button
 				type="button"
 				data-testid="app-title"
-				class="title-button"
-				onclick={onHeaderTap}>Second Brain</button
+				class="wordmark"
+				onclick={onHeaderTap}
+				aria-label="Second Brain"
 			>
-		</h1>
-		<p class="tagline">
-			Signed in as <code data-testid="user-id">{session.userId}</code>
-		</p>
-		{#if pendingCaptures.count > 0}
-			<a
-				href="/app/pending"
-				class="pending-link"
-				data-testid="pending-captures-link"
+				Second Brain
+			</button>
+			<span class="identity">
+				<span class="identity-dot" aria-hidden="true"></span>
+				<span class="identity-label">Signed in as</span>
+				<code class="mono" data-testid="user-id">{session.userId}</code>
+			</span>
+		</div>
+
+		<div class="appbar-actions">
+			{#if pendingCaptures.count > 0}
+				<a
+					href="/app/pending"
+					class="pill pill-warn pending-badge"
+					data-testid="pending-captures-link"
+				>
+					Pending Captures ({pendingCaptures.count})
+				</a>
+			{/if}
+			<button
+				type="button"
+				class="btn btn-secondary signout"
+				data-testid="logout-button"
+				onclick={onLogout}
+				disabled={busy}
 			>
-				Pending Captures ({pendingCaptures.count})
-			</a>
-		{/if}
-		<button
-			type="button"
-			data-testid="logout-button"
-			onclick={onLogout}
-			disabled={busy}
-		>
-			{busy ? 'Signing out…' : 'Sign out'}
-		</button>
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="1.8"
+					aria-hidden="true"
+				>
+					<path d="M9 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3" />
+					<path d="M16 17l5-5-5-5M21 12H9" />
+				</svg>
+				{busy ? 'Signing out…' : 'Sign out'}
+			</button>
+		</div>
+
 		{#if logoutError}
-			<p data-testid="logout-error" class="error">{logoutError}</p>
+			<p class="error pill pill-danger" data-testid="logout-error">
+				{logoutError}
+			</p>
 		{/if}
 		{#if headerTaps >= 5}
 			<p class="admin-entry">
@@ -98,7 +120,7 @@
 		{/if}
 	</header>
 
-	<section class="capture-section" data-testid="capture-section">
+	<section class="capture-section rise" data-testid="capture-section">
 		<ActiveCapture
 			ingest={ingestApi}
 			{deepgramApiKey}
@@ -110,84 +132,109 @@
 </main>
 
 <style>
-	main {
-		margin-inline: auto;
-		padding: 1rem;
-		font-family:
-			system-ui,
-			-apple-system,
-			sans-serif;
-		color: #e6e8ec;
-		background: #0b0d12;
-		min-block-size: 100vh;
-		box-sizing: border-box;
+	.app-home {
+		max-inline-size: 46rem;
+		display: grid;
+		gap: var(--space-6);
 	}
-	header {
+	.appbar {
 		display: flex;
 		align-items: center;
-		gap: 1rem;
 		flex-wrap: wrap;
-		margin-block-end: 1rem;
+		gap: var(--space-3) var(--space-4);
+		padding-block: var(--space-1) var(--space-4);
+		border-block-end: 1px solid var(--border-hairline);
 	}
-	h1 {
-		margin: 0;
-		font-size: clamp(1.25rem, 3vw, 1.5rem);
+	.appbar-brand {
+		display: flex;
+		align-items: baseline;
+		gap: var(--space-3);
+		flex-wrap: wrap;
 	}
-	.title-button {
+	.wordmark {
 		font: inherit;
-		color: inherit;
+		font-size: var(--fs-22);
+		font-weight: 700;
+		letter-spacing: -0.02em;
+		color: var(--fg);
 		background: transparent;
 		border: 0;
 		padding: 0;
 		margin: 0;
 		cursor: default;
 	}
-	.tagline {
-		margin: 0;
-		color: #9aa3b2;
+	.identity {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		font-size: var(--fs-13);
+		color: var(--fg-muted);
 	}
-	code {
-		font-family: monospace;
-		color: #7ab7ff;
+	.identity-dot {
+		inline-size: 6px;
+		block-size: 6px;
+		border-radius: 50%;
+		background: var(--success);
+		box-shadow: 0 0 8px -1px var(--success);
 	}
-	.pending-link {
-		color: #f0c674;
-		text-decoration: none;
-		font-size: 0.95rem;
-		padding: 0.4rem 0.8rem;
-		border: 1px solid #2a2f3a;
-		border-radius: 0.5rem;
-		background: #1a1f2b;
+	.identity-label {
+		color: var(--fg-subtle);
 	}
-	.pending-link:hover {
-		text-decoration: underline;
+	.identity code {
+		color: var(--accent);
 	}
-	.admin-entry {
-		margin: 0 0 1.5rem;
-	}
-	.admin-entry a {
-		color: #6b7280;
-		font-size: 0.85rem;
-		text-decoration: underline;
-	}
-	button {
+	.appbar-actions {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
 		margin-inline-start: auto;
-		padding: 0.5rem 1rem;
-		font-size: 0.95rem;
-		border: 1px solid #2a2f3a;
-		border-radius: 0.5rem;
-		background: #1a1f2b;
-		color: #e6e8ec;
-		cursor: pointer;
 	}
-	button:disabled {
-		opacity: 0.6;
-		cursor: progress;
+	.pending-badge {
+		text-transform: none;
+		letter-spacing: normal;
+		font-weight: 500;
 	}
-	.capture-section {
-		margin-block-end: 1rem;
+	.pending-badge:hover {
+		color: var(--warn);
+		background: var(--warn-soft);
+		border-color: var(--warn);
+	}
+	.signout {
+		min-block-size: 40px;
+	}
+	.signout svg {
+		inline-size: 1.05rem;
+		block-size: 1.05rem;
 	}
 	.error {
-		color: #ff7a7a;
+		flex-basis: 100%;
+		padding: 0.5rem 0.8rem;
+		font-size: var(--fs-13);
+		text-transform: none;
+		letter-spacing: normal;
+	}
+	.admin-entry {
+		flex-basis: 100%;
+		margin: 0;
+	}
+	.admin-entry a {
+		color: var(--fg-subtle);
+		font-size: var(--fs-13);
+		text-decoration: underline;
+	}
+	.admin-entry a:hover {
+		color: var(--fg-muted);
+	}
+	.capture-section {
+		display: grid;
+		gap: var(--space-4);
+	}
+
+	@media (max-width: 480px) {
+		.appbar-actions {
+			margin-inline-start: 0;
+			flex: 1 1 100%;
+			justify-content: flex-end;
+		}
 	}
 </style>

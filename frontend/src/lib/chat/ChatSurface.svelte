@@ -56,67 +56,103 @@
 
 <section class="chat-surface" data-testid="chat-surface">
 	{#if !online}
-		<p class="chat-offline" data-testid="chat-offline">
+		<div class="notice pill pill-warn" data-testid="chat-offline">
 			Chat unavailable offline — connect to use the backend LLM.
-		</p>
+		</div>
 	{/if}
+
 	<form
-		class="chat-form"
+		class="composer"
 		onsubmit={(e) => {
 			e.preventDefault();
 			void onSubmit();
 		}}
 	>
-		<label class="chat-label" for="chat-query">Ask your second brain</label>
-		<input
-			id="chat-query"
-			class="chat-input"
-			data-testid="chat-query-input"
-			type="text"
-			bind:value={query}
-			placeholder="What is on your mind?"
-			autocomplete="off"
-			disabled={!online}
-		/>
-		<button
-			type="submit"
-			class="chat-submit"
-			data-testid="chat-submit"
-			disabled={!online}>Ask</button
+		<label class="eyebrow composer-label" for="chat-query"
+			>Ask your second brain</label
 		>
+		<div class="composer-row">
+			<input
+				id="chat-query"
+				class="input composer-input"
+				data-testid="chat-query-input"
+				type="text"
+				bind:value={query}
+				placeholder="What is on your mind?"
+				autocomplete="off"
+				disabled={!online}
+			/>
+			<button
+				type="submit"
+				class="btn btn-primary composer-submit"
+				data-testid="chat-submit"
+				disabled={!online}
+			>
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"
+				>
+					<path d="M4 12l16-8-6 16-3-7-7-1Z" />
+				</svg>
+				Ask
+			</button>
+		</div>
 	</form>
 
 	{#if status === 'loading'}
-		<p class="chat-status" data-testid="chat-loading">
-			Synthesizing over your graph…
-		</p>
+		<div class="answer-card card loading" data-testid="chat-loading">
+			<span class="dot-pulse" aria-hidden="true"></span>
+			<span>Synthesizing over your graph…</span>
+		</div>
 	{:else if status === 'error'}
-		<p class="chat-error" data-testid="chat-error">
-			Could not answer: {errorText}
-		</p>
+		<div class="answer-card card error" data-testid="chat-error">
+			<span class="answer-error-label">Could not answer</span>
+			<span class="answer-error-detail">{errorText}</span>
+		</div>
 	{:else if response}
 		{#if response.silent}
-			<p class="chat-silence" data-testid="chat-explicit-silence">
-				{EXPLICIT_SILENCE}
-			</p>
+			<div class="answer-card card silence" role="status">
+				<div class="silence-mark" aria-hidden="true">
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.6"
+						stroke-linecap="round"
+					>
+						<path d="M5 12h14" />
+					</svg>
+				</div>
+				<p class="silence-text" data-testid="chat-explicit-silence">
+					{EXPLICIT_SILENCE}
+				</p>
+			</div>
 		{:else}
-			<p class="chat-answer" data-testid="chat-answer">
-				{#each segments as seg}
-					{#if seg.kind === 'text'}
-						{seg.text}
-					{:else}
-						<button
-							type="button"
-							class="chat-citation-chip"
-							data-testid="chat-citation-chip"
-							data-braindump-id={seg.braindumpId}
-							onclick={() => openCitation(seg.braindumpId)}
-						>
-							[{seg.index}]
-						</button>
-					{/if}
-				{/each}
-			</p>
+			<div class="answer-card card" data-testid="chat-answer">
+				<p class="answer-text">
+					{#each segments as seg}
+						{#if seg.kind === 'text'}
+							{seg.text}
+						{:else}
+							<button
+								type="button"
+								class="citation-chip"
+								data-testid="chat-citation-chip"
+								data-braindump-id={seg.braindumpId}
+								aria-label={`Open source ${seg.index}`}
+								onclick={() => openCitation(seg.braindumpId)}
+							>
+								[{seg.index}]
+							</button>
+						{/if}
+					{/each}
+				</p>
+			</div>
 		{/if}
 	{/if}
 
@@ -127,88 +163,152 @@
 
 <style>
 	.chat-surface {
-		max-inline-size: 44rem;
+		max-inline-size: 46rem;
 		margin-inline: auto;
-		padding: 1rem;
-		font-family:
-			system-ui,
-			-apple-system,
-			sans-serif;
-		color: #e6e8ec;
+		width: 100%;
+		display: grid;
+		gap: var(--space-4);
 	}
-	.chat-form {
+	.notice {
+		padding: 0.6rem 0.85rem;
+		font-size: var(--fs-13);
+		text-transform: none;
+		letter-spacing: normal;
+		line-height: 1.45;
+	}
+	.composer {
+		display: grid;
+		gap: var(--space-2);
+	}
+	.composer-label {
+		color: var(--fg-subtle);
+	}
+	.composer-row {
 		display: flex;
+		gap: var(--space-2);
 		flex-wrap: wrap;
-		gap: 0.5rem;
-		align-items: center;
-		margin-block-end: 1rem;
 	}
-	.chat-label {
-		flex-basis: 100%;
-		font-size: 0.85rem;
-		color: #9aa3b2;
+	.composer-input {
+		flex: 1 1 18rem;
+		min-block-size: 48px;
 	}
-	.chat-input {
-		flex: 1 1 20rem;
-		padding: 0.55rem 0.7rem;
-		font-size: 1rem;
-		color: #e6e8ec;
-		background: #11141c;
-		border: 1px solid #2a2f3a;
-		border-radius: 0.4rem;
+	.composer-submit {
+		min-block-size: 48px;
 	}
-	.chat-submit {
-		padding: 0.55rem 1rem;
-		font-size: 0.95rem;
-		color: #e6e8ec;
-		background: #1a1f2b;
-		border: 1px solid #2a2f3a;
-		border-radius: 0.4rem;
-		cursor: pointer;
+	.composer-submit svg {
+		inline-size: 1.05rem;
+		block-size: 1.05rem;
 	}
-	.chat-status {
-		color: #9aa3b2;
-	}
-	.chat-error {
-		color: #ff7a7a;
-	}
-	.chat-offline {
-		padding: 0.75rem 1rem;
-		color: #f0c674;
-		background: rgba(240, 198, 116, 0.08);
-		border: 1px solid rgba(240, 198, 116, 0.3);
-		border-radius: 0.4rem;
-	}
-	.chat-submit:disabled,
-	.chat-input:disabled {
+	.composer-submit:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
 	}
-	.chat-silence {
-		padding: 0.75rem 1rem;
-		color: #f0c674;
-		background: rgba(240, 198, 116, 0.08);
-		border: 1px solid rgba(240, 198, 116, 0.3);
-		border-radius: 0.4rem;
+	.composer-input:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
 	}
-	.chat-answer {
-		line-height: 1.6;
-		white-space: normal;
+
+	.answer-card {
+		padding: var(--space-5);
+		animation: rise var(--dur-3) var(--ease) both;
 	}
-	.chat-citation-chip {
-		display: inline;
-		padding: 0 0.25rem;
+	.answer-text {
+		line-height: var(--lh-read);
+		font-size: var(--fs-16);
+		color: var(--fg);
+	}
+	.loading {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+		color: var(--fg-muted);
+		font-size: var(--fs-14);
+		padding: var(--space-4) var(--space-5);
+	}
+	.dot-pulse {
+		inline-size: 8px;
+		block-size: 8px;
+		border-radius: 50%;
+		background: var(--accent);
+		box-shadow: 0 0 0 0 var(--accent-glow);
+		animation: pulse 1.6s var(--ease) infinite;
+	}
+	@keyframes pulse {
+		0% {
+			box-shadow: 0 0 0 0 var(--accent-glow);
+		}
+		70% {
+			box-shadow: 0 0 0 8px transparent;
+		}
+		100% {
+			box-shadow: 0 0 0 0 transparent;
+		}
+	}
+	.error {
+		display: grid;
+		gap: 0.2rem;
+		border-color: var(--danger-border);
+	}
+	.answer-error-label {
+		color: var(--danger);
+		font-weight: 600;
+		font-size: var(--fs-14);
+	}
+	.answer-error-detail {
+		color: var(--fg-muted);
+		font-size: var(--fs-13);
+	}
+
+	.silence {
+		display: grid;
+		gap: var(--space-3);
+		justify-items: start;
+		border-color: var(--warn-border);
+		background: var(--warn-soft), var(--bg-elevated);
+	}
+	.silence-mark {
+		display: grid;
+		place-items: center;
+		inline-size: 2rem;
+		block-size: 2rem;
+		color: var(--warn);
+		background: rgba(240, 198, 116, 0.1);
+		border: 1px solid var(--warn-border);
+		border-radius: var(--radius-md);
+	}
+	.silence-mark svg {
+		inline-size: 1.1rem;
+		block-size: 1.1rem;
+	}
+	.silence-text {
+		font-size: var(--fs-16);
+		color: var(--warn);
+		font-weight: 500;
+		line-height: var(--lh-body);
+	}
+
+	.citation-chip {
+		display: inline-flex;
+		align-items: center;
+		padding: 0 0.35rem;
 		margin: 0 0.1rem;
+		font-family: var(--font-mono);
 		font-size: 0.8em;
-		font-family: monospace;
-		color: #7ab7ff;
-		background: rgba(122, 183, 255, 0.12);
-		border: 1px solid rgba(122, 183, 255, 0.3);
-		border-radius: 0.3rem;
+		font-weight: 500;
+		color: var(--accent);
+		background: var(--accent-soft);
+		border: 1px solid var(--border-accent);
+		border-radius: var(--radius-sm);
 		cursor: pointer;
 		vertical-align: baseline;
+		transition:
+			background var(--dur-1) var(--ease),
+			border-color var(--dur-1) var(--ease),
+			transform var(--dur-1) var(--ease);
 	}
-	.chat-citation-chip:hover {
+	.citation-chip:hover {
 		background: rgba(122, 183, 255, 0.22);
+		border-color: var(--accent);
+		transform: translateY(-1px);
 	}
 </style>

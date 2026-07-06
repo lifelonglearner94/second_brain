@@ -9,15 +9,25 @@
 	onMount(() => onlineStore.init());
 </script>
 
-<main data-testid="chat-page">
+<main class="chat-page" data-testid="chat-page">
 	<header class="chat-header">
-		<a href="/app" class="back-link" data-testid="chat-back-to-graph"
-			>← Spatial View-Graph</a
-		>
+		<a href="/app" class="back-link" data-testid="chat-back-to-graph">
+			<svg
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				aria-hidden="true"
+			>
+				<path d="M15 18l-6-6 6-6" />
+			</svg>
+			<span>Spatial View-Graph</span>
+		</a>
 		<h1>Chat</h1>
 		{#if !onlineStore.online}
-			<span class="offline-badge" data-testid="chat-page-offline-badge"
-				>Offline</span
+			<span
+				class="pill pill-warn offline-badge"
+				data-testid="chat-page-offline-badge">Offline</span
 			>
 		{/if}
 	</header>
@@ -25,44 +35,42 @@
 </main>
 
 <style>
-	main {
-		min-block-size: 100vh;
-		padding: 1rem;
-		font-family:
-			system-ui,
-			-apple-system,
-			sans-serif;
-		color: #e6e8ec;
-		background: #0b0d12;
-		box-sizing: border-box;
+	.chat-page {
+		min-block-size: 100dvh;
+		padding: var(--space-4);
+		display: grid;
+		gap: var(--space-4);
 	}
 	.chat-header {
+		max-inline-size: 46rem;
+		margin-inline: auto;
+		width: 100%;
 		display: flex;
 		align-items: center;
-		gap: 1rem;
+		gap: var(--space-3);
 		flex-wrap: wrap;
-		margin-block-end: 1rem;
-		max-inline-size: 44rem;
-		margin-inline: auto;
-	}
-	h1 {
-		margin: 0;
-		font-size: clamp(1.25rem, 3vw, 1.5rem);
 	}
 	.back-link {
-		color: #7ab7ff;
-		text-decoration: none;
-		font-size: 0.9rem;
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1);
+		color: var(--fg-muted);
+		font-size: var(--fs-13);
 	}
 	.back-link:hover {
-		text-decoration: underline;
+		color: var(--accent);
+	}
+	.back-link svg {
+		inline-size: 1rem;
+		block-size: 1rem;
+	}
+	.chat-header h1 {
+		font-size: var(--fs-22);
+		font-weight: 600;
 	}
 	.offline-badge {
-		font-size: 0.8rem;
-		color: #f0c674;
-		background: rgba(240, 198, 116, 0.08);
-		border: 1px solid rgba(240, 198, 116, 0.3);
-		border-radius: 0.4rem;
-		padding: 0.2rem 0.5rem;
+		text-transform: none;
+		letter-spacing: normal;
+		font-weight: 500;
 	}
 </style>

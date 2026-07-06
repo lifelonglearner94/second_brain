@@ -23,71 +23,106 @@
 	}
 </script>
 
-<main>
-	<header>
-		<h1>Housekeeping Queue</h1>
+<main class="page queue-page">
+	<header class="page-head rise">
+		<a href="/app" class="back-link" data-testid="housekeeping-back">
+			<svg
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				aria-hidden="true"
+			>
+				<path d="M15 18l-6-6 6-6" />
+			</svg>
+			Back to the Spatial View-Graph
+		</a>
+		<div class="head-row">
+			<h1>Housekeeping Queue</h1>
+			<button
+				type="button"
+				class="btn btn-secondary refresh"
+				data-testid="housekeeping-refresh"
+				onclick={onRefresh}
+				disabled={housekeeping.status === 'loading'}
+			>
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="1.8"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"
+				>
+					<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v5h-5" />
+				</svg>
+				{housekeeping.status === 'loading' ? 'Refreshing…' : 'Refresh'}
+			</button>
+		</div>
 		<p class="tagline" data-testid="housekeeping-tagline">
 			Semantic housekeeping — confirm concept and type merges the system flagged
 			as borderline.
 		</p>
-		<button
-			type="button"
-			data-testid="housekeeping-refresh"
-			onclick={onRefresh}
-			disabled={housekeeping.status === 'loading'}
-		>
-			{housekeeping.status === 'loading' ? 'Refreshing…' : 'Refresh'}
-		</button>
 	</header>
 
-	<HousekeepingQueue store={housekeeping} />
-
-	<p>
-		<a href="/app" data-testid="housekeeping-back"
-			>Back to the Spatial View-Graph</a
-		>
-	</p>
+	<section class="body rise">
+		<HousekeepingQueue store={housekeeping} />
+	</section>
 </main>
 
 <style>
-	main {
+	.queue-page {
 		max-inline-size: 48rem;
-		margin-inline: auto;
-		padding: 2rem 1rem;
-		font-family:
-			system-ui,
-			-apple-system,
-			sans-serif;
-		color: #e6e8ec;
-		background: #0b0d12;
-		min-block-size: 100vh;
-		box-sizing: border-box;
+		display: grid;
+		gap: var(--space-6);
 	}
-	header {
-		margin-block-end: 1.5rem;
+	.page-head {
+		display: grid;
+		gap: var(--space-3);
+		padding-block-end: var(--space-4);
+		border-block-end: 1px solid var(--border-hairline);
 	}
-	h1 {
-		margin: 0 0 0.25rem;
-		font-size: clamp(1.5rem, 4vw, 2rem);
+	.back-link {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1);
+		color: var(--fg-muted);
+		font-size: var(--fs-13);
+	}
+	.back-link:hover {
+		color: var(--accent);
+	}
+	.back-link svg {
+		inline-size: 1rem;
+		block-size: 1rem;
+	}
+	.head-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
+		flex-wrap: wrap;
+	}
+	.page-head h1 {
+		font-size: var(--fs-28);
+		font-weight: 700;
+	}
+	.refresh svg {
+		inline-size: 1.05rem;
+		block-size: 1.05rem;
+	}
+	.refresh:disabled svg {
+		animation: spin 1s linear infinite;
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
 	}
 	.tagline {
-		margin: 0 0 0.75rem;
-		color: #9aa3b2;
-	}
-	button {
-		padding: 0.5rem 1rem;
-		font-size: 0.95rem;
-		border: 1px solid #2a2f3a;
-		border-radius: 0.5rem;
-		background: #1a1f2b;
-		color: #e6e8ec;
-		cursor: pointer;
-	}
-	button:disabled {
-		opacity: 0.6;
-		cursor: progress;
-	}
-	a {
-		color: #7ab7ff;
+		color: var(--fg-muted);
+		font-size: var(--fs-14);
+		max-inline-size: 38rem;
 	}
 </style>

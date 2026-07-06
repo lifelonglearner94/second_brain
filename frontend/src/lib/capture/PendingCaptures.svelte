@@ -39,35 +39,81 @@
 </script>
 
 {#if store.items.length === 0}
-	<p class="empty" data-testid="pending-captures-empty">
-		No pending captures — offline submissions will appear here for review when
-		back online.
-	</p>
+	<div class="empty card" data-testid="pending-captures-empty">
+		<div class="empty-mark" aria-hidden="true">
+			<svg
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.5"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			>
+				<path d="M12 4v16M4 12h16" />
+			</svg>
+		</div>
+		<p>
+			No pending captures — offline submissions will appear here for review when
+			back online.
+		</p>
+	</div>
 {:else}
 	<ul class="queue" data-testid="pending-captures-list">
 		{#each store.items as capture (capture.id)}
-			<li class="row" data-testid={`pending-capture-item-${capture.id}`}>
+			{@const isSubmitting = submitting === capture.id}
+			<li
+				class="row card"
+				class:submitting={isSubmitting}
+				data-testid={`pending-capture-item-${capture.id}`}
+			>
 				<p class="meta">
-					Captured offline {new Date(capture.createdAt).toLocaleString()}
+					<span class="pill pill-warn meta-pill">
+						<span class="meta-dot" aria-hidden="true"></span>
+						Captured offline
+					</span>
+					<time class="meta-time mono"
+						>{new Date(capture.createdAt).toLocaleString()}</time
+					>
 				</p>
 				<textarea
+					class="textarea row-input"
 					data-testid="pending-capture-text"
 					value={textFor(capture)}
 					oninput={(e) => {
 						edits[capture.id] = e.currentTarget.value;
 					}}
 					rows="3"
-					disabled={submitting === capture.id}></textarea>
-				<button
-					type="button"
-					data-testid="pending-capture-submit"
-					onclick={() => onConfirm(capture)}
-					disabled={submitting === capture.id}
-				>
-					{submitting === capture.id ? 'Submitting…' : 'Submit'}
-				</button>
+					disabled={isSubmitting}
+				></textarea>
+				<div class="row-actions">
+					<button
+						type="button"
+						class="btn btn-primary submit"
+						data-testid="pending-capture-submit"
+						onclick={() => onConfirm(capture)}
+						disabled={isSubmitting}
+					>
+						{#if isSubmitting}
+							<span class="spinner" aria-hidden="true"></span>
+							Submitting…
+						{:else}
+							<svg
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<path d="M4 12l16-8-6 16-3-7-7-1Z" />
+							</svg>
+							Submit
+						{/if}
+					</button>
+				</div>
 				{#if errors[capture.id]}
-					<p class="error" data-testid="pending-capture-error">
+					<p class="error pill pill-danger" data-testid="pending-capture-error">
 						{errors[capture.id]}
 					</p>
 				{/if}
@@ -77,61 +123,103 @@
 {/if}
 
 <style>
+	.empty {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: var(--space-3);
+		padding: var(--space-10) var(--space-6);
+		text-align: center;
+		color: var(--fg-muted);
+		font-size: var(--fs-14);
+		border-style: dashed;
+	}
+	.empty-mark {
+		display: grid;
+		place-items: center;
+		inline-size: 2.5rem;
+		block-size: 2.5rem;
+		color: var(--fg-subtle);
+		background: var(--surface-glass);
+		border: 1px solid var(--border-hairline);
+		border-radius: var(--radius-md);
+	}
+	.empty-mark svg {
+		inline-size: 1.3rem;
+		block-size: 1.3rem;
+	}
 	.queue {
 		list-style: none;
 		padding: 0;
 		margin: 0;
 		display: grid;
-		gap: 0.75rem;
+		gap: var(--space-3);
 	}
 	.row {
 		display: grid;
-		gap: 0.4rem;
-		padding: 0.75rem 0.9rem;
-		border: 1px solid #2a2f3a;
-		border-radius: 0.5rem;
-		background: #11141b;
+		gap: var(--space-3);
+		padding: var(--space-4) var(--space-5);
+		transition:
+			border-color var(--dur-1) var(--ease),
+			opacity var(--dur-1) var(--ease);
+	}
+	.row.submitting {
+		opacity: 0.7;
 	}
 	.meta {
 		margin: 0;
-		font-size: 0.8rem;
-		color: #9aa3b2;
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+		flex-wrap: wrap;
 	}
-	textarea {
-		resize: vertical;
-		font: inherit;
-		color: #e6e8ec;
-		background: #0b0d12;
-		border: 1px solid #2a2f3a;
-		border-radius: 0.4rem;
-		padding: 0.5rem;
+	.meta-pill {
+		text-transform: none;
+		letter-spacing: normal;
+		font-weight: 500;
+		font-size: var(--fs-12);
 	}
-	button {
+	.meta-dot {
+		inline-size: 6px;
+		block-size: 6px;
+		border-radius: 50%;
+		background: var(--warn);
+	}
+	.meta-time {
+		color: var(--fg-subtle);
+		font-size: var(--fs-12);
+	}
+	.row-input {
+		min-block-size: 4.5rem;
+	}
+	.row-actions {
+		display: flex;
+	}
+	.submit {
 		justify-self: start;
-		padding: 0.45rem 0.9rem;
-		font-size: 0.95rem;
-		border: 1px solid #7ab7ff;
-		border-radius: 0.4rem;
-		background: #1a1f2b;
-		color: #7ab7ff;
-		cursor: pointer;
 	}
-	button:disabled {
-		opacity: 0.6;
-		cursor: progress;
+	.submit svg {
+		inline-size: 1.05rem;
+		block-size: 1.05rem;
+	}
+	.spinner {
+		inline-size: 0.9rem;
+		block-size: 0.9rem;
+		border: 2px solid var(--accent-soft);
+		border-top-color: var(--accent);
+		border-radius: 50%;
+		animation: spin 0.8s linear infinite;
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
 	}
 	.error {
-		margin: 0;
-		font-size: 0.85rem;
-		color: #ff7a7a;
-	}
-	.empty {
-		margin: 0;
-		padding: 0.75rem 0.9rem;
-		border: 1px dashed #2a2f3a;
-		border-radius: 0.5rem;
-		background: #11141b;
-		color: #9aa3b2;
-		font-size: 0.95rem;
+		padding: 0.5rem 0.8rem;
+		font-size: var(--fs-13);
+		text-transform: none;
+		letter-spacing: normal;
+		line-height: 1.45;
 	}
 </style>
