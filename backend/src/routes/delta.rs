@@ -7,10 +7,11 @@
 //! timestamp is the client's cursor. Sits behind the auth middleware (registered
 //! in [`crate::routes`] under the protected layer), like the other graph reads.
 
-use axum::extract::{Query, State};
+use axum::extract::{Extension, Query, State};
 use axum::response::Json;
 use serde::Deserialize;
 
+use crate::auth::session::SessionInfo;
 use crate::delta::{self, GraphDelta};
 use crate::error::Result;
 use crate::state::AppState;
@@ -25,9 +26,10 @@ pub struct DeltaQuery {
 /// `GET /graph/delta?since=<ts>` — return the graph changes since the cursor.
 pub async fn graph_delta(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
     Query(query): Query<DeltaQuery>,
 ) -> Result<Json<GraphDelta>> {
     let since = query.since.unwrap_or(0);
-    let delta = delta::graph_delta(&state.db, since).await?;
+    let delta = delta::graph_delta(&state.db, &session.user_id, since).await?;
     Ok(Json(delta))
 }

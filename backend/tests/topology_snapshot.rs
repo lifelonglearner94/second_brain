@@ -23,6 +23,7 @@ use http_body_util::BodyExt;
 use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
+use second_brain_backend::db::BOOTSTRAP_ADMIN_USER_ID;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
 use second_brain_backend::graph;
@@ -238,19 +239,19 @@ async fn get_graph_returns_gzipped_snapshot_with_concepts_edges_and_partitions()
 
     let partitions = body["partitions"].as_array().expect("partitions array");
     assert_eq!(partitions.len(), 4, "every concept assigned a partition id");
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
-    let alpha = graph::concept_id_for_label(&db, "Alpha")
+    let alpha = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Alpha")
         .await
         .unwrap()
         .unwrap();
-    let beta = graph::concept_id_for_label(&db, "Beta")
+    let beta = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Beta")
         .await
         .unwrap()
         .unwrap();
@@ -289,15 +290,15 @@ async fn get_graph_projects_current_type_from_type_history_after_retag() {
     );
     let cookie = session_cookie(&db).await;
     submit(&app, &cookie, "maria helps q3 launch").await;
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
-    let edge_row = graph::find_edge(&db, maria, "helps", q3)
+    let edge_row = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "helps", q3)
         .await
         .unwrap()
         .expect("edge exists");

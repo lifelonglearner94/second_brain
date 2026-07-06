@@ -54,17 +54,18 @@ pub struct Partition {
 /// call (`StdRng` is `Send`+`Sync`, so the future is `Send` for axum; the
 /// `thread_rng` helper is `!Send` because it holds an `Rc`). Pure read: nothing
 /// is persisted.
-pub async fn partition(db: &Db) -> Result<Partition> {
+pub async fn partition(db: &Db, user_id: &str) -> Result<Partition> {
     let mut sys = SysRng;
     let mut rng = StdRng::try_from_rng(&mut sys).expect("seeding StdRng from OS entropy");
-    partition_with(db, &mut rng).await
+    partition_with(db, user_id, &mut rng).await
 }
 
 /// Compute the partition with an injected RNG — the test seam that makes the
 /// non-deterministic algorithm reproducible (ADR-0008's non-determinism is a
-/// production property; tests need determinism).
-pub async fn partition_with(db: &Db, rng: &mut impl Rng) -> Result<Partition> {
-    let topology = load_topology(db).await?;
+/// production property; tests need determinism). Issue #72: scoped to
+/// `user_id`.
+pub async fn partition_with(db: &Db, user_id: &str, rng: &mut impl Rng) -> Result<Partition> {
+    let topology = load_topology(db, user_id).await?;
     let communities = louvain(&topology.graph, rng);
     Ok(label_partition(&topology, communities))
 }
@@ -151,15 +152,15 @@ impl WeightedGraph {
 /// Delegates the reads to [`GraphRepo::all_concepts`] +
 /// [`GraphRepo::all_edge_endpoints`] (issue #48); the weight accumulation runs
 /// here.
-async fn load_topology(db: &Db) -> Result<Topology> {
+async fn load_topology(db: &Db, user_id: &str) -> Result<Topology> {
     let repo = crate::graph_repo::SqliteGraphRepo::new(db.clone());
     let concepts: Vec<(i64, String)> = repo
-        .all_concepts()
+        .all_concepts(user_id)
         .await?
         .into_iter()
         .map(|c| (c.id, c.label))
         .collect();
-    let endpoints = repo.all_edge_endpoints().await?;
+    let endpoints = repo.all_edge_endpoints(user_id).await?;
     load_topology_from(&concepts, &endpoints)
 }
 
@@ -363,6 +364,7 @@ fn label_partition(topology: &Topology, mut communities: Vec<Vec<usize>>) -> Par
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::BOOTSTRAP_ADMIN_USER_ID;
 
     fn seeded_rng() -> StdRng {
         StdRng::seed_from_u64(0xC0DE_1234)
@@ -491,12 +493,15 @@ mod tests {
     }
 
     async fn seed_braindump(db: &Db, text: &str) -> i64 {
-        insert_braindump(db, text, text).await.unwrap().id
+        insert_braindump(db, BOOTSTRAP_ADMIN_USER_ID, text, text)
+            .await
+            .unwrap()
+            .id
     }
 
     async fn ingest(db: &Db, text: &str, ext: ExtractionResult) {
         let bd = seed_braindump(db, text).await;
-        ingest_extraction(db, &fake_llm(), bd, text, ext)
+        ingest_extraction(db, BOOTSTRAP_ADMIN_USER_ID, &fake_llm(), bd, text, ext)
             .await
             .unwrap();
     }
@@ -514,7 +519,7 @@ mod tests {
         )
         .await;
 
-        let topo = load_topology(&db).await.unwrap();
+        let topo = load_topology(&db, BOOTSTRAP_ADMIN_USER_ID).await.unwrap();
         assert_eq!(topo.concepts.len(), 2, "two concept nodes");
         assert_eq!(topo.graph.n(), 2);
         assert_eq!(topo.graph.total_weight, 1.0, "one undirected edge");
@@ -545,7 +550,7 @@ mod tests {
         )
         .await;
 
-        let topo = load_topology(&db).await.unwrap();
+        let topo = load_topology(&db, BOOTSTRAP_ADMIN_USER_ID).await.unwrap();
         assert_eq!(topo.graph.n(), 2, "still two concept nodes");
         assert_eq!(
             topo.graph.total_weight, 2.0,
@@ -567,7 +572,7 @@ mod tests {
         )
         .await;
 
-        let topo = load_topology(&db).await.unwrap();
+        let topo = load_topology(&db, BOOTSTRAP_ADMIN_USER_ID).await.unwrap();
         assert_eq!(topo.graph.n(), 1, "one concept node");
         assert_eq!(topo.graph.total_weight, 0.0, "self-edge skipped");
         assert_eq!(topo.graph.degree(0), 0.0);
@@ -596,7 +601,9 @@ mod tests {
         .await;
 
         let mut rng = seeded_rng();
-        let partition = partition_with(&db, &mut rng).await.unwrap();
+        let partition = partition_with(&db, BOOTSTRAP_ADMIN_USER_ID, &mut rng)
+            .await
+            .unwrap();
 
         assert_eq!(partition.concept_count, 4, "all four concepts projected");
         assert_eq!(partition.clusters.len(), 2, "two disjoint-edge clusters");
@@ -617,13 +624,22 @@ mod tests {
             .flat_map(|c| c.concept_ids.iter().copied())
             .collect();
         all_ids.sort_unstable();
-        let maria = concept_id_for_label(&db, "Maria").await.unwrap().unwrap();
-        let q3 = concept_id_for_label(&db, "Q3 launch")
+        let maria = concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
             .await
             .unwrap()
             .unwrap();
-        let alpha = concept_id_for_label(&db, "Alpha").await.unwrap().unwrap();
-        let beta = concept_id_for_label(&db, "Beta").await.unwrap().unwrap();
+        let q3 = concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
+            .await
+            .unwrap()
+            .unwrap();
+        let alpha = concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Alpha")
+            .await
+            .unwrap()
+            .unwrap();
+        let beta = concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Beta")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(all_ids, {
             let mut v = vec![maria, q3, alpha, beta];
             v.sort_unstable();
@@ -643,7 +659,9 @@ mod tests {
     async fn partition_on_an_empty_graph_has_no_clusters() {
         let db = test_db();
         let mut rng = seeded_rng();
-        let partition = partition_with(&db, &mut rng).await.unwrap();
+        let partition = partition_with(&db, BOOTSTRAP_ADMIN_USER_ID, &mut rng)
+            .await
+            .unwrap();
         assert_eq!(partition.concept_count, 0);
         assert!(partition.clusters.is_empty(), "no clusters on empty graph");
     }
@@ -667,8 +685,12 @@ mod tests {
         let edges_before = count_edges(&db).await;
 
         let mut rng = seeded_rng();
-        let _ = partition_with(&db, &mut rng).await.unwrap();
-        let _ = partition_with(&db, &mut rng).await.unwrap();
+        let _ = partition_with(&db, BOOTSTRAP_ADMIN_USER_ID, &mut rng)
+            .await
+            .unwrap();
+        let _ = partition_with(&db, BOOTSTRAP_ADMIN_USER_ID, &mut rng)
+            .await
+            .unwrap();
 
         assert_eq!(
             count_concepts(&db).await,

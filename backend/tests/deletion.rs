@@ -17,6 +17,7 @@ use http_body_util::BodyExt;
 use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
+use second_brain_backend::db::BOOTSTRAP_ADMIN_USER_ID;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
 use second_brain_backend::graph;
@@ -186,15 +187,15 @@ async fn delete_braindump_vanishes_concept_on_last_extractor() {
 
     let bd1 = submit(&app, &cookie, "maria endangers q3 launch").await;
     let bd2 = submit(&app, &cookie, "maria still endangers q3 launch").await;
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
-    let edge = graph::find_edge(&db, maria, "endangers", q3)
+    let edge = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
         .await
         .unwrap()
         .expect("edge exists");
@@ -203,11 +204,15 @@ async fn delete_braindump_vanishes_concept_on_last_extractor() {
     let (status, body) = delete(&app, &cookie, bd1).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "delete bd1: {body}");
     assert_eq!(
-        graph::concept_provenance(&db, maria).await.unwrap(),
+        graph::concept_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, maria)
+            .await
+            .unwrap(),
         vec![bd2]
     );
     assert_eq!(
-        graph::edge_provenance(&db, edge.id).await.unwrap(),
+        graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap(),
         vec![bd2]
     );
 
@@ -215,11 +220,14 @@ async fn delete_braindump_vanishes_concept_on_last_extractor() {
     let (status, body) = delete(&app, &cookie, bd2).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "delete bd2: {body}");
     assert!(
-        graph::get_concept(&db, maria).await.unwrap().is_none(),
+        graph::get_concept(&db, BOOTSTRAP_ADMIN_USER_ID, maria)
+            .await
+            .unwrap()
+            .is_none(),
         "concept vanishes on last extractor"
     );
     assert!(
-        graph::find_edge(&db, maria, "endangers", q3)
+        graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
             .await
             .unwrap()
             .is_none(),
@@ -253,22 +261,29 @@ async fn delete_braindump_cascade_deletes_edge_when_endpoint_vanishes() {
 
     let bd1 = submit(&app, &cookie, "maria endangers q3 launch").await;
     let bd2 = submit(&app, &cookie, "maria again").await;
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
-    let edge = graph::find_edge(&db, maria, "endangers", q3)
+    let edge = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
         .await
         .unwrap()
         .expect("edge exists");
     // Q3 is extracted only by bd1; the edge only by bd1 so far.
-    assert_eq!(graph::concept_provenance(&db, q3).await.unwrap(), vec![bd1]);
     assert_eq!(
-        graph::edge_provenance(&db, edge.id).await.unwrap(),
+        graph::concept_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, q3)
+            .await
+            .unwrap(),
+        vec![bd1]
+    );
+    assert_eq!(
+        graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap(),
         vec![bd1]
     );
     // Back the edge with bd2 (which did not extract Q3) so it still has an
@@ -282,7 +297,9 @@ async fn delete_braindump_cascade_deletes_edge_when_endpoint_vanishes() {
     })
     .await
     .unwrap();
-    let mut prov = graph::edge_provenance(&db, edge.id).await.unwrap();
+    let mut prov = graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+        .await
+        .unwrap();
     prov.sort_unstable();
     assert_eq!(prov, vec![bd1, bd2]);
 
@@ -291,18 +308,24 @@ async fn delete_braindump_cascade_deletes_edge_when_endpoint_vanishes() {
     let (status, body) = delete(&app, &cookie, bd1).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "delete bd1: {body}");
     assert!(
-        graph::get_concept(&db, q3).await.unwrap().is_none(),
+        graph::get_concept(&db, BOOTSTRAP_ADMIN_USER_ID, q3)
+            .await
+            .unwrap()
+            .is_none(),
         "Q3 vanishes: sole extractor deleted"
     );
     assert!(
-        graph::find_edge(&db, maria, "endangers", q3)
+        graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
             .await
             .unwrap()
             .is_none(),
         "edge cascade-deleted: endpoint vanished"
     );
     assert!(
-        graph::get_concept(&db, maria).await.unwrap().is_some(),
+        graph::get_concept(&db, BOOTSTRAP_ADMIN_USER_ID, maria)
+            .await
+            .unwrap()
+            .is_some(),
         "Maria survives: bd2 extracts it"
     );
 }

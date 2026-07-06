@@ -90,6 +90,7 @@ pub fn router(state: AppState) -> Router {
         .route("/graph", get(snapshot::topology_snapshot))
         .route("/graph/delta", get(delta::graph_delta))
         .route("/admin/logs", get(admin::logs))
+        .route("/ontology", get(ontology::ontology))
         .route("/ontology/propose", post(ontology::propose))
         .route("/ontology/proposals", get(ontology::proposals))
         .route("/ontology/proposals/{id}/approve", post(ontology::approve))
@@ -98,7 +99,6 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(health::health))
-        .route("/ontology", get(ontology::ontology))
         .merge(auth_routes)
         .merge(protected_routes)
         .with_state(state)

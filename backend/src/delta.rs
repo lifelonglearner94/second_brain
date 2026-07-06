@@ -82,8 +82,10 @@ pub struct RetaggedEdge {
 ///
 /// Delegates to [`GraphRepo::graph_delta`] (issue #48); the SQL lives in the
 /// Sqlite adapter's trait impl.
-pub async fn graph_delta(db: &Db, since: i64) -> Result<GraphDelta> {
-    SqliteGraphRepo::new(db.clone()).graph_delta(since).await
+pub async fn graph_delta(db: &Db, user_id: &str, since: i64) -> Result<GraphDelta> {
+    SqliteGraphRepo::new(db.clone())
+        .graph_delta(user_id, since)
+        .await
 }
 
 #[cfg(test)]
@@ -91,6 +93,7 @@ mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
     use crate::db::now_seconds;
+    use crate::db::BOOTSTRAP_ADMIN_USER_ID;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::{concept_id_for_label, delete_braindump, find_edge, ingest_extraction};
     use crate::llm::{FakeLlm, Llm};
@@ -125,20 +128,25 @@ mod tests {
         }
     }
 
-    async fn seed_braindump(db: &Db, text: &str) -> i64 {
-        let b = insert_braindump(db, text, text).await.unwrap();
+    async fn seed_braindump(db: &Db, _user_id: &str, text: &str) -> i64 {
+        let b = insert_braindump(db, BOOTSTRAP_ADMIN_USER_ID, text, text)
+            .await
+            .unwrap();
         b.id
     }
 
-    async fn db_concept_id_for_label(db: &Db, label: &str) -> i64 {
-        concept_id_for_label(db, label).await.unwrap().unwrap_or(0)
+    async fn db_concept_id_for_label(db: &Db, _user_id: &str, label: &str) -> i64 {
+        concept_id_for_label(db, BOOTSTRAP_ADMIN_USER_ID, label)
+            .await
+            .unwrap()
+            .unwrap_or(0)
     }
 
     /// Stamp every graph row's `created_at` to a fixed value so delta-filtering
     /// on a cursor between the stamp and a later retag is deterministic (the
     /// real `now_seconds()` has second-level granularity, which would make
     /// same-second boundary tests flaky).
-    async fn backdate_graph(db: &Db, ts: i64) {
+    async fn backdate_graph(db: &Db, _user_id: &str, ts: i64) {
         db.with_conn(move |conn| {
             conn.execute("UPDATE concepts SET created_at = ?1", params![ts])?;
             conn.execute("UPDATE edges SET created_at = ?1", params![ts])?;
@@ -152,7 +160,7 @@ mod tests {
     /// Append a retag entry (seq_index = max+1) to an edge's type history at a
     /// fixed timestamp — simulates the async refactor (ADR-0003) without
     /// standing up the governance pipeline.
-    async fn append_retag(db: &Db, edge_id: i64, type_slug: &str, ts: i64) {
+    async fn append_retag(db: &Db, _user_id: &str, edge_id: i64, type_slug: &str, ts: i64) {
         let type_slug = type_slug.to_string();
         db.with_conn(move |conn| {
             let next_seq: i64 = conn.query_row(
@@ -177,9 +185,10 @@ mod tests {
         // addition (all real timestamps > 0). No deletions, no retags.
         let db = test_db();
         let llm = fake_llm();
-        let bd = seed_braindump(&db, "maria endangers q3 launch").await;
+        let bd = seed_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "maria endangers q3 launch").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd,
             "maria endangers q3 launch",
@@ -191,7 +200,7 @@ mod tests {
         .await
         .unwrap();
 
-        let delta = graph_delta(&db, 0).await.unwrap();
+        let delta = graph_delta(&db, BOOTSTRAP_ADMIN_USER_ID, 0).await.unwrap();
         assert_eq!(delta.added_concepts.len(), 2, "both concepts added");
         assert!(delta.added_concepts.iter().any(|c| c.label == "Maria"));
         assert!(delta.added_concepts.iter().any(|c| c.label == "Q3 launch"));
@@ -217,9 +226,10 @@ mod tests {
         // tombstoned and reported as deletions (ADR-0007/0010 cascade).
         let db = test_db();
         let llm = fake_llm();
-        let bd = seed_braindump(&db, "maria endangers q3 launch").await;
+        let bd = seed_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "maria endangers q3 launch").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd,
             "maria endangers q3 launch",
@@ -230,16 +240,18 @@ mod tests {
         )
         .await
         .unwrap();
-        let maria = db_concept_id_for_label(&db, "Maria").await;
-        let q3 = db_concept_id_for_label(&db, "Q3 launch").await;
-        let edge = find_edge(&db, maria, "endangers", q3)
+        let maria = db_concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria").await;
+        let q3 = db_concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch").await;
+        let edge = find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
             .await
             .unwrap()
             .expect("edge created");
 
-        delete_braindump(&db, bd).await.unwrap();
+        delete_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, bd)
+            .await
+            .unwrap();
 
-        let delta = graph_delta(&db, 0).await.unwrap();
+        let delta = graph_delta(&db, BOOTSTRAP_ADMIN_USER_ID, 0).await.unwrap();
         assert!(
             delta.deleted_concept_ids.contains(&maria),
             "vanished concept reported as deletion: {:?}",
@@ -259,9 +271,10 @@ mod tests {
         // timestamps so the boundary is deterministic.
         let db = test_db();
         let llm = fake_llm();
-        let bd = seed_braindump(&db, "maria helps q3 launch").await;
+        let bd = seed_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "maria helps q3 launch").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd,
             "maria helps q3 launch",
@@ -269,20 +282,22 @@ mod tests {
         )
         .await
         .unwrap();
-        let maria = db_concept_id_for_label(&db, "Maria").await;
-        let q3 = db_concept_id_for_label(&db, "Q3 launch").await;
-        let edge = find_edge(&db, maria, "helps", q3)
+        let maria = db_concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria").await;
+        let q3 = db_concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch").await;
+        let edge = find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "helps", q3)
             .await
             .unwrap()
             .expect("edge created");
 
         // Backdate the whole graph to ts=1000, then query with cursor=1500.
-        backdate_graph(&db, 1000).await;
+        backdate_graph(&db, BOOTSTRAP_ADMIN_USER_ID, 1000).await;
         let since = 1500;
         // Simulate a refactor retag at ts=2000 (after the cursor).
-        append_retag(&db, edge.id, "supports", 2000).await;
+        append_retag(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id, "supports", 2000).await;
 
-        let delta = graph_delta(&db, since).await.unwrap();
+        let delta = graph_delta(&db, BOOTSTRAP_ADMIN_USER_ID, since)
+            .await
+            .unwrap();
         assert!(
             delta.added_concepts.is_empty(),
             "concepts created before cursor are not additions"
@@ -309,13 +324,22 @@ mod tests {
         // empty (strict `>` filtering). The cursor still advances forward.
         let db = test_db();
         let llm = fake_llm();
-        let bd = seed_braindump(&db, "maria").await;
-        ingest_extraction(&db, &llm, bd, "maria", extraction(&["Maria"], &[]))
-            .await
-            .unwrap();
+        let bd = seed_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "maria").await;
+        ingest_extraction(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            bd,
+            "maria",
+            extraction(&["Maria"], &[]),
+        )
+        .await
+        .unwrap();
 
         let since = now_seconds();
-        let delta = graph_delta(&db, since).await.unwrap();
+        let delta = graph_delta(&db, BOOTSTRAP_ADMIN_USER_ID, since)
+            .await
+            .unwrap();
         assert!(delta.added_concepts.is_empty(), "no additions after cursor");
         assert!(delta.added_edges.is_empty());
         assert!(delta.deleted_concept_ids.is_empty());
@@ -333,9 +357,10 @@ mod tests {
         // addition carrying its current type — not duplicated as a retag.
         let db = test_db();
         let llm = fake_llm();
-        let bd = seed_braindump(&db, "maria helps q3 launch").await;
+        let bd = seed_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "maria helps q3 launch").await;
         ingest_extraction(
             &db,
+            BOOTSTRAP_ADMIN_USER_ID,
             &llm,
             bd,
             "maria helps q3 launch",
@@ -343,17 +368,24 @@ mod tests {
         )
         .await
         .unwrap();
-        let maria = db_concept_id_for_label(&db, "Maria").await;
-        let q3 = db_concept_id_for_label(&db, "Q3 launch").await;
-        let edge = find_edge(&db, maria, "helps", q3)
+        let maria = db_concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria").await;
+        let q3 = db_concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch").await;
+        let edge = find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "helps", q3)
             .await
             .unwrap()
             .expect("edge created");
 
         // Both creation and retag are after since=0.
-        append_retag(&db, edge.id, "supports", now_seconds()).await;
+        append_retag(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            edge.id,
+            "supports",
+            now_seconds(),
+        )
+        .await;
 
-        let delta = graph_delta(&db, 0).await.unwrap();
+        let delta = graph_delta(&db, BOOTSTRAP_ADMIN_USER_ID, 0).await.unwrap();
         let added = delta
             .added_edges
             .iter()
@@ -375,18 +407,27 @@ mod tests {
         // returns nothing (no change between the two pulls).
         let db = test_db();
         let llm = fake_llm();
-        let bd = seed_braindump(&db, "maria").await;
-        ingest_extraction(&db, &llm, bd, "maria", extraction(&["Maria"], &[]))
-            .await
-            .unwrap();
+        let bd = seed_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "maria").await;
+        ingest_extraction(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            bd,
+            "maria",
+            extraction(&["Maria"], &[]),
+        )
+        .await
+        .unwrap();
 
-        let first = graph_delta(&db, 0).await.unwrap();
+        let first = graph_delta(&db, BOOTSTRAP_ADMIN_USER_ID, 0).await.unwrap();
         assert_eq!(
             first.added_concepts.len(),
             1,
             "first pull returns the addition"
         );
-        let second = graph_delta(&db, first.cursor).await.unwrap();
+        let second = graph_delta(&db, BOOTSTRAP_ADMIN_USER_ID, first.cursor)
+            .await
+            .unwrap();
         assert!(
             second.added_concepts.is_empty(),
             "second pull with advanced cursor returns no additions"

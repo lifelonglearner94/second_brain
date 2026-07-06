@@ -10,10 +10,11 @@
 //! the type to the ontology and spawns the async refactor (if `merge_of`).
 //! `POST /ontology/proposals/{id}/reject` — reject a pending proposal.
 
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::response::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::auth::session::SessionInfo;
 use crate::error::Result;
 use crate::ontology::{
     approve_proposal, list_proposals, propose_type, reject_proposal, TypeProposal,
@@ -32,10 +33,11 @@ pub struct Ontology {
     pub edge_types: Vec<EdgeType>,
 }
 
-pub async fn ontology(State(state): State<AppState>) -> Result<Json<Ontology>> {
-    // The duplicated full-row ontology query lives in exactly one place now
-    // (issue #45): the Sqlite adapter's `GraphRepo::ontology_types` impl.
-    let rows = state.graph_repo.ontology_types().await?;
+pub async fn ontology(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
+) -> Result<Json<Ontology>> {
+    let rows = state.graph_repo.ontology_types(&session.user_id).await?;
     let edge_types = rows
         .into_iter()
         .map(|(slug, label, description)| EdgeType {
@@ -87,10 +89,12 @@ impl From<TypeProposal> for ProposeResponse {
 
 pub async fn propose(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
     Json(body): Json<ProposeRequest>,
 ) -> Result<Json<ProposeResponse>> {
     let outcome = propose_type(
         &state.db,
+        &session.user_id,
         state.llm.as_ref(),
         &body.slug,
         &body.label,
@@ -106,8 +110,11 @@ pub struct ProposalsResponse {
     pub proposals: Vec<ProposeResponse>,
 }
 
-pub async fn proposals(State(state): State<AppState>) -> Result<Json<ProposalsResponse>> {
-    let rows = list_proposals(&state.db).await?;
+pub async fn proposals(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
+) -> Result<Json<ProposalsResponse>> {
+    let rows = list_proposals(&state.db, &session.user_id).await?;
     Ok(Json(ProposalsResponse {
         proposals: rows.into_iter().map(Into::into).collect(),
     }))
@@ -115,15 +122,17 @@ pub async fn proposals(State(state): State<AppState>) -> Result<Json<ProposalsRe
 
 pub async fn approve(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
     Path(id): Path<i64>,
 ) -> Result<Json<ProposeResponse>> {
-    let proposal = approve_proposal(&state.db, state.llm.as_ref(), id).await?;
+    let proposal = approve_proposal(&state.db, &session.user_id, state.llm.as_ref(), id).await?;
     // If the approved type merges another, spawn the refactor out-of-band so
     // ingest is not blocked while it runs (ADR-0003). Fire-and-forget; the
     // JoinHandle is tracked on the runner so tests can await it.
     state.refactor_runner.spawn(
         state.graph_repo.clone(),
         state.llm.clone(),
+        session.user_id.clone(),
         proposal.clone(),
     );
     Ok(Json(proposal.into()))
@@ -131,8 +140,9 @@ pub async fn approve(
 
 pub async fn reject(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
     Path(id): Path<i64>,
 ) -> Result<Json<ProposeResponse>> {
-    let proposal = reject_proposal(&state.db, id).await?;
+    let proposal = reject_proposal(&state.db, &session.user_id, id).await?;
     Ok(Json(proposal.into()))
 }

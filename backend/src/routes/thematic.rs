@@ -7,15 +7,19 @@
 //! (ADR-0008). Sits behind the auth middleware (registered in [`crate::routes`]
 //! under the protected layer), like the other graph reads.
 
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::response::Json;
 
+use crate::auth::session::SessionInfo;
 use crate::error::Result;
 use crate::state::AppState;
 use crate::thematic::{self, Partition};
 
 /// `GET /thematic` — compute and return the current thematic partition.
-pub async fn thematic(State(state): State<AppState>) -> Result<Json<Partition>> {
-    let partition = thematic::partition(&state.db).await?;
+pub async fn thematic(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
+) -> Result<Json<Partition>> {
+    let partition = thematic::partition(&state.db, &session.user_id).await?;
     Ok(Json(partition))
 }

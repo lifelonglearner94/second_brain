@@ -17,11 +17,12 @@
 //! traversability, snapshot capture, endorse→persist) lives in
 //! [`crate::chat_inference`]; these handlers are the thin HTTP seam.
 
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use serde::Deserialize;
 
+use crate::auth::session::SessionInfo;
 use crate::chat_inference::{self, ChatInferenceProposal, EvidenceEdge};
 use crate::error::Result;
 use crate::state::AppState;
@@ -57,10 +58,12 @@ pub struct ProposeThematicRequest {
 /// `POST /chat/inferences` — propose a structural inference for human review.
 pub async fn propose(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
     Json(body): Json<ProposeRequest>,
 ) -> Result<Json<ChatInferenceProposal>> {
     let proposal = chat_inference::propose_structural_inference(
         &state.db,
+        &session.user_id,
         body.source_concept_id,
         body.target_concept_id,
         &body.proposed_type,
@@ -76,10 +79,12 @@ pub async fn propose(
 /// review. The proposal carries a frozen Thematic Snapshot (ADR-0009).
 pub async fn propose_thematic(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
     Json(body): Json<ProposeThematicRequest>,
 ) -> Result<Json<ChatInferenceProposal>> {
     let proposal = chat_inference::propose_thematic_inference(
         &state.db,
+        &session.user_id,
         body.source_concept_id,
         body.target_concept_id,
         &body.proposed_type,
@@ -93,8 +98,11 @@ pub async fn propose_thematic(
 
 /// `GET /chat/inferences` — the chat-inference proposal queue (both modes),
 /// oldest first.
-pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ChatInferenceProposal>>> {
-    let proposals = chat_inference::list_inference_proposals(&state.db).await?;
+pub async fn list(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
+) -> Result<Json<Vec<ChatInferenceProposal>>> {
+    let proposals = chat_inference::list_inference_proposals(&state.db, &session.user_id).await?;
     Ok(Json(proposals))
 }
 
@@ -103,17 +111,23 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ChatInferenc
 /// proposal's mode), plus the Thematic Snapshot for thematic proposals.
 pub async fn endorse(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
     Path(id): Path<i64>,
 ) -> Result<Json<ChatInferenceProposal>> {
-    let proposal = chat_inference::endorse_inference_proposal(&state.db, id).await?;
+    let proposal =
+        chat_inference::endorse_inference_proposal(&state.db, &session.user_id, id).await?;
     tracing::debug!(proposal_id = id, mode = %proposal.mode, "inference endorsed");
     Ok(Json(proposal))
 }
 
 /// `POST /chat/inferences/{id}/reject` — reject a pending proposal: the
 /// inference never enters the graph.
-pub async fn reject(State(state): State<AppState>, Path(id): Path<i64>) -> Result<StatusCode> {
-    chat_inference::reject_inference_proposal(&state.db, id).await?;
+pub async fn reject(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode> {
+    chat_inference::reject_inference_proposal(&state.db, &session.user_id, id).await?;
     tracing::debug!(proposal_id = id, "inference rejected");
     Ok(StatusCode::NO_CONTENT)
 }

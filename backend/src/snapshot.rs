@@ -46,10 +46,14 @@ pub struct PartitionAssignment {
 /// partition computation still touches `Db` directly (`thematic::partition`
 /// builds the graph from a `Db::with_conn` closure — #47's scope to migrate); the
 /// concept + edge reads go through `repo`.
-pub async fn topology_snapshot(repo: &dyn GraphRepo, db: &Db) -> Result<TopologySnapshot> {
-    let concepts = repo.all_concepts().await?;
-    let edges = repo.all_edges_with_current_type().await?;
-    let partitions = partition_assignments(db).await?;
+pub async fn topology_snapshot(
+    repo: &dyn GraphRepo,
+    db: &Db,
+    user_id: &str,
+) -> Result<TopologySnapshot> {
+    let concepts = repo.all_concepts(user_id).await?;
+    let edges = repo.all_edges_with_current_type(user_id).await?;
+    let partitions = partition_assignments(db, user_id).await?;
     Ok(TopologySnapshot {
         concepts,
         edges,
@@ -74,8 +78,8 @@ fn partition_assignments_from(partition: &thematic::Partition) -> Vec<PartitionA
     assignments
 }
 
-async fn partition_assignments(db: &Db) -> Result<Vec<PartitionAssignment>> {
-    let partition = thematic::partition(db).await?;
+async fn partition_assignments(db: &Db, user_id: &str) -> Result<Vec<PartitionAssignment>> {
+    let partition = thematic::partition(db, user_id).await?;
     Ok(partition_assignments_from(&partition))
 }
 
@@ -83,6 +87,7 @@ async fn partition_assignments(db: &Db) -> Result<Vec<PartitionAssignment>> {
 mod tests {
     use super::*;
     use crate::braindump::insert_braindump;
+    use crate::db::BOOTSTRAP_ADMIN_USER_ID;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph::{concept_id_for_label, find_edge, ingest_extraction};
     use crate::graph_repo::SqliteGraphRepo;
@@ -119,18 +124,21 @@ mod tests {
     }
 
     async fn seed_braindump(db: &Db, text: &str) -> i64 {
-        insert_braindump(db, text, text).await.unwrap().id
+        insert_braindump(db, BOOTSTRAP_ADMIN_USER_ID, text, text)
+            .await
+            .unwrap()
+            .id
     }
 
     async fn ingest(db: &Db, text: &str, ext: ExtractionResult) {
         let bd = seed_braindump(db, text).await;
-        ingest_extraction(db, &fake_llm(), bd, text, ext)
+        ingest_extraction(db, BOOTSTRAP_ADMIN_USER_ID, &fake_llm(), bd, text, ext)
             .await
             .unwrap();
     }
 
     async fn label_id(db: &Db, label: &str) -> i64 {
-        concept_id_for_label(db, label)
+        concept_id_for_label(db, BOOTSTRAP_ADMIN_USER_ID, label)
             .await
             .unwrap()
             .expect("concept exists")
@@ -191,9 +199,13 @@ mod tests {
         )
         .await;
 
-        let snap = topology_snapshot(&SqliteGraphRepo::new(db.clone()), &db)
-            .await
-            .unwrap();
+        let snap = topology_snapshot(
+            &SqliteGraphRepo::new(db.clone()),
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+        )
+        .await
+        .unwrap();
         assert_eq!(snap.concepts.len(), 4, "all four concepts");
         assert_eq!(snap.edges.len(), 2, "both edges");
         for e in &snap.edges {
@@ -243,15 +255,19 @@ mod tests {
         .await;
         let maria = label_id(&db, "Maria").await;
         let q3 = label_id(&db, "Q3 launch").await;
-        let edge = find_edge(&db, maria, "helps", q3)
+        let edge = find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "helps", q3)
             .await
             .unwrap()
             .expect("edge created");
         append_retag(&db, edge.id, "supports").await;
 
-        let snap = topology_snapshot(&SqliteGraphRepo::new(db.clone()), &db)
-            .await
-            .unwrap();
+        let snap = topology_snapshot(
+            &SqliteGraphRepo::new(db.clone()),
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+        )
+        .await
+        .unwrap();
         let e = snap
             .edges
             .iter()
@@ -271,9 +287,13 @@ mod tests {
     #[tokio::test]
     async fn topology_snapshot_on_empty_graph_returns_empty() {
         let db = test_db();
-        let snap = topology_snapshot(&SqliteGraphRepo::new(db.clone()), &db)
-            .await
-            .unwrap();
+        let snap = topology_snapshot(
+            &SqliteGraphRepo::new(db.clone()),
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+        )
+        .await
+        .unwrap();
         assert!(snap.concepts.is_empty(), "no concepts");
         assert!(snap.edges.is_empty(), "no edges");
         assert!(
@@ -300,9 +320,13 @@ mod tests {
         .await;
         ingest(&db, "a lonely concept", extraction(&["Lonely"], &[])).await;
 
-        let snap = topology_snapshot(&SqliteGraphRepo::new(db.clone()), &db)
-            .await
-            .unwrap();
+        let snap = topology_snapshot(
+            &SqliteGraphRepo::new(db.clone()),
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+        )
+        .await
+        .unwrap();
         let mut concept_ids: Vec<i64> = snap.concepts.iter().map(|c| c.id).collect();
         concept_ids.sort_unstable();
         let mut assigned: Vec<i64> = snap.partitions.iter().map(|p| p.concept_id).collect();

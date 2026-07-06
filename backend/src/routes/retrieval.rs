@@ -10,10 +10,11 @@
 //! Sits behind the auth middleware (registered in [`crate::routes`] under the
 //! protected layer), like the ingest write path.
 
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::response::Json;
 use serde::Deserialize;
 
+use crate::auth::session::SessionInfo;
 use crate::error::{Error, Result};
 use crate::retrieval::{self, RetrievalResult};
 use crate::state::AppState;
@@ -29,12 +30,14 @@ pub struct RetrieveRequest {
 /// for the query and return ranked braindumps plus the traversed edge paths.
 pub async fn retrieve(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
     Json(body): Json<RetrieveRequest>,
 ) -> Result<Json<RetrievalResult>> {
     let query = body.query;
     if query.trim().is_empty() {
         return Err(Error::BadRequest("query must be non-empty".into()));
     }
-    let result = retrieval::retrieve(&state.db, state.llm.as_ref(), &query).await?;
+    let result =
+        retrieval::retrieve(&state.db, &session.user_id, state.llm.as_ref(), &query).await?;
     Ok(Json(result))
 }

@@ -37,17 +37,24 @@ pub struct Braindump {
 /// wrapper, issue #46). Returns the row as stored, with the surrogate id and
 /// `created_at` filled in. Delegates to [`GraphRepo::insert_braindump`] on a
 /// [`SqliteGraphRepo`].
-pub async fn insert_braindump(db: &Db, verbatim: &str, cleaned: &str) -> Result<Braindump> {
+pub async fn insert_braindump(
+    db: &Db,
+    user_id: &str,
+    verbatim: &str,
+    cleaned: &str,
+) -> Result<Braindump> {
     SqliteGraphRepo::new(db.clone())
-        .insert_braindump(verbatim, cleaned)
+        .insert_braindump(user_id, verbatim, cleaned)
         .await
 }
 
 /// Look up a braindump by id. `None` if no row matches.
 ///
 /// Delegates to [`GraphRepo::get_braindump`] (issue #48).
-pub async fn get_braindump(db: &Db, id: i64) -> Result<Option<Braindump>> {
-    SqliteGraphRepo::new(db.clone()).get_braindump(id).await
+pub async fn get_braindump(db: &Db, user_id: &str, id: i64) -> Result<Option<Braindump>> {
+    SqliteGraphRepo::new(db.clone())
+        .get_braindump(user_id, id)
+        .await
 }
 
 /// Overwrite the verbatim in place (error-correction, ADR-0007) and store the
@@ -58,12 +65,13 @@ pub async fn get_braindump(db: &Db, id: i64) -> Result<Option<Braindump>> {
 /// Delegates to [`GraphRepo::update_braindump`] (issue #48).
 pub async fn overwrite_verbatim(
     db: &Db,
+    user_id: &str,
     id: i64,
     verbatim: &str,
     cleaned: &str,
 ) -> Result<Option<Braindump>> {
     SqliteGraphRepo::new(db.clone())
-        .update_braindump(id, verbatim.to_string(), cleaned.to_string())
+        .update_braindump(user_id, id, verbatim.to_string(), cleaned.to_string())
         .await
 }
 
@@ -75,10 +83,15 @@ pub async fn overwrite_verbatim(
 /// is the spec — the sequence the `submit` HTTP handler delegates to, so the
 /// pipeline is exercisable without an HTTP roundtrip. The edit path differs
 /// only in its persist step; see [`ingest_edit`].
-pub async fn ingest(db: &Db, llm: &dyn Llm, verbatim: &str) -> Result<(Braindump, IngestOutcome)> {
+pub async fn ingest(
+    db: &Db,
+    user_id: &str,
+    llm: &dyn Llm,
+    verbatim: &str,
+) -> Result<(Braindump, IngestOutcome)> {
     let cleaned = llm.clean(verbatim).await?;
-    let braindump = insert_braindump(db, verbatim, &cleaned).await?;
-    let outcome = accrete(db, llm, &braindump).await?;
+    let braindump = insert_braindump(db, user_id, verbatim, &cleaned).await?;
+    let outcome = accrete(db, user_id, llm, &braindump).await?;
     Ok((braindump, outcome))
 }
 
@@ -91,15 +104,16 @@ pub async fn ingest(db: &Db, llm: &dyn Llm, verbatim: &str) -> Result<(Braindump
 /// via [`ingest`], never this.
 pub async fn ingest_edit(
     db: &Db,
+    user_id: &str,
     llm: &dyn Llm,
     id: i64,
     verbatim: &str,
 ) -> Result<Option<(Braindump, IngestOutcome)>> {
     let cleaned = llm.clean(verbatim).await?;
-    let Some(braindump) = overwrite_verbatim(db, id, verbatim, &cleaned).await? else {
+    let Some(braindump) = overwrite_verbatim(db, user_id, id, verbatim, &cleaned).await? else {
         return Ok(None);
     };
-    let outcome = accrete(db, llm, &braindump).await?;
+    let outcome = accrete(db, user_id, llm, &braindump).await?;
     Ok(Some((braindump, outcome)))
 }
 
@@ -108,15 +122,29 @@ pub async fn ingest_edit(
 /// atomic accretion. This is the 90% that the `submit` and `edit` handlers
 /// used to duplicate inline (issue #42); the only step that differs between
 /// them is the persist call that produces the [`Braindump`] passed in here.
-async fn accrete(db: &Db, llm: &dyn Llm, braindump: &Braindump) -> Result<IngestOutcome> {
-    let ontology = graph::ontology_slugs(db).await?;
+async fn accrete(
+    db: &Db,
+    user_id: &str,
+    llm: &dyn Llm,
+    braindump: &Braindump,
+) -> Result<IngestOutcome> {
+    let ontology = graph::ontology_slugs(db, user_id).await?;
     let extraction = llm.extract(&braindump.verbatim, &ontology).await?;
-    graph::ingest_extraction(db, llm, braindump.id, &braindump.verbatim, extraction).await
+    graph::ingest_extraction(
+        db,
+        user_id,
+        llm,
+        braindump.id,
+        &braindump.verbatim,
+        extraction,
+    )
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::BOOTSTRAP_ADMIN_USER_ID;
     use crate::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
     use crate::graph;
     use crate::graph_repo::{GraphRepo, SqliteGraphRepo};
@@ -126,10 +154,14 @@ mod tests {
     #[tokio::test]
     async fn insert_then_get_returns_stored_braindump() {
         let db = Db::open_in_memory().unwrap();
-        let inserted = insert_braindump(&db, "hello world", "Hello, world.")
+        let inserted =
+            insert_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "hello world", "Hello, world.")
+                .await
+                .unwrap();
+        let fetched = get_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, inserted.id)
             .await
+            .unwrap()
             .unwrap();
-        let fetched = get_braindump(&db, inserted.id).await.unwrap().unwrap();
         assert_eq!(fetched, inserted);
         assert!(fetched.created_at > 0);
     }
@@ -137,20 +169,28 @@ mod tests {
     #[tokio::test]
     async fn get_missing_braindump_is_none() {
         let db = Db::open_in_memory().unwrap();
-        let got = get_braindump(&db, 9999).await.unwrap();
+        let got = get_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, 9999)
+            .await
+            .unwrap();
         assert!(got.is_none());
     }
 
     #[tokio::test]
     async fn overwrite_verbatim_replaces_in_place_keeping_id_and_timestamp() {
         let db = Db::open_in_memory().unwrap();
-        let original = insert_braindump(&db, "hallo welt", "Hallo, Welt.")
+        let original = insert_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "hallo welt", "Hallo, Welt.")
             .await
             .unwrap();
-        let updated = overwrite_verbatim(&db, original.id, "hello world", "Hello, world.")
-            .await
-            .unwrap()
-            .expect("row exists");
+        let updated = overwrite_verbatim(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            original.id,
+            "hello world",
+            "Hello, world.",
+        )
+        .await
+        .unwrap()
+        .expect("row exists");
         assert_eq!(updated.id, original.id, "id is stable across edit");
         assert_eq!(
             updated.created_at, original.created_at,
@@ -158,14 +198,19 @@ mod tests {
         );
         assert_eq!(updated.verbatim, "hello world");
         assert_eq!(updated.cleaned, "Hello, world.");
-        let refetched = get_braindump(&db, original.id).await.unwrap().unwrap();
+        let refetched = get_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, original.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(refetched, updated);
     }
 
     #[tokio::test]
     async fn overwrite_verbatim_on_missing_id_is_none() {
         let db = Db::open_in_memory().unwrap();
-        let got = overwrite_verbatim(&db, 9999, "x", "X").await.unwrap();
+        let got = overwrite_verbatim(&db, BOOTSTRAP_ADMIN_USER_ID, 9999, "x", "X")
+            .await
+            .unwrap();
         assert!(got.is_none());
     }
 
@@ -237,9 +282,14 @@ mod tests {
         let llm = IngestLlm {
             result: maria_endangers_q3(),
         };
-        let (braindump, outcome) = ingest(&db, &llm, "  maria endangers the q3 launch  ")
-            .await
-            .unwrap();
+        let (braindump, outcome) = ingest(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            "  maria endangers the q3 launch  ",
+        )
+        .await
+        .unwrap();
 
         // clean: cleaned is the trimmed verbatim (FakeLlm contract).
         assert_eq!(braindump.verbatim, "  maria endangers the q3 launch  ");
@@ -247,7 +297,10 @@ mod tests {
         // persist: row fetchable by id with the cleaned rendering.
         assert!(braindump.id > 0);
         assert_eq!(
-            get_braindump(&db, braindump.id).await.unwrap().unwrap(),
+            get_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, braindump.id)
+                .await
+                .unwrap()
+                .unwrap(),
             braindump
         );
         // ontology → extract → accrete: both concepts + the edge landed with
@@ -255,32 +308,41 @@ mod tests {
         // was stored (accretion ran, not just the persist).
         assert_eq!(outcome.concepts_created, 2, "{outcome:?}");
         assert_eq!(outcome.edges_created, 1, "{outcome:?}");
-        let maria = graph::concept_id_for_label(&db, "Maria")
+        let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
             .await
             .unwrap()
             .unwrap();
-        let q3 = graph::concept_id_for_label(&db, "Q3 launch")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            graph::concept_provenance(&db, maria).await.unwrap(),
-            vec![braindump.id]
-        );
-        assert_eq!(
-            graph::concept_provenance(&db, q3).await.unwrap(),
-            vec![braindump.id]
-        );
-        let edge = graph::find_edge(&db, maria, "endangers", q3)
+        let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
             .await
             .unwrap()
             .unwrap();
         assert_eq!(
-            graph::edge_provenance(&db, edge.id).await.unwrap(),
+            graph::concept_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, maria)
+                .await
+                .unwrap(),
             vec![braindump.id]
         );
         assert_eq!(
-            graph::edge_type_history(&db, edge.id).await.unwrap().len(),
+            graph::concept_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, q3)
+                .await
+                .unwrap(),
+            vec![braindump.id]
+        );
+        let edge = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+                .await
+                .unwrap(),
+            vec![braindump.id]
+        );
+        assert_eq!(
+            graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+                .await
+                .unwrap()
+                .len(),
             1,
             "type history seeded at index 0 (ADR-0003)"
         );
@@ -289,7 +351,9 @@ mod tests {
         // adapter is reachable from a cross-module caller.
         let repo: Arc<dyn GraphRepo> = Arc::new(SqliteGraphRepo::new(db.clone()));
         assert!(
-            repo.braindump_embedding_stored(braindump.id).await.unwrap(),
+            repo.braindump_embedding_stored(BOOTSTRAP_ADMIN_USER_ID, braindump.id)
+                .await
+                .unwrap(),
             "braindump embedding stored (retrieval backfill)"
         );
     }
@@ -300,19 +364,29 @@ mod tests {
         let llm = IngestLlm {
             result: maria_endangers_q3(),
         };
-        let (first, first_outcome) = ingest(&db, &llm, "maria endangers q3 launch")
-            .await
-            .unwrap();
+        let (first, first_outcome) = ingest(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            "maria endangers q3 launch",
+        )
+        .await
+        .unwrap();
         assert_eq!(first_outcome.concepts_created, 2);
 
         // Edit: correct the verbatim. Same scripted extraction → Maria/Q3
         // accrete onto the existing nodes (no duplicates), id + timestamp
         // are stable, and the cleaned rendering is re-derived.
-        let (edited, edited_outcome) =
-            ingest_edit(&db, &llm, first.id, "  maria endangers q3 launch again  ")
-                .await
-                .unwrap()
-                .expect("row exists");
+        let (edited, edited_outcome) = ingest_edit(
+            &db,
+            BOOTSTRAP_ADMIN_USER_ID,
+            &llm,
+            first.id,
+            "  maria endangers q3 launch again  ",
+        )
+        .await
+        .unwrap()
+        .expect("row exists");
         assert_eq!(edited.id, first.id, "id stable across edit (ADR-0007)");
         assert_eq!(
             edited.created_at, first.created_at,
@@ -327,12 +401,14 @@ mod tests {
         assert_eq!(edited_outcome.concepts_created, 2, "{edited_outcome:?}");
         assert_eq!(edited_outcome.concepts_accreted, 0, "{edited_outcome:?}");
         assert_eq!(edited_outcome.edges_created, 1, "{edited_outcome:?}");
-        let maria = graph::concept_id_for_label(&db, "Maria")
+        let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
             .await
             .unwrap()
             .unwrap();
         assert_eq!(
-            graph::concept_provenance(&db, maria).await.unwrap(),
+            graph::concept_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, maria)
+                .await
+                .unwrap(),
             vec![first.id]
         );
     }
@@ -344,7 +420,10 @@ mod tests {
             result: ExtractionResult::default(),
         };
         assert!(
-            ingest_edit(&db, &llm, 9999, "x").await.unwrap().is_none(),
+            ingest_edit(&db, BOOTSTRAP_ADMIN_USER_ID, &llm, 9999, "x")
+                .await
+                .unwrap()
+                .is_none(),
             "editing a missing braindump is None (caller maps to 404)"
         );
     }

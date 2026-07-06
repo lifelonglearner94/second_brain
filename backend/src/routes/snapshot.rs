@@ -15,19 +15,24 @@
 use std::io::Write;
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
+use crate::auth::session::SessionInfo;
 use crate::error::{Error, Result};
 use crate::snapshot;
 use crate::state::AppState;
 
 /// `GET /graph` — return the Global Topology Snapshot as a gzipped JSON body.
-pub async fn topology_snapshot(State(state): State<AppState>) -> Result<Response> {
-    let snapshot = snapshot::topology_snapshot(state.graph_repo.as_ref(), &state.db).await?;
+pub async fn topology_snapshot(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
+) -> Result<Response> {
+    let snapshot =
+        snapshot::topology_snapshot(state.graph_repo.as_ref(), &state.db, &session.user_id).await?;
     let json = serde_json::to_vec(&snapshot)
         .map_err(|e| Error::internal(format!("snapshot encode: {e}")))?;
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());

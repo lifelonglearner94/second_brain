@@ -16,6 +16,7 @@ use http_body_util::BodyExt;
 use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
+use second_brain_backend::db::BOOTSTRAP_ADMIN_USER_ID;
 use second_brain_backend::error::Result;
 use second_brain_backend::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
 use second_brain_backend::graph;
@@ -171,38 +172,53 @@ async fn submit_drives_extraction_and_accretion_end_to_end() {
     let bd = submit(&app, &cookie, "maria endangers the q3 launch").await;
 
     // Both concepts landed with this braindump in their extraction provenance.
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
-        graph::concept_provenance(&db, maria).await.unwrap(),
+        graph::concept_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, maria)
+            .await
+            .unwrap(),
         vec![bd],
         "extraction provenance (ADR-0010)"
     );
-    assert_eq!(graph::concept_provenance(&db, q3).await.unwrap(), vec![bd]);
+    assert_eq!(
+        graph::concept_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, q3)
+            .await
+            .unwrap(),
+        vec![bd]
+    );
 
     // The edge landed with type_history at index 0 = the original assertion.
-    let edge = graph::find_edge(&db, maria, "endangers", q3)
+    let edge = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
         .await
         .unwrap()
         .expect("edge created");
     assert_eq!(edge.original_type, "endangers");
     assert_eq!(
-        graph::edge_provenance(&db, edge.id).await.unwrap(),
+        graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap(),
         vec![bd]
     );
-    let history = graph::edge_type_history(&db, edge.id).await.unwrap();
+    let history = graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+        .await
+        .unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].seq_index, 0);
     assert_eq!(history[0].type_slug, "endangers");
 
     // Both embeddings persisted (Gemini in prod; FakeLlm here).
-    assert!(graph::braindump_embedding_stored(&db, bd).await.unwrap());
+    assert!(
+        graph::braindump_embedding_stored(&db, BOOTSTRAP_ADMIN_USER_ID, bd)
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -222,11 +238,13 @@ async fn two_braindumps_same_concept_accrete_into_one_node_via_route() {
 
     // One concept node (identical label → identical FakeLlm vector →
     // cosine 1.0 > 0.95 → accrete), both braindumps in its provenance.
-    let cid = graph::concept_id_for_label(&db, "Q3 review")
+    let cid = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 review")
         .await
         .unwrap()
         .unwrap();
-    let mut prov = graph::concept_provenance(&db, cid).await.unwrap();
+    let mut prov = graph::concept_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, cid)
+        .await
+        .unwrap();
     prov.sort_unstable();
     assert_eq!(prov, vec![bd1, bd2]);
 }
@@ -246,25 +264,30 @@ async fn second_braindump_accretes_edge_provenance_via_route() {
     let bd1 = submit(&app, &cookie, "maria endangers q3 launch").await;
     let bd2 = submit(&app, &cookie, "maria still endangers q3 launch").await;
 
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
-    let edge = graph::find_edge(&db, maria, "endangers", q3)
+    let edge = graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
         .await
         .unwrap()
         .expect("edge exists");
     // ADR-0002: the second assertion accretes to asserted_by, no new edge.
-    let mut prov = graph::edge_provenance(&db, edge.id).await.unwrap();
+    let mut prov = graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+        .await
+        .unwrap();
     prov.sort_unstable();
     assert_eq!(prov, vec![bd1, bd2]);
     // Still a single type-history entry (no second assertion appended a type).
     assert_eq!(
-        graph::edge_type_history(&db, edge.id).await.unwrap().len(),
+        graph::edge_type_history(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
+            .await
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -283,17 +306,17 @@ async fn unsanctioned_edge_type_rejected_via_route() {
 
     submit(&app, &cookie, "maria bamboozles q3 launch").await;
 
-    let maria = graph::concept_id_for_label(&db, "Maria")
+    let maria = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
         .await
         .unwrap()
         .unwrap();
-    let q3 = graph::concept_id_for_label(&db, "Q3 launch")
+    let q3 = graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Q3 launch")
         .await
         .unwrap()
         .unwrap();
     // Concepts were created, but the unsanctioned edge was rejected.
     assert!(
-        graph::find_edge(&db, maria, "bamboozles", q3)
+        graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "bamboozles", q3)
             .await
             .unwrap()
             .is_none(),
@@ -323,10 +346,12 @@ async fn edit_retracts_stale_extraction_and_re_accretes_via_route() {
     let cookie = session_cookie(&db).await;
 
     let bd = submit(&app, &cookie, "maria endangers q3 launch").await;
-    assert!(graph::concept_id_for_label(&db, "Maria")
-        .await
-        .unwrap()
-        .is_some());
+    assert!(
+        graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
+            .await
+            .unwrap()
+            .is_some()
+    );
 
     // PATCH: error-correct the verbatim; the extractor returns the second
     // scripted result on the re-extraction.
@@ -345,14 +370,14 @@ async fn edit_retracts_stale_extraction_and_re_accretes_via_route() {
     // The stale Maria/Q3 concepts (only this braindump asserted them) are gone;
     // the new Alpha concept is present.
     assert!(
-        graph::concept_id_for_label(&db, "Maria")
+        graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Maria")
             .await
             .unwrap()
             .is_none(),
         "stale concept retracted on edit"
     );
     assert!(
-        graph::concept_id_for_label(&db, "Alpha project")
+        graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Alpha project")
             .await
             .unwrap()
             .is_some(),
@@ -361,7 +386,8 @@ async fn edit_retracts_stale_extraction_and_re_accretes_via_route() {
     assert_eq!(
         graph::concept_provenance(
             &db,
-            graph::concept_id_for_label(&db, "Alpha project")
+            BOOTSTRAP_ADMIN_USER_ID,
+            graph::concept_id_for_label(&db, BOOTSTRAP_ADMIN_USER_ID, "Alpha project")
                 .await
                 .unwrap()
                 .unwrap()

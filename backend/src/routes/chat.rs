@@ -10,10 +10,11 @@
 //! Sits behind the auth middleware (registered in [`crate::routes`] under the
 //! protected layer), like the retrieval read path.
 
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::response::Json;
 use serde::Deserialize;
 
+use crate::auth::session::SessionInfo;
 use crate::chat::{self, ChatResponse};
 use crate::error::{Error, Result};
 use crate::state::AppState;
@@ -29,12 +30,13 @@ pub struct ChatRequest {
 /// the query and return the answer with its citations.
 pub async fn chat(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
     Json(body): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>> {
     let query = body.query;
     if query.trim().is_empty() {
         return Err(Error::BadRequest("query must be non-empty".into()));
     }
-    let response = chat::chat(&state.db, state.llm.as_ref(), &query).await?;
+    let response = chat::chat(&state.db, state.llm.as_ref(), &session.user_id, &query).await?;
     Ok(Json(response))
 }

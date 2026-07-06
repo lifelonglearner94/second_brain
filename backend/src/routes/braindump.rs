@@ -17,11 +17,12 @@
 //! on the single [`crate::llm::Llm`] seam; the accretion pipeline is
 //! [`crate::graph::ingest_extraction`].
 
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use serde::Deserialize;
 
+use crate::auth::session::SessionInfo;
 use crate::braindump::{self, get_braindump, Braindump};
 use crate::error::{Error, Result};
 use crate::graph;
@@ -41,13 +42,15 @@ pub struct BraindumpRequest {
 /// [`braindump::ingest`], log the outcome, and return the stored braindump.
 pub async fn submit(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
     Json(body): Json<BraindumpRequest>,
 ) -> Result<Json<Braindump>> {
     let verbatim = body.verbatim;
     if verbatim.trim().is_empty() {
         return Err(Error::BadRequest("verbatim must be non-empty".into()));
     }
-    let (braindump, outcome) = braindump::ingest(&state.db, state.llm.as_ref(), &verbatim).await?;
+    let (braindump, outcome) =
+        braindump::ingest(&state.db, &session.user_id, state.llm.as_ref(), &verbatim).await?;
     tracing::debug!(
         braindump_id = braindump.id,
         created = outcome.concepts_created,
@@ -62,8 +65,12 @@ pub async fn submit(
 }
 
 /// `GET /braindumps/:id` — return both the verbatim and the cleaned rendering.
-pub async fn read(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Json<Braindump>> {
-    let Some(braindump) = get_braindump(&state.db, id).await? else {
+pub async fn read(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
+    Path(id): Path<i64>,
+) -> Result<Json<Braindump>> {
+    let Some(braindump) = get_braindump(&state.db, &session.user_id, id).await? else {
         return Err(Error::NotFound(format!("braindump {id} not found")));
     };
     Ok(Json(braindump))
@@ -79,6 +86,7 @@ pub async fn read(State(state): State<AppState>, Path(id): Path<i64>) -> Result<
 /// edits the old one.
 pub async fn edit(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
     Path(id): Path<i64>,
     Json(body): Json<BraindumpRequest>,
 ) -> Result<Json<Braindump>> {
@@ -86,8 +94,14 @@ pub async fn edit(
     if verbatim.trim().is_empty() {
         return Err(Error::BadRequest("verbatim must be non-empty".into()));
     }
-    let Some((braindump, outcome)) =
-        braindump::ingest_edit(&state.db, state.llm.as_ref(), id, &verbatim).await?
+    let Some((braindump, outcome)) = braindump::ingest_edit(
+        &state.db,
+        &session.user_id,
+        state.llm.as_ref(),
+        id,
+        &verbatim,
+    )
+    .await?
     else {
         return Err(Error::NotFound(format!("braindump {id} not found")));
     };
@@ -110,8 +124,12 @@ pub async fn edit(
 /// vanishes when its last extracting braindump is removed, an edge vanishes
 /// when its last asserter is removed, and an edge whose endpoint concept
 /// vanishes is cascade-deleted (ADR-0010 addendum). `404` if no such braindump.
-pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> Result<StatusCode> {
-    let deleted = graph::delete_braindump(&state.db, id).await?;
+pub async fn delete(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode> {
+    let deleted = graph::delete_braindump(&state.db, &session.user_id, id).await?;
     if !deleted {
         return Err(Error::NotFound(format!("braindump {id} not found")));
     }

@@ -58,12 +58,18 @@ impl SessionId {
 }
 
 /// What a handler learns about a validated session from the middleware /
-/// `lookup_session`. `user_id` identifies the single account a passkey binds
-/// to; today there's exactly one, but the column is general.
+/// `lookup_session`. `user_id` identifies the account a passkey binds to.
+/// Issue #72: `is_admin` and `display_name` are sourced from the `users`
+/// table at lookup time so `/me` can return them without a second query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub session_id: String,
     pub user_id: String,
+    /// The user's display name from the `users` table (issue #72).
+    pub display_name: String,
+    /// Whether the user is an admin (issue #72). The bootstrap admin is the
+    /// only admin while the singleton lock is in place.
+    pub is_admin: bool,
     pub created_at: i64,
     pub expires_at: Option<i64>,
 }
@@ -89,7 +95,9 @@ fn encode_id(bytes: &[u8]) -> String {
 
 /// Mint a brand-new, cryptographically-random session id and persist a `sessions`
 /// row for it. The id is returned exactly once so the caller can set the cookie;
-/// it is never looked up by anything but the cookie value.
+/// it is never looked up by anything but the cookie value. Issue #72: also
+/// looks up the `users` row for `display_name` and `is_admin` so the session
+/// carries them for `/me`.
 pub async fn mint_session(db: &Db, user_id: &str) -> Result<SessionInfo> {
     let user_id = user_id.to_string();
     db.with_conn(move |conn| {
@@ -109,9 +117,19 @@ pub async fn mint_session(db: &Db, user_id: &str) -> Result<SessionInfo> {
                 params![id, user_id, created_at, expires_at],
             )?;
             if inserted == 1 {
+                // Look up the user's display_name and is_admin for the
+                // SessionInfo (issue #72). The FK on sessions.user_id →
+                // users.id guarantees the row exists.
+                let (display_name, is_admin): (String, i64) = conn.query_row(
+                    "SELECT display_name, is_admin FROM users WHERE id = ?1",
+                    params![user_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
                 return Ok(SessionInfo {
                     session_id: id,
                     user_id,
+                    display_name,
+                    is_admin: is_admin != 0,
                     created_at,
                     expires_at: Some(expires_at),
                 });
@@ -122,21 +140,27 @@ pub async fn mint_session(db: &Db, user_id: &str) -> Result<SessionInfo> {
 }
 
 /// Look up a session row by its cookie-presented id. Returns `None` if the row
-/// is missing — the middleware turns that into a 401.
+/// is missing — the middleware turns that into a 401. Issue #72: joins the
+/// `users` table so the `SessionInfo` carries `display_name` and `is_admin`.
 pub async fn lookup_session(db: &Db, id: SessionId) -> Result<Option<SessionInfo>> {
     let id = id.0;
     db.with_conn(move |conn| {
         let row = conn
             .query_row(
-                "SELECT session_id, user_id, created_at, expires_at
-                 FROM sessions WHERE session_id = ?1",
+                "SELECT s.session_id, s.user_id, u.display_name, u.is_admin,
+                        s.created_at, s.expires_at
+                 FROM sessions s
+                 JOIN users u ON u.id = s.user_id
+                 WHERE s.session_id = ?1",
                 params![id],
                 |row| {
                     Ok(SessionInfo {
                         session_id: row.get(0)?,
                         user_id: row.get(1)?,
-                        created_at: row.get(2)?,
-                        expires_at: row.get(3)?,
+                        display_name: row.get(2)?,
+                        is_admin: row.get::<_, i64>(3)? != 0,
+                        created_at: row.get(4)?,
+                        expires_at: row.get(5)?,
                     })
                 },
             )
@@ -181,10 +205,14 @@ mod tests {
     #[tokio::test]
     async fn mint_then_lookup_then_invalidate() {
         let db = Db::open_in_memory().unwrap();
-        let s = mint_session(&db, "me").await.unwrap();
+        let s = mint_session(&db, "00000000-0000-0000-0000-000000000001")
+            .await
+            .unwrap();
         let id = SessionId::parse(&s.session_id).unwrap();
         let found = lookup_session(&db, id.clone()).await.unwrap().unwrap();
-        assert_eq!(found.user_id, "me");
+        assert_eq!(found.user_id, "00000000-0000-0000-0000-000000000001");
+        assert_eq!(found.display_name, "me");
+        assert!(found.is_admin, "bootstrap admin must be is_admin");
         assert!(!found.is_expired());
 
         invalidate_session(&db, &id).await.unwrap();
@@ -196,8 +224,12 @@ mod tests {
     async fn invalidated_session_id_is_not_reused_for_a_new_mint() {
         // Mint two sessions and confirm distinct ids — sanity check SysRng.
         let db = Db::open_in_memory().unwrap();
-        let a = mint_session(&db, "me").await.unwrap();
-        let b = mint_session(&db, "me").await.unwrap();
+        let a = mint_session(&db, "00000000-0000-0000-0000-000000000001")
+            .await
+            .unwrap();
+        let b = mint_session(&db, "00000000-0000-0000-0000-000000000001")
+            .await
+            .unwrap();
         assert_ne!(a.session_id, b.session_id);
     }
 }
