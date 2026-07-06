@@ -1,6 +1,6 @@
 # Infrastructure
 
-The deployment and runtime topology for Second Brain — Docker Compose, the public-facing service, and the deploy pipeline. Personal-Scale: a single Hetzner VPS, two long-running services.
+The deployment and runtime topology for Second Brain — Docker Compose, the public-facing service, and the deploy pipeline. Personal-Scale: a single VPS, two long-running services.
 
 ## Language
 

@@ -10,7 +10,7 @@ at a bad time — don't improvise.
 > **The Brain Replica is live (Litestream -> Cloudflare R2, ADR-0002 / #32).**
 > A Litestream sidecar tails the Brain File's WAL second-by-second to an R2
 > bucket, so the Recovery Point Objective is ~1 second. R2 lives in a failure
-> domain fully isolated from the Hetzner VPS (off-provider, zero egress). A
+> domain fully isolated from the VPS (off-provider, zero egress). A
 > host-cron ntfy Health Push (ADR-0005 / #33) fires when replication stops or
 > the volume nears capacity — the alert finds the operator, not the reverse.
 > Both ship in the next deploy to `main` (GHA build -> GHCR -> VPS pull); until
@@ -87,7 +87,7 @@ but is destroyed by `docker compose down -v`:
 
 ## Recovery procedure
 
-Assume the VPS is gone (Hetzner host failure, accidental destroy, compromise).
+Assume the VPS is gone (Host failure, accidental destroy, compromise).
 
 ### 1. Provision a fresh Debian 13 VPS and run bootstrap
 
@@ -196,7 +196,7 @@ a Second Brain is only as strong as the last confirmed restore.
   proves the restore command shape and the Litestream round-trip end to end.
   Run it before any change to `litestream.yml` or the restore sequence.
 - **Throwaway-VPS re-exercise (periodic, manual):** the procedure above MUST be
-  re-exercised on a fresh throwaway Hetzner VPS periodically (e.g. quarterly, or
+  re-exercised on a fresh throwaway VPS periodically (e.g. quarterly, or
   after any Litestream/R2 config change) — provision a VPS, `bootstrap.sh`,
   place `.env` with real R2 creds, `litestream restore` from the live R2 bucket,
   `docker compose pull && up -d`, and confirm a known recent braindump is

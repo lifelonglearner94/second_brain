@@ -4,7 +4,7 @@
 
 - [Backend](./backend/CONTEXT.md) — the Rust orchestrator and graph engine; owns the core data model (braindumps, concepts, the knowledge graph)
 - [Frontend](./frontend/CONTEXT.md) — the PWA UI: voice capture, 3D graph visualization, chat
-- [Infrastructure](./infrastructure/CONTEXT.md) — Docker Compose, the Edge (Caddy), the deploy pipeline; two long-running services on a single Hetzner VPS
+- [Infrastructure](./infrastructure/CONTEXT.md) — Docker Compose, the Edge (Caddy), the deploy pipeline; two long-running services on a single VPS
 
 ## Relationships
 

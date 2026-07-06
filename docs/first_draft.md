@@ -1,6 +1,6 @@
 # First Draft — Second Brain (überarbeitet, Stand Juli 2026)
 
-_Dieser Draft wurde gegen aktuelle Primärquellen (Stand Juli 2026) auf den bestmöglichen, modernsten Stack für diesen Anwendungsfall geprüft: Single-User-PWA, Deutsch als Primärsprache, 8-GB-Hetzner-VPS, gehostete KI-APIs (kein Self-Hosting von Modellen). Geänderte Entscheidungen sind im Text und in der Änderungsliste unten begründet._
+_Dieser Draft wurde gegen aktuelle Primärquellen (Stand Juli 2026) auf den bestmöglichen, modernsten Stack für diesen Anwendungsfall geprüft: Single-User-PWA, Deutsch als Primärsprache, 4-GB-VPS, gehostete KI-APIs (kein Self-Hosting von Modellen). Geänderte Entscheidungen sind im Text und in der Änderungsliste unten begründet._
 
 ## Was sich seit dem Ursprungs-Draft geändert hat
 
@@ -12,7 +12,7 @@ _Dieser Draft wurde gegen aktuelle Primärquellen (Stand Juli 2026) auf den best
 - ~~JWT in `localStorage`~~ → **Passkey (WebAuthn) + `httpOnly; Secure; SameSite=Strict` Session-Cookie**. JWT-in-localStorage ist ein XSS-Anti-Pattern und nicht widerrufbar.
 - ~~Traefik / Nginx Proxy Manager~~ → **Caddy** (auto-HTTPS by default, HTTP/3 by default, ~5-Zeilen-Caddyfile).
 - **`3d-force-graph` bleibt**, bekommt aber **graphology als Datenmodell** und **sigma.js als 2D-Mobil-Fallback**.
-- **Axum, PWA, Docker Compose, Hetzner, GitHub Actions** bleiben — bestätigt als weiterhin bestmögliche Wahl.
+- **Axum, PWA, Docker Compose, GitHub Actions** bleiben — bestätigt als weiterhin bestmögliche Wahl.
 
 ---
 
@@ -58,5 +58,5 @@ Das System basiert auf einer serviceorientierten Architektur, verpackt in Docker
 * **Monorepo:** Ein einziges Git-Repository mit Unterordnern für `/frontend`, `/backend` und `/infrastructure`.
 * **Docker Compose:** orchestriert Frontend-Host und Rust-API; die Daten liegen in SQLite in-process — ~~kein Qdrant-Container, kein Ollama-Container~~ mehr. Deutlich schlankeres Compose als im Ursprungs-Draft.
 * **Reverse Proxy:** **Caddy** — auto-HTTPS (Let's Encrypt/ZeroSSL) by default, HTTP/3 by default, ~5-Zeilen-Caddyfile, ~30–40 MB RSS. *Wichtig: Ohne HTTPS blockiert der Handy-Browser das Mikrofon — Caddy erledigt das automatisch.* ~~Traefik / Nginx Proxy Manager~~ — für einen statischen Single-Backend Overkill. *(Falls später ein PaaS wie Coolify/Dokploy eingesetzt wird, dessen gebündeltes Traefik übernehmen — keinen zweiten Proxy betreiben.)*
-* **Hosting:** Ein Hetzner VPS mit 8 GB RAM — komfortabel für Single-User, ausreichend für Graph/Vektoren in SQLite und die API-Aufrufe.
+* **Hosting:** Ein VPS mit 4 GB RAM — komfortabel für Single-User, ausreichend für Graph/Vektoren in SQLite und die API-Aufrufe.
 * **CI/CD (GitHub Actions):** Push auf `main` → Code testen, Docker-Images bauen, per SSH `docker compose pull && up -d` auf den Server. Optional Coolify/Dokploy für einen git-push-to-deploy-PaaS-Flow (inkl. PR-Preview-Deploys, Backups, Monitoring) — dann entfällt das eigene Deploy-Script.
