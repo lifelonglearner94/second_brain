@@ -16,7 +16,11 @@ function okResponse(body: unknown, status = 200): Response {
 
 const CREATION_OPTIONS: PublicKeyCredentialCreationOptionsJSON = {
 	rp: { id: 'localhost', name: 'Second Brain' },
-	user: { id: '00000000-0000-0000-0000-000000000001', name: 'me', displayName: 'me' },
+	user: {
+		id: '00000000-0000-0000-0000-000000000001',
+		name: 'me',
+		displayName: 'me'
+	},
 	challenge: 'AAAA',
 	pubKeyCredParams: [{ type: 'public-key', alg: -7 }]
 };
@@ -59,7 +63,10 @@ describe('apiClient — passkey auth surface against backend #2', () => {
 
 	it('POST /auth/register/begin returns the creation challenge + opaque state token', async () => {
 		fetchMock.mockResolvedValue(
-			okResponse({ challenge: { publicKey: CREATION_OPTIONS }, state: 'state-1' })
+			okResponse({
+				challenge: { publicKey: CREATION_OPTIONS },
+				state: 'state-1'
+			})
 		);
 		const api = createApiClient({ fetch: fetchMock });
 		const begin = await api.registerBegin();
@@ -67,13 +74,19 @@ describe('apiClient — passkey auth surface against backend #2', () => {
 		expect(url).toBe('/api/auth/register/begin');
 		expect(init?.method).toBe('POST');
 		expect(init?.credentials).toBe('include');
-		expect(begin).toEqual({ challenge: { publicKey: CREATION_OPTIONS }, state: 'state-1' });
+		expect(begin).toEqual({
+			challenge: { publicKey: CREATION_OPTIONS },
+			state: 'state-1'
+		});
 	});
 
 	it('POST /auth/register/finish posts the credential + state as JSON', async () => {
 		fetchMock.mockResolvedValue(okResponse({ registered: true }));
 		const api = createApiClient({ fetch: fetchMock });
-		const ok = await api.registerFinish({ credential: REGISTRATION_RESPONSE, state: 'state-1' });
+		const ok = await api.registerFinish({
+			credential: REGISTRATION_RESPONSE,
+			state: 'state-1'
+		});
 		const [url, init] = fetchMock.mock.calls[0];
 		expect(url).toBe('/api/auth/register/finish');
 		expect(init?.method).toBe('POST');
@@ -88,18 +101,29 @@ describe('apiClient — passkey auth surface against backend #2', () => {
 
 	it('POST /auth/login/begin returns the request challenge + opaque state token', async () => {
 		fetchMock.mockResolvedValue(
-			okResponse({ challenge: { publicKey: REQUEST_OPTIONS }, state: 'state-2' })
+			okResponse({
+				challenge: { publicKey: REQUEST_OPTIONS },
+				state: 'state-2'
+			})
 		);
 		const api = createApiClient({ fetch: fetchMock });
 		const begin = await api.loginBegin();
 		expect(fetchMock.mock.calls[0][0]).toBe('/api/auth/login/begin');
-		expect(begin).toEqual({ challenge: { publicKey: REQUEST_OPTIONS }, state: 'state-2' });
+		expect(begin).toEqual({
+			challenge: { publicKey: REQUEST_OPTIONS },
+			state: 'state-2'
+		});
 	});
 
 	it('POST /auth/login/finish posts the assertion + state and returns user_id', async () => {
-		fetchMock.mockResolvedValue(okResponse({ user_id: '00000000-0000-0000-0000-000000000001' }));
+		fetchMock.mockResolvedValue(
+			okResponse({ user_id: '00000000-0000-0000-0000-000000000001' })
+		);
 		const api = createApiClient({ fetch: fetchMock });
-		const ok = await api.loginFinish({ credential: AUTH_RESPONSE, state: 'state-2' });
+		const ok = await api.loginFinish({
+			credential: AUTH_RESPONSE,
+			state: 'state-2'
+		});
 		const [url, init] = fetchMock.mock.calls[0];
 		expect(url).toBe('/api/auth/login/finish');
 		expect(JSON.parse(init?.body as string)).toEqual({
@@ -110,7 +134,9 @@ describe('apiClient — passkey auth surface against backend #2', () => {
 	});
 
 	it('GET /me returns the account id for a credentialed request', async () => {
-		fetchMock.mockResolvedValue(okResponse({ user_id: '00000000-0000-0000-0000-000000000001' }));
+		fetchMock.mockResolvedValue(
+			okResponse({ user_id: '00000000-0000-0000-0000-000000000001' })
+		);
 		const api = createApiClient({ fetch: fetchMock });
 		const me = await api.getMe();
 		const [url, init] = fetchMock.mock.calls[0];
@@ -135,7 +161,8 @@ describe('apiClient — passkey auth surface against backend #2', () => {
 		fetchMock.mockResolvedValue(
 			okResponse({
 				error: 'recovery_not_implemented',
-				message: 'Master-passphrase recovery is a documented seam; not yet implemented.'
+				message:
+					'Master-passphrase recovery is a documented seam; not yet implemented.'
 			})
 		);
 		const api = createApiClient({ fetch: fetchMock });

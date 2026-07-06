@@ -4,7 +4,11 @@ import { OnlineStore } from '../../src/lib/state/online.svelte';
 const originalOnLine = Object.getOwnPropertyDescriptor(navigator, 'onLine');
 
 function setOnLine(value: boolean): void {
-	Object.defineProperty(navigator, 'onLine', { value, configurable: true, writable: true });
+	Object.defineProperty(navigator, 'onLine', {
+		value,
+		configurable: true,
+		writable: true
+	});
 }
 
 afterEach(() => {

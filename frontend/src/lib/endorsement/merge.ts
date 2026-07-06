@@ -5,8 +5,12 @@ export function mergeEndorsedEdge(
 	graph: GraphData,
 	proposal: ChatInferenceProposal
 ): GraphData {
-	const sourceNode = graph.nodes.find((n) => String(n.id) === String(proposal.source_concept_id));
-	const targetNode = graph.nodes.find((n) => String(n.id) === String(proposal.target_concept_id));
+	const sourceNode = graph.nodes.find(
+		(n) => String(n.id) === String(proposal.source_concept_id)
+	);
+	const targetNode = graph.nodes.find(
+		(n) => String(n.id) === String(proposal.target_concept_id)
+	);
 	if (!sourceNode || !targetNode) {
 		return graph;
 	}

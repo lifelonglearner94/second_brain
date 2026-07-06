@@ -30,15 +30,31 @@ const LOGS_BODY = {
 	capacity: 1_000
 };
 
-function mockMe(page: import('@playwright/test').Page, status: number, body: unknown) {
+function mockMe(
+	page: import('@playwright/test').Page,
+	status: number,
+	body: unknown
+) {
 	return page.route('**/api/me', (route) =>
-		route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+		route.fulfill({
+			status,
+			contentType: 'application/json',
+			body: JSON.stringify(body)
+		})
 	);
 }
 
-function mockLogs(page: import('@playwright/test').Page, status: number, body: unknown) {
+function mockLogs(
+	page: import('@playwright/test').Page,
+	status: number,
+	body: unknown
+) {
 	return page.route('**/api/admin/logs**', (route) =>
-		route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+		route.fulfill({
+			status,
+			contentType: 'application/json',
+			body: JSON.stringify(body)
+		})
 	);
 }
 
@@ -61,11 +77,15 @@ test('authenticated: the admin tab fetches and renders structured logs from GET 
 
 	await page.goto('/app/admin/logs');
 
-	await expect(page.getByTestId('admin-logs-list')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('admin-logs-list')).toBeVisible({
+		timeout: 10_000
+	});
 	await expect(page.getByTestId('admin-logs-count')).toContainText('3');
 	await expect(page.getByTestId('admin-logs-capacity')).toContainText('1000');
 	await expect(page.getByTestId('admin-log-row')).toHaveCount(3);
-	await expect(page.getByTestId('admin-log-message').first()).toContainText('generation failed');
+	await expect(page.getByTestId('admin-log-message').first()).toContainText(
+		'generation failed'
+	);
 });
 
 test('the admin tab is hidden from primary nav and revealed by a non-obvious gesture (5 taps on the title)', async ({
@@ -90,15 +110,21 @@ test('the admin tab is hidden from primary nav and revealed by a non-obvious ges
 	await page.getByTestId('admin-link').click();
 
 	await expect(page).toHaveURL(/\/app\/admin\/logs$/);
-	await expect(page.getByTestId('admin-logs-list')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('admin-logs-list')).toBeVisible({
+		timeout: 10_000
+	});
 });
 
-test('level filter narrows the rendered list to the selected level', async ({ page }) => {
+test('level filter narrows the rendered list to the selected level', async ({
+	page
+}) => {
 	await mockMe(page, 200, { user_id: USER_ID });
 	await mockLogs(page, 200, LOGS_BODY);
 
 	await page.goto('/app/admin/logs');
-	await expect(page.getByTestId('admin-logs-list')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('admin-logs-list')).toBeVisible({
+		timeout: 10_000
+	});
 	await expect(page.getByTestId('admin-log-row')).toHaveCount(3);
 
 	await page.getByTestId('admin-logs-filter-WARN').click();
@@ -107,7 +133,9 @@ test('level filter narrows the rendered list to the selected level', async ({ pa
 
 	await page.getByTestId('admin-logs-filter-ERROR').click();
 	await expect(page.getByTestId('admin-log-row')).toHaveCount(1);
-	await expect(page.getByTestId('admin-log-message')).toContainText('generation failed');
+	await expect(page.getByTestId('admin-log-message')).toContainText(
+		'generation failed'
+	);
 
 	await page.getByTestId('admin-logs-filter-all').click();
 	await expect(page.getByTestId('admin-log-row')).toHaveCount(3);
@@ -120,11 +148,15 @@ test('text search narrows the rendered list across message, target, and structur
 	await mockLogs(page, 200, LOGS_BODY);
 
 	await page.goto('/app/admin/logs');
-	await expect(page.getByTestId('admin-logs-list')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('admin-logs-list')).toBeVisible({
+		timeout: 10_000
+	});
 
 	await page.getByTestId('admin-logs-search').fill('503');
 	await expect(page.getByTestId('admin-log-row')).toHaveCount(1);
-	await expect(page.getByTestId('admin-log-message')).toContainText('generation failed');
+	await expect(page.getByTestId('admin-log-message')).toContainText(
+		'generation failed'
+	);
 
 	await page.getByTestId('admin-logs-search').fill('ingest');
 	await expect(page.getByTestId('admin-log-row')).toHaveCount(1);

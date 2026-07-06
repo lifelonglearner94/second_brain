@@ -40,7 +40,12 @@ function open(idb: IDBFactory): Promise<IDBDatabase> {
 	});
 }
 
-function tx<T>(db: IDBDatabase, store: string, mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+function tx<T>(
+	db: IDBDatabase,
+	store: string,
+	mode: IDBTransactionMode,
+	run: (s: IDBObjectStore) => IDBRequest<T>
+): Promise<T> {
 	return new Promise((resolve, reject) => {
 		const transaction = db.transaction(store, mode);
 		const request = run(transaction.objectStore(store));
@@ -58,18 +63,27 @@ export function createIdb(idb: IDBFactory = globalThis.indexedDB): IdbStore {
 	return {
 		async saveTopologySnapshot(snapshot) {
 			const database = await db();
-			await tx(database, SNAPSHOT_STORE, 'readwrite', (s) => s.put(snapshot, SNAPSHOT_KEY));
+			await tx(database, SNAPSHOT_STORE, 'readwrite', (s) =>
+				s.put(snapshot, SNAPSHOT_KEY)
+			);
 			database.close();
 		},
 		async loadTopologySnapshot() {
 			const database = await db();
-			const result = await tx<TopologySnapshot | undefined>(database, SNAPSHOT_STORE, 'readonly', (s) => s.get(SNAPSHOT_KEY));
+			const result = await tx<TopologySnapshot | undefined>(
+				database,
+				SNAPSHOT_STORE,
+				'readonly',
+				(s) => s.get(SNAPSHOT_KEY)
+			);
 			database.close();
 			return result;
 		},
 		async clearTopologySnapshot() {
 			const database = await db();
-			await tx(database, SNAPSHOT_STORE, 'readwrite', (s) => s.delete(SNAPSHOT_KEY));
+			await tx(database, SNAPSHOT_STORE, 'readwrite', (s) =>
+				s.delete(SNAPSHOT_KEY)
+			);
 			database.close();
 		},
 		async enqueuePendingCapture(capture) {
@@ -79,7 +93,12 @@ export function createIdb(idb: IDBFactory = globalThis.indexedDB): IdbStore {
 		},
 		async listPendingCaptures() {
 			const database = await db();
-			const all = await tx<PendingCapture[]>(database, PENDING_STORE, 'readonly', (s) => s.getAll());
+			const all = await tx<PendingCapture[]>(
+				database,
+				PENDING_STORE,
+				'readonly',
+				(s) => s.getAll()
+			);
 			database.close();
 			return all.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 		},

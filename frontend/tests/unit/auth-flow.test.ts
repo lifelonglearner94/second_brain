@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
+import {
+	startRegistration,
+	startAuthentication
+} from '@simplewebauthn/browser';
 import type {
 	AuthenticationResponseJSON,
 	PublicKeyCredentialCreationOptionsJSON,
@@ -72,12 +75,16 @@ const REGISTRATION_BEGIN: RegistrationBegin = {
 	challenge: { publicKey: CREATION_OPTIONS },
 	state: 'state-1'
 };
-const LOGIN_BEGIN: LoginBegin = { challenge: { publicKey: REQUEST_OPTIONS }, state: 'state-2' };
+const LOGIN_BEGIN: LoginBegin = {
+	challenge: { publicKey: REQUEST_OPTIONS },
+	state: 'state-2'
+};
 const REGISTRATION_FINISH_OK = { registered: true } as const;
 const LOGIN_OK: LoginOk = { user_id: '00000000-0000-0000-0000-000000000001' };
 const RECOVER_RES: RecoverResponse = {
 	error: 'recovery_not_implemented',
-	message: 'Master-passphrase recovery is a documented seam; not yet implemented.'
+	message:
+		'Master-passphrase recovery is a documented seam; not yet implemented.'
 };
 
 describe('registerPasskey — the begin→WebAuthn→finish orchestration', () => {
@@ -90,7 +97,9 @@ describe('registerPasskey — the begin→WebAuthn→finish orchestration', () =
 		api.registerFinish.mockResolvedValue(REGISTRATION_FINISH_OK);
 		await registerPasskey(api);
 		expect(api.registerBegin).toHaveBeenCalledOnce();
-		expect(startRegistration).toHaveBeenCalledWith({ optionsJSON: CREATION_OPTIONS });
+		expect(startRegistration).toHaveBeenCalledWith({
+			optionsJSON: CREATION_OPTIONS
+		});
 		expect(api.registerFinish).toHaveBeenCalledWith({
 			credential: REGISTRATION_RESPONSE,
 			state: 'state-1'
@@ -116,7 +125,9 @@ describe('loginPasskey — the begin→WebAuthn→finish orchestration', () => {
 		api.loginFinish.mockResolvedValue(LOGIN_OK);
 		const ok = await loginPasskey(api);
 		expect(api.loginBegin).toHaveBeenCalledOnce();
-		expect(startAuthentication).toHaveBeenCalledWith({ optionsJSON: REQUEST_OPTIONS });
+		expect(startAuthentication).toHaveBeenCalledWith({
+			optionsJSON: REQUEST_OPTIONS
+		});
 		expect(api.loginFinish).toHaveBeenCalledWith({
 			credential: AUTH_RESPONSE,
 			state: 'state-2'

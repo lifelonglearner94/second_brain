@@ -11,10 +11,14 @@
 
 <main data-testid="chat-page">
 	<header class="chat-header">
-		<a href="/app" class="back-link" data-testid="chat-back-to-graph">← Spatial View-Graph</a>
+		<a href="/app" class="back-link" data-testid="chat-back-to-graph"
+			>← Spatial View-Graph</a
+		>
 		<h1>Chat</h1>
 		{#if !onlineStore.online}
-			<span class="offline-badge" data-testid="chat-page-offline-badge">Offline</span>
+			<span class="offline-badge" data-testid="chat-page-offline-badge"
+				>Offline</span
+			>
 		{/if}
 	</header>
 	<ChatSurface api={apiClient} online={onlineStore.online} />

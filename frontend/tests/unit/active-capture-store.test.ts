@@ -152,15 +152,21 @@ describe('ActiveCaptureStore.startCaptureWithFallback — Deepgram primary, Web 
 	it('throws and flips to error when both Deepgram and Web Speech fail (no STT available)', async () => {
 		const store = new ActiveCaptureStore();
 		const deepgram = fakeSource('deepgram', { fails: 'deepgram unreachable' });
-		const webSpeech = fakeSource('web-speech', { fails: 'web-speech unavailable' });
-		await expect(store.startCaptureWithFallback(deepgram, webSpeech)).rejects.toThrow(/web-speech/);
+		const webSpeech = fakeSource('web-speech', {
+			fails: 'web-speech unavailable'
+		});
+		await expect(
+			store.startCaptureWithFallback(deepgram, webSpeech)
+		).rejects.toThrow(/web-speech/);
 		expect(store.status).toBe('error');
 	});
 
 	it('does not fall back when the primary succeeds (no redundant Web Speech session)', async () => {
 		const store = new ActiveCaptureStore();
 		const deepgram = fakeSource('deepgram', { emits: ['hi'] });
-		const webSpeech = fakeSource('web-speech', { fails: 'should not be started' });
+		const webSpeech = fakeSource('web-speech', {
+			fails: 'should not be started'
+		});
 		const label = await store.startCaptureWithFallback(deepgram, webSpeech);
 		expect(label).toBe('deepgram');
 		expect(store.sttSourceLabel).toBe('deepgram');
@@ -214,7 +220,9 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 	it('refuses to submit an empty buffer (no empty braindumps — backend #5 rejects empty verbatim)', async () => {
 		const store = new ActiveCaptureStore();
 		const ingest = fakeIngest(INGESTED);
-		await expect(store.submit(ingest, true, pendingStore())).rejects.toThrow(/empty/i);
+		await expect(store.submit(ingest, true, pendingStore())).rejects.toThrow(
+			/empty/i
+		);
 		expect(ingest.calls).toHaveLength(0);
 	});
 
@@ -222,7 +230,9 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 		const store = new ActiveCaptureStore();
 		const ingest = fakeIngest(INGESTED);
 		store.setText('   \n\t  ');
-		await expect(store.submit(ingest, true, pendingStore())).rejects.toThrow(/empty/i);
+		await expect(store.submit(ingest, true, pendingStore())).rejects.toThrow(
+			/empty/i
+		);
 		expect(ingest.calls).toHaveLength(0);
 	});
 
@@ -244,7 +254,9 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 			}
 		};
 		store.setText('a thought');
-		await expect(store.submit(ingest, true, pendingStore())).rejects.toThrow(/503/);
+		await expect(store.submit(ingest, true, pendingStore())).rejects.toThrow(
+			/503/
+		);
 		expect(store.status).toBe('error');
 		expect(store.text).toBe('a thought');
 	});
@@ -264,7 +276,8 @@ describe('ActiveCaptureStore.submit(ingest, online, pending) — the queue-vs-su
 		expect(outcome.kind).toBe('queued');
 		expect(ingest.calls).toHaveLength(0);
 		expect(idb.enqueuePendingCapture).toHaveBeenCalledOnce();
-		const captured = (idb.enqueuePendingCapture as ReturnType<typeof vi.fn>).mock.calls[0][0];
+		const captured = (idb.enqueuePendingCapture as ReturnType<typeof vi.fn>)
+			.mock.calls[0][0];
 		expect(captured.text).toBe('offline capture');
 		expect(captured.id).toBeTruthy();
 		expect(captured.createdAt).toBeTruthy();

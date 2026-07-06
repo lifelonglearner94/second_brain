@@ -7,8 +7,11 @@
 		editBraindump(id: number, verbatim: string): Promise<Braindump>;
 	};
 
-	let { braindumpId, api, onClose }: { braindumpId: number; api: BraindumpApi; onClose: () => void } =
-		$props();
+	let {
+		braindumpId,
+		api,
+		onClose
+	}: { braindumpId: number; api: BraindumpApi; onClose: () => void } = $props();
 
 	type Status = 'loading' | 'ready' | 'error';
 
@@ -86,17 +89,28 @@
 	}
 </script>
 
-<div class="document-modal-overlay" role="dialog" aria-modal="true" aria-label="Document Modal">
+<div
+	class="document-modal-overlay"
+	role="dialog"
+	aria-modal="true"
+	aria-label="Document Modal"
+>
 	<div class="document-modal">
 		<header class="document-modal-header">
 			<span class="document-modal-title">Document</span>
-			<button type="button" data-testid="document-modal-close" onclick={onClose}>Close</button>
+			<button type="button" data-testid="document-modal-close" onclick={onClose}
+				>Close</button
+			>
 		</header>
 
 		{#if status === 'loading'}
-			<p data-testid="document-modal-loading" class="document-modal-status">Loading braindump…</p>
+			<p data-testid="document-modal-loading" class="document-modal-status">
+				Loading braindump…
+			</p>
 		{:else if status === 'error'}
-			<p data-testid="document-modal-error" class="document-modal-error">{errorText}</p>
+			<p data-testid="document-modal-error" class="document-modal-error">
+				{errorText}
+			</p>
 		{:else if braindump}
 			<div class="document-modal-body">
 				{#if editing}
@@ -104,10 +118,14 @@
 						data-testid="document-modal-edit-input"
 						bind:value={editText}
 						rows="6"
-						class="document-modal-edit-input"
-					></textarea>
+						class="document-modal-edit-input"></textarea>
 					{#if editError}
-						<p data-testid="document-modal-edit-error" class="document-modal-error">{editError}</p>
+						<p
+							data-testid="document-modal-edit-error"
+							class="document-modal-error"
+						>
+							{editError}
+						</p>
 					{/if}
 					<div class="document-modal-edit-actions">
 						<button
@@ -136,19 +154,31 @@
 						>
 							{viewRaw ? 'Show Cleaned' : 'View Raw'}
 						</button>
-						<button type="button" data-testid="document-modal-edit" onclick={startEdit}>
+						<button
+							type="button"
+							data-testid="document-modal-edit"
+							onclick={startEdit}
+						>
 							Edit
 						</button>
 					</div>
 					{#if saved}
-						<p data-testid="document-modal-saved" class="document-modal-saved">Saved</p>
+						<p data-testid="document-modal-saved" class="document-modal-saved">
+							Saved
+						</p>
 					{/if}
 					{#if viewRaw}
-						<p data-testid="document-modal-verbatim" class="document-modal-text verbatim">
+						<p
+							data-testid="document-modal-verbatim"
+							class="document-modal-text verbatim"
+						>
 							{braindump.verbatim}
 						</p>
 					{:else}
-						<p data-testid="document-modal-cleaned" class="document-modal-text cleaned">
+						<p
+							data-testid="document-modal-cleaned"
+							class="document-modal-text cleaned"
+						>
 							{braindump.cleaned}
 						</p>
 					{/if}

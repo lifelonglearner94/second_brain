@@ -8,11 +8,16 @@ export type ViewportState = {
 
 const KEY = 'sb.viewport-state';
 
-export function saveViewport(state: ViewportState, storage: Storage = globalThis.localStorage): void {
+export function saveViewport(
+	state: ViewportState,
+	storage: Storage = globalThis.localStorage
+): void {
 	storage.setItem(KEY, JSON.stringify(state));
 }
 
-export function loadViewport(storage: Storage = globalThis.localStorage): ViewportState | null {
+export function loadViewport(
+	storage: Storage = globalThis.localStorage
+): ViewportState | null {
 	const raw = storage.getItem(KEY);
 	if (!raw) return null;
 	try {
@@ -22,6 +27,8 @@ export function loadViewport(storage: Storage = globalThis.localStorage): Viewpo
 	}
 }
 
-export function clearViewport(storage: Storage = globalThis.localStorage): void {
+export function clearViewport(
+	storage: Storage = globalThis.localStorage
+): void {
 	storage.removeItem(KEY);
 }

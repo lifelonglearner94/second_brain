@@ -1,5 +1,8 @@
 <script lang="ts">
-	import { parseAnswerCitations, type AnswerSegment } from '$lib/chat/citations';
+	import {
+		parseAnswerCitations,
+		type AnswerSegment
+	} from '$lib/chat/citations';
 	import type { Braindump, ChatResponse } from '$lib/api/client';
 	import DocumentModal from './DocumentModal.svelte';
 
@@ -20,7 +23,8 @@
 	let errorText = $state<string | null>(null);
 	let openCitationId = $state<number | null>(null);
 
-	const EXPLICIT_SILENCE = 'I cannot find graph-supported evidence to answer this.';
+	const EXPLICIT_SILENCE =
+		'I cannot find graph-supported evidence to answer this.';
 
 	async function onSubmit() {
 		if (!online) return;
@@ -74,16 +78,27 @@
 			autocomplete="off"
 			disabled={!online}
 		/>
-		<button type="submit" class="chat-submit" data-testid="chat-submit" disabled={!online}>Ask</button>
+		<button
+			type="submit"
+			class="chat-submit"
+			data-testid="chat-submit"
+			disabled={!online}>Ask</button
+		>
 	</form>
 
 	{#if status === 'loading'}
-		<p class="chat-status" data-testid="chat-loading">Synthesizing over your graph…</p>
+		<p class="chat-status" data-testid="chat-loading">
+			Synthesizing over your graph…
+		</p>
 	{:else if status === 'error'}
-		<p class="chat-error" data-testid="chat-error">Could not answer: {errorText}</p>
+		<p class="chat-error" data-testid="chat-error">
+			Could not answer: {errorText}
+		</p>
 	{:else if response}
 		{#if response.silent}
-			<p class="chat-silence" data-testid="chat-explicit-silence">{EXPLICIT_SILENCE}</p>
+			<p class="chat-silence" data-testid="chat-explicit-silence">
+				{EXPLICIT_SILENCE}
+			</p>
 		{:else}
 			<p class="chat-answer" data-testid="chat-answer">
 				{#each segments as seg}
@@ -106,11 +121,7 @@
 	{/if}
 
 	{#if openCitationId !== null}
-		<DocumentModal
-			braindumpId={openCitationId}
-			{api}
-			onClose={closeCitation}
-		/>
+		<DocumentModal braindumpId={openCitationId} {api} onClose={closeCitation} />
 	{/if}
 </section>
 

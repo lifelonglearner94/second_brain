@@ -21,7 +21,12 @@ describe('apiClient.submitBraindump — POST /braindumps (backend #5, ADR-0007)'
 
 	it('POSTs { verbatim } to /braindumps with credentials so the session cookie reaches the authed write path', async () => {
 		fetchMock.mockResolvedValue(
-			okResponse({ id: 7, verbatim: 'hallo', cleaned: 'Hallo.', created_at: 1_780 })
+			okResponse({
+				id: 7,
+				verbatim: 'hallo',
+				cleaned: 'Hallo.',
+				created_at: 1_780
+			})
 		);
 		const api = createApiClient({ fetch: fetchMock });
 		await api.submitBraindump('hallo');
@@ -57,9 +62,7 @@ describe('apiClient.getGraphDelta — GET /graph/delta (backend #28, ADR-0002 pu
 
 	const DELTA: GraphDelta = {
 		cursor: 1_800,
-		added_concepts: [
-			{ id: 'c3', label: 'caffeine', created_at: '1790' }
-		],
+		added_concepts: [{ id: 'c3', label: 'caffeine', created_at: '1790' }],
 		added_edges: [
 			{
 				id: 'e2',
@@ -84,7 +87,9 @@ describe('apiClient.getGraphDelta — GET /graph/delta (backend #28, ADR-0002 pu
 		const api = createApiClient({ fetch: fetchMock });
 		await api.getGraphDelta(1_780);
 		expect(fetchMock.mock.calls[0][0]).toBe('/api/graph/delta?since=1780');
-		expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' });
+		expect(fetchMock.mock.calls[0][1]).toMatchObject({
+			credentials: 'include'
+		});
 	});
 
 	it('GETs /graph/delta with no query param when no cursor is supplied (first sync)', async () => {

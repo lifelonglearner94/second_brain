@@ -21,7 +21,9 @@ describe('apiClient', () => {
 	});
 
 	it('defaults the base URL to /api (same-origin Edge proxy)', async () => {
-		fetchMock.mockResolvedValue(okResponse({ ok: true, db: true, sqlite_vec: true }));
+		fetchMock.mockResolvedValue(
+			okResponse({ ok: true, db: true, sqlite_vec: true })
+		);
 		const api = createApiClient({ fetch: fetchMock });
 		await api.getHealth();
 		const [url, init] = fetchMock.mock.calls[0];
@@ -30,17 +32,28 @@ describe('apiClient', () => {
 	});
 
 	it('uses a configured base URL', async () => {
-		fetchMock.mockResolvedValue(okResponse({ ok: true, db: true, sqlite_vec: true }));
-		const api = createApiClient({ baseUrl: 'https://brain.example.test', fetch: fetchMock });
+		fetchMock.mockResolvedValue(
+			okResponse({ ok: true, db: true, sqlite_vec: true })
+		);
+		const api = createApiClient({
+			baseUrl: 'https://brain.example.test',
+			fetch: fetchMock
+		});
 		await api.getHealth();
-		expect(fetchMock.mock.calls[0][0]).toBe('https://brain.example.test/health');
+		expect(fetchMock.mock.calls[0][0]).toBe(
+			'https://brain.example.test/health'
+		);
 	});
 
 	it('sends credentials so the opaque session cookie (backend #2) is included', async () => {
-		fetchMock.mockResolvedValue(okResponse({ ok: true, db: true, sqlite_vec: true }));
+		fetchMock.mockResolvedValue(
+			okResponse({ ok: true, db: true, sqlite_vec: true })
+		);
 		const api = createApiClient({ fetch: fetchMock });
 		await api.getHealth();
-		expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' });
+		expect(fetchMock.mock.calls[0][1]).toMatchObject({
+			credentials: 'include'
+		});
 	});
 
 	it('parses the GET /health body from backend #1', async () => {
@@ -98,7 +111,10 @@ describe('apiClient.getGraph — Global Topology Snapshot fetch (#16, backend #2
 
 	it('hits the /graph path under the configured base URL', async () => {
 		fetchMock.mockResolvedValue(okResponse(SNAPSHOT));
-		const api = createApiClient({ baseUrl: 'https://brain.example.test', fetch: fetchMock });
+		const api = createApiClient({
+			baseUrl: 'https://brain.example.test',
+			fetch: fetchMock
+		});
 		await api.getGraph();
 		expect(fetchMock.mock.calls[0][0]).toBe('https://brain.example.test/graph');
 	});
@@ -107,14 +123,19 @@ describe('apiClient.getGraph — Global Topology Snapshot fetch (#16, backend #2
 		fetchMock.mockResolvedValue(okResponse(SNAPSHOT));
 		const api = createApiClient({ fetch: fetchMock });
 		await api.getGraph();
-		expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' });
+		expect(fetchMock.mock.calls[0][1]).toMatchObject({
+			credentials: 'include'
+		});
 	});
 
 	it('accepts the gzip-transparent JSON the backend returns (Content-Encoding is decompressed by fetch)', async () => {
 		fetchMock.mockResolvedValue(
 			new Response(JSON.stringify(SNAPSHOT), {
 				status: 200,
-				headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' }
+				headers: {
+					'content-type': 'application/json',
+					'content-encoding': 'gzip'
+				}
 			})
 		);
 		const api = createApiClient({ fetch: fetchMock });
@@ -134,7 +155,9 @@ describe('apiClient.getGraphDelta — Delta Sync fetch (#18, backend #28)', () =
 
 	const DELTA: GraphDelta = {
 		cursor: 1700000000,
-		added_concepts: [{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }],
+		added_concepts: [
+			{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }
+		],
 		added_edges: [
 			{
 				id: 'e2',
@@ -175,16 +198,23 @@ describe('apiClient.getGraphDelta — Delta Sync fetch (#18, backend #28)', () =
 
 	it('hits the /graph/delta path with the since query param under the configured base URL', async () => {
 		fetchMock.mockResolvedValue(okResponse(DELTA));
-		const api = createApiClient({ baseUrl: 'https://brain.example.test', fetch: fetchMock });
+		const api = createApiClient({
+			baseUrl: 'https://brain.example.test',
+			fetch: fetchMock
+		});
 		await api.getGraphDelta(1500);
-		expect(fetchMock.mock.calls[0][0]).toBe('https://brain.example.test/graph/delta?since=1500');
+		expect(fetchMock.mock.calls[0][0]).toBe(
+			'https://brain.example.test/graph/delta?since=1500'
+		);
 	});
 
 	it('sends credentials so the opaque session cookie reaches the authed endpoint', async () => {
 		fetchMock.mockResolvedValue(okResponse(DELTA));
 		const api = createApiClient({ fetch: fetchMock });
 		await api.getGraphDelta(0);
-		expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' });
+		expect(fetchMock.mock.calls[0][1]).toMatchObject({
+			credentials: 'include'
+		});
 	});
 
 	it('throws on a non-2xx so the focus sync can no-op and leave the view stale (ADR-0002)', async () => {

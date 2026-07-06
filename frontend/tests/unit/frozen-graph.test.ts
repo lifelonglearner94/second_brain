@@ -24,7 +24,12 @@ describe('frozenGraphStatus — the Frozen Graph staleness indicator contract (A
 	});
 
 	it('never yields a blank screen on connectivity failure — the error case maps to a non-null label carrying the error message', () => {
-		const outcome = frozenGraphStatus('error', null, false, 'Global Topology Snapshot unavailable: backend unreachable and no cached snapshot');
+		const outcome = frozenGraphStatus(
+			'error',
+			null,
+			false,
+			'Global Topology Snapshot unavailable: backend unreachable and no cached snapshot'
+		);
 		expect(outcome.status).toBe('error');
 		expect(outcome.label).not.toBeNull();
 		expect(outcome.label).toContain('Could not load the graph');

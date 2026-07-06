@@ -27,6 +27,8 @@ export async function loadSpatialViewGraph(
 		if (cached) {
 			return { snapshot: cached, source: 'cache' };
 		}
-		throw new Error('Global Topology Snapshot unavailable: backend unreachable and no cached snapshot');
+		throw new Error(
+			'Global Topology Snapshot unavailable: backend unreachable and no cached snapshot'
+		);
 	}
 }

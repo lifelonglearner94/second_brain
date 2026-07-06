@@ -40,13 +40,16 @@
 
 {#if store.items.length === 0}
 	<p class="empty" data-testid="pending-captures-empty">
-		No pending captures — offline submissions will appear here for review when back online.
+		No pending captures — offline submissions will appear here for review when
+		back online.
 	</p>
 {:else}
 	<ul class="queue" data-testid="pending-captures-list">
 		{#each store.items as capture (capture.id)}
 			<li class="row" data-testid={`pending-capture-item-${capture.id}`}>
-				<p class="meta">Captured offline {new Date(capture.createdAt).toLocaleString()}</p>
+				<p class="meta">
+					Captured offline {new Date(capture.createdAt).toLocaleString()}
+				</p>
 				<textarea
 					data-testid="pending-capture-text"
 					value={textFor(capture)}
@@ -54,8 +57,7 @@
 						edits[capture.id] = e.currentTarget.value;
 					}}
 					rows="3"
-					disabled={submitting === capture.id}
-				></textarea>
+					disabled={submitting === capture.id}></textarea>
 				<button
 					type="button"
 					data-testid="pending-capture-submit"
@@ -65,7 +67,9 @@
 					{submitting === capture.id ? 'Submitting…' : 'Submit'}
 				</button>
 				{#if errors[capture.id]}
-					<p class="error" data-testid="pending-capture-error">{errors[capture.id]}</p>
+					<p class="error" data-testid="pending-capture-error">
+						{errors[capture.id]}
+					</p>
 				{/if}
 			</li>
 		{/each}

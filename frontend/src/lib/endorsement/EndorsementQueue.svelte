@@ -8,7 +8,9 @@
 	}: {
 		proposals: ChatInferenceProposal[];
 		labelFor: (conceptId: number) => string | null;
-		onApproveConnection: (proposal: ChatInferenceProposal) => Promise<void> | void;
+		onApproveConnection: (
+			proposal: ChatInferenceProposal
+		) => Promise<void> | void;
 	} = $props();
 
 	let expanded = $state<Set<number>>(new Set());
@@ -34,7 +36,11 @@
 
 <ol class="queue" data-testid="endorsement-queue-list">
 	{#each proposals as proposal (proposal.id)}
-		<li class="proposal" data-testid={`endorsement-item-${proposal.id}`} data-proposal-id={proposal.id}>
+		<li
+			class="proposal"
+			data-testid={`endorsement-item-${proposal.id}`}
+			data-proposal-id={proposal.id}
+		>
 			<p class="connection" data-testid={`proposed-connection-${proposal.id}`}>
 				<span class="node">{conceptLabel(proposal.source_concept_id)}</span>
 				<span class="edge">—[{proposal.proposed_type}]→</span>
@@ -52,12 +58,17 @@
 				aria-expanded={expanded.has(proposal.id)}
 				onclick={() => toggle(proposal.id)}
 			>
-				{proposal.snapshot ? 'Based on thematic density' : 'Based on existing path'}
+				{proposal.snapshot
+					? 'Based on thematic density'
+					: 'Based on existing path'}
 			</button>
 
 			{#if expanded.has(proposal.id)}
 				{#if proposal.snapshot}
-					<div class="evidence snapshot" data-testid={`evidence-snapshot-${proposal.id}`}>
+					<div
+						class="evidence snapshot"
+						data-testid={`evidence-snapshot-${proposal.id}`}
+					>
 						<p class="snapshot-section">Braindumps in the cluster</p>
 						<ul class="id-list">
 							{#each proposal.snapshot.braindump_ids as bdId (bdId)}
@@ -72,7 +83,10 @@
 						</ul>
 					</div>
 				{:else}
-					<ol class="evidence path" data-testid={`evidence-path-${proposal.id}`}>
+					<ol
+						class="evidence path"
+						data-testid={`evidence-path-${proposal.id}`}
+					>
 						{#each proposal.evidence_path as hop, i (i)}
 							<li>
 								<span class="node">{conceptLabel(hop.source_concept_id)}</span>

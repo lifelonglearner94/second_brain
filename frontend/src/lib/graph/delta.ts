@@ -12,9 +12,14 @@ export function applyDelta(
 
 	const keptConcepts = concepts.filter((c) => !deletedConcepts.has(c.id));
 	const keptEdges = edges.filter(
-		(e) => !deletedEdges.has(e.id) && !deletedConcepts.has(e.source_concept_id) && !deletedConcepts.has(e.target_concept_id)
+		(e) =>
+			!deletedEdges.has(e.id) &&
+			!deletedConcepts.has(e.source_concept_id) &&
+			!deletedConcepts.has(e.target_concept_id)
 	);
-	const keptPartitions = snapshot.partitions.filter((p) => !deletedConcepts.has(p.concept_id));
+	const keptPartitions = snapshot.partitions.filter(
+		(p) => !deletedConcepts.has(p.concept_id)
+	);
 
 	const retagById = new Map(delta.retagged_edges.map((r) => [r.id, r]));
 	const retaggedEdges = keptEdges.map((e) => {
@@ -29,7 +34,10 @@ export function applyDelta(
 	};
 }
 
-function mergeById<T extends { id: string }>(existing: T[], additions: T[]): T[] {
+function mergeById<T extends { id: string }>(
+	existing: T[],
+	additions: T[]
+): T[] {
 	const seen = new Set(existing.map((x) => x.id));
 	const merged = [...existing];
 	for (const add of additions) {

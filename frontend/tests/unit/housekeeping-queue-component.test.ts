@@ -2,7 +2,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, waitFor } from '@testing-library/svelte';
 import HousekeepingQueue from '../../src/lib/housekeeping/HousekeepingQueue.svelte';
-import { HousekeepingStore, type HousekeepingApi } from '../../src/lib/state/housekeeping.svelte';
+import {
+	HousekeepingStore,
+	type HousekeepingApi
+} from '../../src/lib/state/housekeeping.svelte';
 import { GraphStore } from '../../src/lib/state/graph.svelte';
 import type {
 	GlobalTopologySnapshot,
@@ -25,7 +28,9 @@ const SNAPSHOT: GlobalTopologySnapshot = {
 };
 
 const ONTOLOGY: Ontology = {
-	edge_types: [{ slug: 'affects', label: 'Affects', description: 'Has an effect on.' }]
+	edge_types: [
+		{ slug: 'affects', label: 'Affects', description: 'Has an effect on.' }
+	]
 };
 
 const CONCEPT_SUGGESTION: ConceptMergeSuggestion = {
@@ -56,13 +61,21 @@ function apiStub(overrides: Partial<HousekeepingApi> = {}): HousekeepingApi {
 		getMergeSuggestions: vi.fn(async () => [CONCEPT_SUGGESTION]),
 		approveMergeSuggestion: vi.fn(async () => undefined),
 		getOntology: vi.fn(async () => ONTOLOGY),
-		getOntologyProposals: vi.fn(async () => ({ proposals: [TYPE_PROPOSAL] }) satisfies OntologyProposalsResponse),
-		approveOntologyProposal: vi.fn(async () => ({ ...TYPE_PROPOSAL, status: 'approved' })),
+		getOntologyProposals: vi.fn(
+			async () =>
+				({ proposals: [TYPE_PROPOSAL] }) satisfies OntologyProposalsResponse
+		),
+		approveOntologyProposal: vi.fn(async () => ({
+			...TYPE_PROPOSAL,
+			status: 'approved'
+		})),
 		...overrides
 	};
 }
 
-async function makeLoadedStore(api: HousekeepingApi): Promise<HousekeepingStore> {
+async function makeLoadedStore(
+	api: HousekeepingApi
+): Promise<HousekeepingStore> {
 	const graph = new GraphStore();
 	graph.loadSnapshot(SNAPSHOT);
 	const store = new HousekeepingStore(api, graph);
@@ -81,7 +94,9 @@ describe('HousekeepingQueue.svelte — the low-epistemic-weight HITL surface (AD
 	it('lists both the concept- and type-merge suggestion with their borderline pair and similarity score', async () => {
 		const api = apiStub();
 		const store = await makeLoadedStore(api);
-		const { getByText, container } = render(HousekeepingQueue, { props: { store } });
+		const { getByText, container } = render(HousekeepingQueue, {
+			props: { store }
+		});
 
 		expect(getByText('Apples')).toBeTruthy();
 		expect(getByText('sleep')).toBeTruthy();
@@ -90,13 +105,17 @@ describe('HousekeepingQueue.svelte — the low-epistemic-weight HITL surface (AD
 		expect(getByText('Affects')).toBeTruthy();
 		expect(getByText(/Similarity 0\.88/)).toBeTruthy();
 
-		expect(container.querySelectorAll('[data-testid^="housekeeping-item-"]')).toHaveLength(2);
+		expect(
+			container.querySelectorAll('[data-testid^="housekeeping-item-"]')
+		).toHaveLength(2);
 	});
 
 	it('uses the action verb "Merge" on every suggestion (distinct from the Endorsement Queue "Approve Connection")', async () => {
 		const api = apiStub();
 		const store = await makeLoadedStore(api);
-		const { getAllByRole, queryByText } = render(HousekeepingQueue, { props: { store } });
+		const { getAllByRole, queryByText } = render(HousekeepingQueue, {
+			props: { store }
+		});
 
 		const mergeButtons = getAllByRole('button', { name: 'Merge' });
 		expect(mergeButtons).toHaveLength(2);
@@ -125,7 +144,9 @@ describe('HousekeepingQueue.svelte — the low-epistemic-weight HITL surface (AD
 	it('confirming a concept merge POSTs and optimistically removes it from the queue', async () => {
 		const api = apiStub();
 		const store = await makeLoadedStore(api);
-		const { getByTestId, queryByText } = render(HousekeepingQueue, { props: { store } });
+		const { getByTestId, queryByText } = render(HousekeepingQueue, {
+			props: { store }
+		});
 
 		await fireEvent.click(getByTestId('housekeeping-merge-11-concept'));
 
@@ -138,7 +159,9 @@ describe('HousekeepingQueue.svelte — the low-epistemic-weight HITL surface (AD
 	it('confirming a type merge POSTs and optimistically removes it from the queue', async () => {
 		const api = apiStub();
 		const store = await makeLoadedStore(api);
-		const { getByTestId, queryByText } = render(HousekeepingQueue, { props: { store } });
+		const { getByTestId, queryByText } = render(HousekeepingQueue, {
+			props: { store }
+		});
 
 		await fireEvent.click(getByTestId('housekeeping-merge-33-type'));
 
@@ -151,10 +174,14 @@ describe('HousekeepingQueue.svelte — the low-epistemic-weight HITL surface (AD
 	it('renders an empty state when the queue has no suggestions (nothing pending)', async () => {
 		const api = apiStub({
 			getMergeSuggestions: vi.fn(async () => []),
-			getOntologyProposals: vi.fn(async () => ({ proposals: [] }) satisfies OntologyProposalsResponse)
+			getOntologyProposals: vi.fn(
+				async () => ({ proposals: [] }) satisfies OntologyProposalsResponse
+			)
 		});
 		const store = await makeLoadedStore(api);
-		const { getByTestId, queryByRole } = render(HousekeepingQueue, { props: { store } });
+		const { getByTestId, queryByRole } = render(HousekeepingQueue, {
+			props: { store }
+		});
 
 		expect(getByTestId('housekeeping-empty')).toBeTruthy();
 		expect(queryByRole('button', { name: 'Merge' })).toBeNull();
@@ -170,10 +197,14 @@ describe('HousekeepingQueue.svelte — the low-epistemic-weight HITL surface (AD
 
 	it('renders a load error without fabricating suggestions', async () => {
 		const api = apiStub({
-			getMergeSuggestions: vi.fn(async () => { throw new Error('GET /merge-suggestions failed: 401'); })
+			getMergeSuggestions: vi.fn(async () => {
+				throw new Error('GET /merge-suggestions failed: 401');
+			})
 		});
 		const store = await makeLoadedStore(api);
-		const { getByTestId, queryByRole } = render(HousekeepingQueue, { props: { store } });
+		const { getByTestId, queryByRole } = render(HousekeepingQueue, {
+			props: { store }
+		});
 
 		expect(getByTestId('housekeeping-error')).toBeTruthy();
 		expect(queryByRole('button', { name: 'Merge' })).toBeNull();

@@ -25,7 +25,11 @@ describe('isTabActive — route-based tab highlight (issue #56)', () => {
 	});
 
 	it('exposes exactly the three canonical tabs in stable order', () => {
-		expect(APP_TABS.map((t) => t.href)).toEqual(['/app', '/app/graph', '/app/chat']);
+		expect(APP_TABS.map((t) => t.href)).toEqual([
+			'/app',
+			'/app/graph',
+			'/app/chat'
+		]);
 		expect(APP_TABS.map((t) => t.label)).toEqual(['Capture', 'Graph', 'Chat']);
 	});
 });

@@ -43,9 +43,11 @@ export class AdminLogStore {
 	filtered = $derived.by<LogEntry[]>(() => {
 		const q = this.query.trim().toLowerCase();
 		return this.logs.filter((l) => {
-			if (this.levelFilter !== 'all' && l.level !== this.levelFilter) return false;
+			if (this.levelFilter !== 'all' && l.level !== this.levelFilter)
+				return false;
 			if (q) {
-				const hay = `${l.message} ${l.target} ${JSON.stringify(l.fields)}`.toLowerCase();
+				const hay =
+					`${l.message} ${l.target} ${JSON.stringify(l.fields)}`.toLowerCase();
 				if (!hay.includes(q)) return false;
 			}
 			return true;

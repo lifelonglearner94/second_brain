@@ -4,7 +4,15 @@ export const HIGHLIGHT_2D = '#ffffff';
 
 export type SigmaLike = {
 	on(event: string, handler: (payload: unknown) => void): unknown;
-	setSetting(key: 'nodeReducer', value: ((node: string, data: Record<string, unknown>) => Record<string, unknown>) | null): unknown;
+	setSetting(
+		key: 'nodeReducer',
+		value:
+			| ((
+					node: string,
+					data: Record<string, unknown>
+			  ) => Record<string, unknown>)
+			| null
+	): unknown;
 	refresh(): unknown;
 	kill(): unknown;
 };

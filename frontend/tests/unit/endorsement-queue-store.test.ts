@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { EndorsementStore, type EndorsementApi, type EndorsementGraphMerge } from '../../src/lib/state/endorsement-queue.svelte';
+import {
+	EndorsementStore,
+	type EndorsementApi,
+	type EndorsementGraphMerge
+} from '../../src/lib/state/endorsement-queue.svelte';
 import type { ChatInferenceProposal } from '../../src/lib/api/client';
 
 const STRUCTURAL_PENDING: ChatInferenceProposal = {
@@ -58,10 +62,15 @@ function apiStub(
 	return { getInferenceProposals, endorseInferenceProposal };
 }
 
-function graphStub(): { graph: EndorsementGraphMerge; merged: ChatInferenceProposal[] } {
+function graphStub(): {
+	graph: EndorsementGraphMerge;
+	merged: ChatInferenceProposal[];
+} {
 	const merged: ChatInferenceProposal[] = [];
 	return {
-		graph: { mergeEndorsedEdge: vi.fn((p: ChatInferenceProposal) => merged.push(p)) },
+		graph: {
+			mergeEndorsedEdge: vi.fn((p: ChatInferenceProposal) => merged.push(p))
+		},
 		merged
 	};
 }
@@ -80,8 +89,15 @@ describe('EndorsementStore — the high-epistemic-weight HITL queue (ADR-0004)',
 	it('refresh() loads proposals from the backend and flips to loaded', async () => {
 		const getInferenceProposals = vi
 			.fn<EndorsementApi['getInferenceProposals']>()
-			.mockResolvedValue([ALREADY_ENDORSED, THEMATIC_PENDING, STRUCTURAL_PENDING]);
-		const store = new EndorsementStore(apiStub(getInferenceProposals, vi.fn()), graphStub().graph);
+			.mockResolvedValue([
+				ALREADY_ENDORSED,
+				THEMATIC_PENDING,
+				STRUCTURAL_PENDING
+			]);
+		const store = new EndorsementStore(
+			apiStub(getInferenceProposals, vi.fn()),
+			graphStub().graph
+		);
 		await store.refresh();
 		expect(getInferenceProposals).toHaveBeenCalledOnce();
 		expect(store.status).toBe('loaded');
@@ -91,8 +107,15 @@ describe('EndorsementStore — the high-epistemic-weight HITL queue (ADR-0004)',
 	it('pending shows only status=pending proposals — the queue is what still awaits the user', async () => {
 		const getInferenceProposals = vi
 			.fn<EndorsementApi['getInferenceProposals']>()
-			.mockResolvedValue([ALREADY_ENDORSED, THEMATIC_PENDING, STRUCTURAL_PENDING]);
-		const store = new EndorsementStore(apiStub(getInferenceProposals, vi.fn()), graphStub().graph);
+			.mockResolvedValue([
+				ALREADY_ENDORSED,
+				THEMATIC_PENDING,
+				STRUCTURAL_PENDING
+			]);
+		const store = new EndorsementStore(
+			apiStub(getInferenceProposals, vi.fn()),
+			graphStub().graph
+		);
 		await store.refresh();
 		expect(store.pending.map((p) => p.id).sort()).toEqual([101, 102]);
 	});
@@ -101,7 +124,10 @@ describe('EndorsementStore — the high-epistemic-weight HITL queue (ADR-0004)',
 		const getInferenceProposals = vi
 			.fn<EndorsementApi['getInferenceProposals']>()
 			.mockRejectedValue(new Error('GET /chat/inferences failed: 401'));
-		const store = new EndorsementStore(apiStub(getInferenceProposals, vi.fn()), graphStub().graph);
+		const store = new EndorsementStore(
+			apiStub(getInferenceProposals, vi.fn()),
+			graphStub().graph
+		);
 		await store.refresh();
 		expect(store.status).toBe('error');
 		expect(store.error).toMatch(/401/);
@@ -117,7 +143,10 @@ describe('EndorsementStore — the high-epistemic-weight HITL queue (ADR-0004)',
 				.fn<EndorsementApi['endorseInferenceProposal']>()
 				.mockResolvedValue(STRUCTURAL_ENDORSED);
 			const { graph, merged } = graphStub();
-			const store = new EndorsementStore(apiStub(getInferenceProposals, endorseInferenceProposal), graph);
+			const store = new EndorsementStore(
+				apiStub(getInferenceProposals, endorseInferenceProposal),
+				graph
+			);
 			await store.refresh();
 
 			await store.approve(101);
@@ -152,9 +181,14 @@ describe('EndorsementStore — the high-epistemic-weight HITL queue (ADR-0004)',
 				.mockResolvedValue([STRUCTURAL_PENDING]);
 			const endorseInferenceProposal = vi
 				.fn<EndorsementApi['endorseInferenceProposal']>()
-				.mockRejectedValue(new Error('POST /chat/inferences/101/endorse failed: 409'));
+				.mockRejectedValue(
+					new Error('POST /chat/inferences/101/endorse failed: 409')
+				);
 			const { graph, merged } = graphStub();
-			const store = new EndorsementStore(apiStub(getInferenceProposals, endorseInferenceProposal), graph);
+			const store = new EndorsementStore(
+				apiStub(getInferenceProposals, endorseInferenceProposal),
+				graph
+			);
 			await store.refresh();
 
 			await expect(store.approve(101)).rejects.toThrow(/409/);
@@ -171,7 +205,10 @@ describe('EndorsementStore — the high-epistemic-weight HITL queue (ADR-0004)',
 				.fn<EndorsementApi['endorseInferenceProposal']>()
 				.mockResolvedValue(STRUCTURAL_ENDORSED);
 			const { graph, merged } = graphStub();
-			const store = new EndorsementStore(apiStub(getInferenceProposals, endorseInferenceProposal), graph);
+			const store = new EndorsementStore(
+				apiStub(getInferenceProposals, endorseInferenceProposal),
+				graph
+			);
 			await store.refresh();
 
 			await store.approve(999);

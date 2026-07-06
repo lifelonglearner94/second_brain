@@ -12,14 +12,21 @@
 		online?: boolean;
 	};
 
-	let { ingest, deepgramApiKey, oningest, pending, online = true }: Props = $props();
+	let {
+		ingest,
+		deepgramApiKey,
+		oningest,
+		pending,
+		online = true
+	}: Props = $props();
 
 	const store = new ActiveCaptureStore();
 	let busy = $state(false);
 
 	const webSpeechAvailable =
 		typeof window !== 'undefined' &&
-		(window.SpeechRecognition !== undefined || window.webkitSpeechRecognition !== undefined);
+		(window.SpeechRecognition !== undefined ||
+			window.webkitSpeechRecognition !== undefined);
 
 	async function onRecord() {
 		if (store.status === 'listening') {
@@ -29,7 +36,10 @@
 		busy = true;
 		store.error = null;
 		try {
-			const { primary, fallback } = await buildSttSources({ deepgramApiKey, webSpeechAvailable });
+			const { primary, fallback } = await buildSttSources({
+				deepgramApiKey,
+				webSpeechAvailable
+			});
 			if (!primary) {
 				store.error = 'No STT source available — type instead.';
 				store.status = 'error';
@@ -58,7 +68,9 @@
 		}
 	}
 
-	let canSubmit = $derived(store.text.trim().length > 0 && store.status !== 'submitting');
+	let canSubmit = $derived(
+		store.text.trim().length > 0 && store.status !== 'submitting'
+	);
 </script>
 
 <section class="active-capture" data-testid="active-capture" aria-live="polite">
@@ -66,8 +78,7 @@
 		data-testid="active-capture-text"
 		bind:value={store.text}
 		placeholder="Speak or type your thought…"
-		rows="3"
-	></textarea>
+		rows="3"></textarea>
 
 	<div class="controls">
 		{#if deepgramApiKey || webSpeechAvailable}
@@ -92,7 +103,9 @@
 
 	{#if store.sttSourceLabel}
 		<p class="source" data-testid="stt-source">
-			STT: {store.sttSourceLabel === 'deepgram' ? 'Deepgram Nova-3' : 'Web Speech (offline)'}
+			STT: {store.sttSourceLabel === 'deepgram'
+				? 'Deepgram Nova-3'
+				: 'Web Speech (offline)'}
 		</p>
 	{/if}
 	{#if store.status === 'queued'}

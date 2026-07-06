@@ -21,7 +21,9 @@
 <main>
 	<header>
 		<h1>Second Brain</h1>
-		<p class="tagline">Voice capture, a 3D knowledge graph, and grounded chat.</p>
+		<p class="tagline">
+			Voice capture, a 3D knowledge graph, and grounded chat.
+		</p>
 	</header>
 
 	<nav data-testid="auth-nav" aria-live="polite">

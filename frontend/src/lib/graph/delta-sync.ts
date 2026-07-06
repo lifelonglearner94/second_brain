@@ -28,13 +28,19 @@ export type FocusTarget = {
 	removeEventListener(type: string, listener: (event: Event) => void): void;
 };
 
-export function onWindowFocus(target: FocusTarget, onFocus: () => void): () => void {
+export function onWindowFocus(
+	target: FocusTarget,
+	onFocus: () => void
+): () => void {
 	const handler = (): void => onFocus();
 	target.addEventListener('focus', handler);
 	return () => target.removeEventListener('focus', handler);
 }
 
-export async function syncDelta(state: DeltaSyncState, api: DeltaSyncApi): Promise<DeltaSyncOutcome> {
+export async function syncDelta(
+	state: DeltaSyncState,
+	api: DeltaSyncApi
+): Promise<DeltaSyncOutcome> {
 	try {
 		const delta = await api.getGraphDelta(state.cursor);
 		const snapshot = applyDelta(state.snapshot, delta);

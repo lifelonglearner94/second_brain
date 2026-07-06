@@ -27,6 +27,6 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 export function partitionColor(partitionId: number): string {
-	const hue = ((partitionId * GOLDEN_ANGLE) % 360 + 360) % 360;
+	const hue = (((partitionId * GOLDEN_ANGLE) % 360) + 360) % 360;
 	return hslToHex(hue, SATURATION, LIGHTNESS);
 }

@@ -68,15 +68,19 @@ export class HousekeepingStore {
 
 	items = $derived.by<HousekeepingItem[]>(() => {
 		const labelById = new Map<string, string>();
-		for (const c of this.graph.snapshot?.concepts ?? []) labelById.set(c.id, c.label);
+		for (const c of this.graph.snapshot?.concepts ?? [])
+			labelById.set(c.id, c.label);
 		const labelBySlug = new Map<string, string>();
-		for (const t of this.ontology?.edge_types ?? []) labelBySlug.set(t.slug, t.label);
+		for (const t of this.ontology?.edge_types ?? [])
+			labelBySlug.set(t.slug, t.label);
 
 		const concepts: HousekeepingItem[] = this.conceptSuggestions.map((s) => ({
 			id: s.id,
 			kind: 'concept',
 			leftLabel: s.new_concept_label,
-			rightLabel: labelById.get(String(s.existing_concept_id)) ?? String(s.existing_concept_id),
+			rightLabel:
+				labelById.get(String(s.existing_concept_id)) ??
+				String(s.existing_concept_id),
 			similarity: s.similarity
 		}));
 		const types: HousekeepingItem[] = this.typeProposals
@@ -97,7 +101,9 @@ export class HousekeepingStore {
 			if (!suggestion || !this.graph.snapshot) return;
 			await this.api.approveMergeSuggestion(id);
 			this.graph.applyConceptMerge(suggestion);
-			this.conceptSuggestions = this.conceptSuggestions.filter((s) => s.id !== id);
+			this.conceptSuggestions = this.conceptSuggestions.filter(
+				(s) => s.id !== id
+			);
 		} else {
 			const proposal = this.typeProposals.find((p) => p.id === id);
 			if (!proposal || !this.graph.snapshot) return;
@@ -108,9 +114,13 @@ export class HousekeepingStore {
 		}
 	}
 
-	private addTypeToOntology(ontology: Ontology | null, proposal: OntologyTypeProposal): Ontology | null {
+	private addTypeToOntology(
+		ontology: Ontology | null,
+		proposal: OntologyTypeProposal
+	): Ontology | null {
 		if (!ontology) return ontology;
-		if (ontology.edge_types.some((t) => t.slug === proposal.slug)) return ontology;
+		if (ontology.edge_types.some((t) => t.slug === proposal.slug))
+			return ontology;
 		const edgeType: OntologyEdgeType = {
 			slug: proposal.slug,
 			label: proposal.label,

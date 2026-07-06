@@ -1,4 +1,9 @@
-import type { BraindumpDto, GraphDelta, GraphConcept, GraphEdge } from '$lib/api/client';
+import type {
+	BraindumpDto,
+	GraphDelta,
+	GraphConcept,
+	GraphEdge
+} from '$lib/api/client';
 
 export type IngestResponse = {
 	braindump: { id: string; created_at: string };
@@ -16,7 +21,10 @@ export interface IngestApi {
 	ingest(verbatim: string): Promise<IngestResponse>;
 }
 
-export function createIngestApi(client: IngestClient, getCursor: () => number): IngestApi {
+export function createIngestApi(
+	client: IngestClient,
+	getCursor: () => number
+): IngestApi {
 	return {
 		async ingest(verbatim: string): Promise<IngestResponse> {
 			const braindump = await client.submitBraindump(verbatim);

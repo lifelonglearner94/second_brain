@@ -7,7 +7,8 @@ export type CapabilityEnv = {
 	hardwareConcurrency: number;
 };
 
-const WEAK_MOBILE_GPU = /(adreno\s*[0-6]\d{2}|mali|powervr|apple gpu|powervr sgx)/i;
+const WEAK_MOBILE_GPU =
+	/(adreno\s*[0-6]\d{2}|mali|powervr|apple gpu|powervr sgx)/i;
 const IOS_PATTERN = /(iphone|ipad|ipod)/i;
 const ANDROID_PATTERN = /android/i;
 
@@ -52,7 +53,8 @@ export function probeRendererCapability(): CapabilityEnv {
 		hasWebGL2,
 		webglRenderer,
 		hardwareConcurrency:
-			typeof navigator !== 'undefined' && typeof navigator.hardwareConcurrency === 'number'
+			typeof navigator !== 'undefined' &&
+			typeof navigator.hardwareConcurrency === 'number'
 				? navigator.hardwareConcurrency
 				: 4
 	};

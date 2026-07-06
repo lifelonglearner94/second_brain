@@ -43,7 +43,12 @@
 				bind:value={adminLogs.query}
 			/>
 		</label>
-		<div class="levels" data-testid="admin-logs-filters" role="group" aria-label="Filter by level">
+		<div
+			class="levels"
+			data-testid="admin-logs-filters"
+			role="group"
+			aria-label="Filter by level"
+		>
 			<button
 				type="button"
 				data-testid="admin-logs-filter-all"
@@ -90,7 +95,9 @@
 					</div>
 					<p class="message" data-testid="admin-log-message">{entry.message}</p>
 					{#if fmtFields(entry.fields)}
-						<pre class="fields" data-testid="admin-log-fields">{fmtFields(entry.fields)}</pre>
+						<pre class="fields" data-testid="admin-log-fields">{fmtFields(
+								entry.fields
+							)}</pre>
 					{/if}
 				</li>
 			{/each}

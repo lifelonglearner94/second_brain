@@ -11,9 +11,12 @@
 	let busy = $state(false);
 	let logoutError = $state<string | null>(null);
 	let headerTaps = $state(0);
-	let online = $state(typeof navigator !== 'undefined' ? navigator.onLine : true);
+	let online = $state(
+		typeof navigator !== 'undefined' ? navigator.onLine : true
+	);
 
-	const deepgramApiKey = import.meta.env.VITE_DEEPGRAM_API_KEY as string | undefined;
+	const deepgramApiKey = import.meta.env.VITE_DEEPGRAM_API_KEY as
+		string | undefined;
 	const ingestApi = createIngestApi(apiClient, () => graphStore.cursor);
 
 	function onHeaderTap() {
@@ -62,10 +65,12 @@
 				type="button"
 				data-testid="app-title"
 				class="title-button"
-				onclick={onHeaderTap}
-			>Second Brain</button>
+				onclick={onHeaderTap}>Second Brain</button
+			>
 		</h1>
-		<p class="tagline">Signed in as <code data-testid="user-id">{session.userId}</code></p>
+		<p class="tagline">
+			Signed in as <code data-testid="user-id">{session.userId}</code>
+		</p>
 		{#if pendingCaptures.count > 0}
 			<a
 				href="/app/pending"

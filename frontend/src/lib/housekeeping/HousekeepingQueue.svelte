@@ -8,23 +8,34 @@
 	<h2>Housekeeping Queue</h2>
 
 	{#if store.status === 'idle' || store.status === 'loading'}
-		<p data-testid="housekeeping-loading" class="state">Loading merge suggestions…</p>
+		<p data-testid="housekeeping-loading" class="state">
+			Loading merge suggestions…
+		</p>
 	{:else if store.status === 'error'}
 		<p data-testid="housekeeping-error" class="state error">{store.error}</p>
 	{:else if store.items.length === 0}
-		<p data-testid="housekeeping-empty" class="state">No merge suggestions pending.</p>
+		<p data-testid="housekeeping-empty" class="state">
+			No merge suggestions pending.
+		</p>
 	{:else}
 		<ol class="suggestions" data-testid="housekeeping-list">
 			{#each store.items as item (item.id + '-' + item.kind)}
-				<li class="suggestion" data-testid={`housekeeping-item-${item.id}-${item.kind}`}>
+				<li
+					class="suggestion"
+					data-testid={`housekeeping-item-${item.id}-${item.kind}`}
+				>
 					<p class="pair">
 						<span class="left">{item.leftLabel}</span>
 						<span class="arrow" aria-hidden="true">↔</span>
 						<span class="right">{item.rightLabel}</span>
 					</p>
 					<p class="meta">
-						<span class="kind" data-kind={item.kind}>{item.kind === 'concept' ? 'Concept' : 'Type'}</span>
-						<span class="similarity">Similarity {item.similarity.toFixed(2)}</span>
+						<span class="kind" data-kind={item.kind}
+							>{item.kind === 'concept' ? 'Concept' : 'Type'}</span
+						>
+						<span class="similarity"
+							>Similarity {item.similarity.toFixed(2)}</span
+						>
 					</p>
 					<button
 						type="button"

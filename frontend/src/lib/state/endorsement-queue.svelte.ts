@@ -42,7 +42,9 @@ export class EndorsementStore {
 	async approve(id: number): Promise<ChatInferenceProposal> {
 		const endorsed = await this.api.endorseInferenceProposal(id);
 		this.graph.mergeEndorsedEdge(endorsed);
-		this.proposals = this.proposals.map((p) => (p.id === endorsed.id ? endorsed : p));
+		this.proposals = this.proposals.map((p) =>
+			p.id === endorsed.id ? endorsed : p
+		);
 		return endorsed;
 	}
 }

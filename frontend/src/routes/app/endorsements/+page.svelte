@@ -12,9 +12,7 @@
 		return labelMap.get(String(conceptId)) ?? null;
 	}
 
-	async function onApproveConnection(proposal: {
-		id: number;
-	}): Promise<void> {
+	async function onApproveConnection(proposal: { id: number }): Promise<void> {
 		await endorsementQueue.approve(proposal.id);
 	}
 
@@ -24,7 +22,9 @@
 			try {
 				await graphStore.loadFromNetworkOrCache(apiClient, createIdb());
 				labelMap = new Map(
-					graphStore.snapshot?.concepts.map((c) => [String(c.id), c.label] as const) ?? []
+					graphStore.snapshot?.concepts.map(
+						(c) => [String(c.id), c.label] as const
+					) ?? []
 				);
 			} catch {
 				// The queue still renders with numeric concept ids if the
@@ -46,7 +46,9 @@
 	{#if endorsementQueue.status === 'loading' && endorsementQueue.pending.length === 0}
 		<p class="state" data-testid="endorsement-loading">Loading proposals…</p>
 	{:else if endorsementQueue.status === 'error'}
-		<p class="state error" data-testid="endorsement-error">{endorsementQueue.error}</p>
+		<p class="state error" data-testid="endorsement-error">
+			{endorsementQueue.error}
+		</p>
 	{:else if endorsementQueue.pending.length === 0}
 		<p class="state" data-testid="endorsement-empty">
 			No chat-inferred connections awaiting your endorsement.
@@ -55,7 +57,7 @@
 		<EndorsementQueue
 			proposals={endorsementQueue.pending}
 			{labelFor}
-			onApproveConnection={onApproveConnection}
+			{onApproveConnection}
 		/>
 	{/if}
 
@@ -66,7 +68,11 @@
 		edges
 	</p>
 
-	<p><a href="/app" data-testid="endorsement-back">Back to the Spatial View-Graph</a></p>
+	<p>
+		<a href="/app" data-testid="endorsement-back"
+			>Back to the Spatial View-Graph</a
+		>
+	</p>
 </main>
 
 <style>

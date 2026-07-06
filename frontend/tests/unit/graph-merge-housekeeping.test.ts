@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { applyConceptMerge, applyTypeMerge } from '../../src/lib/graph/merge';
-import type { GlobalTopologySnapshot, ConceptMergeSuggestion, OntologyTypeProposal } from '../../src/lib/api/client';
+import type {
+	GlobalTopologySnapshot,
+	ConceptMergeSuggestion,
+	OntologyTypeProposal
+} from '../../src/lib/api/client';
 
 const SNAPSHOT: GlobalTopologySnapshot = {
 	concepts: [
@@ -108,7 +112,9 @@ describe('applyTypeMerge — optimistic edge retag when an ontology type merge i
 		const retagged = merged.edges.find((e) => e.id === 'e1');
 		expect(retagged?.current_type).toBe('endangers');
 		expect(retagged?.original_type).toBe('affects');
-		expect(merged.edges.find((e) => e.id === 'e2')?.current_type).toBe('disrupts');
+		expect(merged.edges.find((e) => e.id === 'e2')?.current_type).toBe(
+			'disrupts'
+		);
 	});
 
 	it('leaves concepts and partitions untouched (a type merge only relabels edges)', () => {
@@ -119,7 +125,9 @@ describe('applyTypeMerge — optimistic edge retag when an ontology type merge i
 
 	it('does not mutate the input snapshot', () => {
 		applyTypeMerge(SNAPSHOT, TYPE_APPROVAL);
-		expect(SNAPSHOT.edges.find((e) => e.id === 'e1')?.current_type).toBe('affects');
+		expect(SNAPSHOT.edges.find((e) => e.id === 'e1')?.current_type).toBe(
+			'affects'
+		);
 	});
 
 	it('is a no-op on the snapshot when the approved proposal has no merge_of (pure new type — no edges to retag)', () => {

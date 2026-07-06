@@ -11,8 +11,14 @@
 		type GraphNode,
 		type GraphLink
 	} from '$lib/graph/build';
-	import { detectRendererCapability, probeRendererCapability } from '$lib/graph/capability';
-	import { renderSpatialViewGraph2D, type Render2DHandle } from '$lib/graph/render2d';
+	import {
+		detectRendererCapability,
+		probeRendererCapability
+	} from '$lib/graph/capability';
+	import {
+		renderSpatialViewGraph2D,
+		type Render2DHandle
+	} from '$lib/graph/render2d';
 	import { onWindowFocus } from '$lib/graph/delta-sync';
 	import { graphStore } from '$lib/state/graph.svelte';
 
@@ -53,7 +59,9 @@
 	let fg: FgInstance | null = null;
 	let handle2d: Render2DHandle | null = null;
 	let rendererChoice: '3d' | '2d' = '3d';
-	let online = $state(typeof navigator !== 'undefined' ? navigator.onLine : true);
+	let online = $state(
+		typeof navigator !== 'undefined' ? navigator.onLine : true
+	);
 
 	function onNodeSelect(id: string | null, label: string | null) {
 		selectedNodeId = id;
@@ -72,7 +80,13 @@
 				selectedNodeId
 			});
 		} else if (handle2d) {
-			saveViewport({ cameraX: 0, cameraY: 0, cameraZ: 0, zoom: 0, selectedNodeId });
+			saveViewport({
+				cameraX: 0,
+				cameraY: 0,
+				cameraZ: 0,
+				zoom: 0,
+				selectedNodeId
+			});
 		}
 	}
 
@@ -83,7 +97,10 @@
 
 		(async () => {
 			try {
-				const { source, fetchedAt } = await graphStore.loadFromNetworkOrCache(apiClient, idb);
+				const { source, fetchedAt } = await graphStore.loadFromNetworkOrCache(
+					apiClient,
+					idb
+				);
 				if (destroyed) return;
 				const frozen = frozenGraphStatus(source, fetchedAt, online);
 				fetchedAtLabel = frozen.label;
@@ -133,11 +150,12 @@
 		}
 
 		async function renderGraph3D(data: GraphData, finalStatus: Status) {
-			const [{ default: ForceGraph3D }, { Vector2 }, { UnrealBloomPass }] = await Promise.all([
-				import('3d-force-graph'),
-				import('three'),
-				import('three/examples/jsm/postprocessing/UnrealBloomPass.js')
-			]);
+			const [{ default: ForceGraph3D }, { Vector2 }, { UnrealBloomPass }] =
+				await Promise.all([
+					import('3d-force-graph'),
+					import('three'),
+					import('three/examples/jsm/postprocessing/UnrealBloomPass.js')
+				]);
 			if (destroyed || !graphContainer) return;
 
 			const instance = new ForceGraph3D(graphContainer, {
@@ -161,14 +179,19 @@
 				.onNodeClick((n) => onNodeSelect(n.id, n.label))
 				.onBackgroundClick(() => onNodeSelect(null, null));
 
-			instance.postProcessingComposer().addPass(
-				new UnrealBloomPass(
-					new Vector2(graphContainer.clientWidth, graphContainer.clientHeight),
-					1.4,
-					0.6,
-					0.1
-				)
-			);
+			instance
+				.postProcessingComposer()
+				.addPass(
+					new UnrealBloomPass(
+						new Vector2(
+							graphContainer.clientWidth,
+							graphContainer.clientHeight
+						),
+						1.4,
+						0.6,
+						0.1
+					)
+				);
 
 			if (savedViewport) {
 				instance.cameraPosition({
@@ -176,7 +199,9 @@
 					y: savedViewport.cameraY,
 					z: savedViewport.cameraZ
 				});
-				const restored = data.nodes.find((n) => n.id === savedViewport!.selectedNodeId);
+				const restored = data.nodes.find(
+					(n) => n.id === savedViewport!.selectedNodeId
+				);
 				if (restored) {
 					onNodeSelect(restored.id, restored.label);
 				}
@@ -202,8 +227,14 @@
 				handle2d = null;
 				return;
 			}
-			if (savedViewport?.selectedNodeId && svg.hasNode(savedViewport.selectedNodeId)) {
-				const label = svg.getNodeAttribute(savedViewport.selectedNodeId, 'label') as string;
+			if (
+				savedViewport?.selectedNodeId &&
+				svg.hasNode(savedViewport.selectedNodeId)
+			) {
+				const label = svg.getNodeAttribute(
+					savedViewport.selectedNodeId,
+					'label'
+				) as string;
 				handle2d.setSelected(savedViewport.selectedNodeId);
 				onNodeSelect(savedViewport.selectedNodeId, label);
 			}
@@ -236,7 +267,9 @@
 		<div class="graph-canvas" bind:this={graphContainer}></div>
 
 		{#if status === 'loading'}
-			<p class="status" data-testid="graph-loading">Loading the Spatial View-Graph…</p>
+			<p class="status" data-testid="graph-loading">
+				Loading the Spatial View-Graph…
+			</p>
 		{:else if status === 'offline'}
 			<p class="status stale" data-testid="graph-offline">
 				{fetchedAtLabel}
@@ -253,7 +286,9 @@
 			{#if selectedLabel}
 				<span data-testid="selected-node-label">{selectedLabel}</span>
 			{:else}
-				<span class="muted" data-testid="selected-node-label">No concept selected.</span>
+				<span class="muted" data-testid="selected-node-label"
+					>No concept selected.</span
+				>
 			{/if}
 		</aside>
 	</section>

@@ -27,7 +27,8 @@
 	<header>
 		<h1>Housekeeping Queue</h1>
 		<p class="tagline" data-testid="housekeeping-tagline">
-			Semantic housekeeping — confirm concept and type merges the system flagged as borderline.
+			Semantic housekeeping — confirm concept and type merges the system flagged
+			as borderline.
 		</p>
 		<button
 			type="button"
@@ -41,7 +42,11 @@
 
 	<HousekeepingQueue store={housekeeping} />
 
-	<p><a href="/app" data-testid="housekeeping-back">Back to the Spatial View-Graph</a></p>
+	<p>
+		<a href="/app" data-testid="housekeeping-back"
+			>Back to the Spatial View-Graph</a
+		>
+	</p>
 </main>
 
 <style>

@@ -15,16 +15,24 @@ test('smoke: PWA shell loads and reaches backend #1 GET /health through the API 
 
 	await page.goto('/');
 
-	await expect(page.getByTestId('health-ok')).toContainText('healthy', { timeout: 10_000 });
+	await expect(page.getByTestId('health-ok')).toContainText('healthy', {
+		timeout: 10_000
+	});
 });
 
-test('smoke: the PWA manifest is served so the app is installable', async ({ request }) => {
+test('smoke: the PWA manifest is served so the app is installable', async ({
+	request
+}) => {
 	const res = await request.get('/manifest.webmanifest');
 	expect(res.status()).toBe(200);
 	const manifest = await res.json();
 	expect(manifest.name).toBe('Second Brain');
-	expect(manifest.icons.some((i: { sizes: string }) => i.sizes === '192x192')).toBeTruthy();
-	expect(manifest.icons.some((i: { sizes: string }) => i.sizes === '512x512')).toBeTruthy();
+	expect(
+		manifest.icons.some((i: { sizes: string }) => i.sizes === '192x192')
+	).toBeTruthy();
+	expect(
+		manifest.icons.some((i: { sizes: string }) => i.sizes === '512x512')
+	).toBeTruthy();
 });
 
 test('smoke: the dumb Service Worker registers and activates (app-shell cache, no business logic)', async ({
@@ -39,13 +47,15 @@ test('smoke: the dumb Service Worker registers and activates (app-shell cache, n
 	);
 
 	await page.goto('/');
-	await expect.poll(
-		async () => {
-			return page.evaluate(async () => {
-				const reg = await navigator.serviceWorker.getRegistration();
-				return reg?.active?.state ?? null;
-			});
-		},
-		{ timeout: 10_000 }
-	).toBe('activated');
+	await expect
+		.poll(
+			async () => {
+				return page.evaluate(async () => {
+					const reg = await navigator.serviceWorker.getRegistration();
+					return reg?.active?.state ?? null;
+				});
+			},
+			{ timeout: 10_000 }
+		)
+		.toBe('activated');
 });

@@ -52,7 +52,11 @@ export class DeepgramSttSource implements SttSource {
 		const opened = new Promise<void>((resolve, reject) => {
 			socket.on('open', () => resolve());
 			socket.on('error', (err: unknown) =>
-				reject(err instanceof Error ? err : new Error(`Deepgram unreachable: ${String(err)}`))
+				reject(
+					err instanceof Error
+						? err
+						: new Error(`Deepgram unreachable: ${String(err)}`)
+				)
 			);
 		});
 		socket.on('message', (msg: DeepgramMessage) => {

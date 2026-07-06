@@ -21,14 +21,21 @@
 	<header>
 		<h1>Pending Captures</h1>
 		<p class="tagline" data-testid="pending-tagline">
-			Offline submissions await review. Offline STT is significantly less accurate,
-			so correct any errors, then submit each to ingest it as a braindump.
+			Offline submissions await review. Offline STT is significantly less
+			accurate, so correct any errors, then submit each to ingest it as a
+			braindump.
 		</p>
 	</header>
 
-	<PendingCaptures store={pendingCaptures} ingest={ingestApi} oningest={onIngest} />
+	<PendingCaptures
+		store={pendingCaptures}
+		ingest={ingestApi}
+		oningest={onIngest}
+	/>
 
-	<p><a href="/app" data-testid="pending-back">Back to the Spatial View-Graph</a></p>
+	<p>
+		<a href="/app" data-testid="pending-back">Back to the Spatial View-Graph</a>
+	</p>
 </main>
 
 <style>
