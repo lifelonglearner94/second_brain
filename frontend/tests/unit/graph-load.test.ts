@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fakeIndexedDB from 'fake-indexeddb';
-import { createIdb, type IdbStore, type TopologySnapshot } from '../../src/lib/state/idb';
+import {
+	createIdb,
+	type IdbStore,
+	type TopologySnapshot
+} from '../../src/lib/state/idb';
 import { loadSpatialViewGraph } from '../../src/lib/graph/load';
 import type { GlobalTopologySnapshot } from '../../src/lib/api/client';
 
@@ -22,9 +26,11 @@ function apiReturning(raw: GlobalTopologySnapshot) {
 }
 
 function apiThrowing(error: Error) {
-	return { getGraph: vi.fn(async () => {
-		throw error;
-	}) };
+	return {
+		getGraph: vi.fn(async () => {
+			throw error;
+		})
+	};
 }
 
 beforeEach(async () => {
@@ -45,7 +51,11 @@ describe('loadSpatialViewGraph — network-first with IDB Frozen Graph fallback 
 
 	it('fetches from the backend, stamps fetchedAt, caches in IDB, reports source=network', async () => {
 		const api = apiReturning(RAW);
-		const { snapshot, source } = await loadSpatialViewGraph(api, idb, () => '2026-07-04T12:00:00Z');
+		const { snapshot, source } = await loadSpatialViewGraph(
+			api,
+			idb,
+			() => '2026-07-04T12:00:00Z'
+		);
 		expect(source).toBe('network');
 		expect(snapshot.fetchedAt).toBe('2026-07-04T12:00:00Z');
 		expect(snapshot.concepts[0]?.id).toBe('c1');
@@ -63,7 +73,9 @@ describe('loadSpatialViewGraph — network-first with IDB Frozen Graph fallback 
 
 	it('throws when the backend is unreachable AND no snapshot is cached', async () => {
 		const api = apiThrowing(new Error('down'));
-		await expect(loadSpatialViewGraph(api, idb)).rejects.toThrow(/unavailable|cached/i);
+		await expect(loadSpatialViewGraph(api, idb)).rejects.toThrow(
+			/unavailable|cached/i
+		);
 	});
 
 	it('does not overwrite the cache with a failed fetch (no stale-write on error)', async () => {

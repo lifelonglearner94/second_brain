@@ -266,11 +266,18 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		return (await res.json()) as T;
 	}
 
-	async function postJson<T>(path: string, body: unknown, errorLabel: string): Promise<T> {
+	async function postJson<T>(
+		path: string,
+		body: unknown,
+		errorLabel: string
+	): Promise<T> {
 		const res = await doFetch(`${baseUrl}${path}`, {
 			method: 'POST',
 			credentials: 'include',
-			headers: { 'content-type': 'application/json', accept: 'application/json' },
+			headers: {
+				'content-type': 'application/json',
+				accept: 'application/json'
+			},
 			body: JSON.stringify(body)
 		});
 		if (!ok(res)) {
@@ -279,11 +286,18 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		return (await res.json()) as T;
 	}
 
-	async function patchJson<T>(path: string, body: unknown, errorLabel: string): Promise<T> {
+	async function patchJson<T>(
+		path: string,
+		body: unknown,
+		errorLabel: string
+	): Promise<T> {
 		const res = await doFetch(`${baseUrl}${path}`, {
 			method: 'PATCH',
 			credentials: 'include',
-			headers: { 'content-type': 'application/json', accept: 'application/json' },
+			headers: {
+				'content-type': 'application/json',
+				accept: 'application/json'
+			},
 			body: JSON.stringify(body)
 		});
 		if (!ok(res)) {
@@ -309,16 +323,34 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 			return getJson<Health>('/health', 'GET /health');
 		},
 		async registerBegin(): Promise<RegistrationBegin> {
-			return postJson<RegistrationBegin>('/auth/register/begin', null, 'POST /auth/register/begin');
+			return postJson<RegistrationBegin>(
+				'/auth/register/begin',
+				null,
+				'POST /auth/register/begin'
+			);
 		},
-		async registerFinish(body: RegistrationFinishBody): Promise<RegistrationFinishOk> {
-			return postJson<RegistrationFinishOk>('/auth/register/finish', body, 'POST /auth/register/finish');
+		async registerFinish(
+			body: RegistrationFinishBody
+		): Promise<RegistrationFinishOk> {
+			return postJson<RegistrationFinishOk>(
+				'/auth/register/finish',
+				body,
+				'POST /auth/register/finish'
+			);
 		},
 		async loginBegin(): Promise<LoginBegin> {
-			return postJson<LoginBegin>('/auth/login/begin', null, 'POST /auth/login/begin');
+			return postJson<LoginBegin>(
+				'/auth/login/begin',
+				null,
+				'POST /auth/login/begin'
+			);
 		},
 		async loginFinish(body: LoginFinishBody): Promise<LoginOk> {
-			return postJson<LoginOk>('/auth/login/finish', body, 'POST /auth/login/finish');
+			return postJson<LoginOk>(
+				'/auth/login/finish',
+				body,
+				'POST /auth/login/finish'
+			);
 		},
 		async logout(): Promise<LogoutOk> {
 			return postJson<LogoutOk>('/auth/logout', null, 'POST /auth/logout');
@@ -327,20 +359,30 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 			return getJson<Me>('/me', 'GET /me');
 		},
 		async recover(): Promise<RecoverResponse> {
-			return postJson<RecoverResponse>('/auth/recover', null, 'POST /auth/recover');
+			return postJson<RecoverResponse>(
+				'/auth/recover',
+				null,
+				'POST /auth/recover'
+			);
 		},
 		async getGraph(): Promise<GlobalTopologySnapshot> {
 			return getJson<GlobalTopologySnapshot>('/graph', 'GET /graph');
 		},
 		async getAdminLogs(limit?: number): Promise<LogsResponse> {
-			const path = limit !== undefined ? `/admin/logs?limit=${limit}` : '/admin/logs';
+			const path =
+				limit !== undefined ? `/admin/logs?limit=${limit}` : '/admin/logs';
 			return getJson<LogsResponse>(path, 'GET /admin/logs');
 		},
 		async submitBraindump(verbatim: string): Promise<BraindumpDto> {
-			return postJson<BraindumpDto>('/braindumps', { verbatim }, 'POST /braindumps');
+			return postJson<BraindumpDto>(
+				'/braindumps',
+				{ verbatim },
+				'POST /braindumps'
+			);
 		},
 		async getGraphDelta(since?: number): Promise<GraphDelta> {
-			const path = since !== undefined ? `/graph/delta?since=${since}` : '/graph/delta';
+			const path =
+				since !== undefined ? `/graph/delta?since=${since}` : '/graph/delta';
 			return getJson<GraphDelta>(path, 'GET /graph/delta');
 		},
 		async chat(query: string): Promise<ChatResponse> {
@@ -350,22 +392,38 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 			return getJson<Braindump>(`/braindumps/${id}`, 'GET /braindumps/:id');
 		},
 		async editBraindump(id: number, verbatim: string): Promise<Braindump> {
-			return patchJson<Braindump>(`/braindumps/${id}`, { verbatim }, 'PATCH /braindumps/:id');
+			return patchJson<Braindump>(
+				`/braindumps/${id}`,
+				{ verbatim },
+				'PATCH /braindumps/:id'
+			);
 		},
 		async getMergeSuggestions(): Promise<ConceptMergeSuggestion[]> {
-			return getJson<ConceptMergeSuggestion[]>('/merge-suggestions', 'GET /merge-suggestions');
+			return getJson<ConceptMergeSuggestion[]>(
+				'/merge-suggestions',
+				'GET /merge-suggestions'
+			);
 		},
 		async approveMergeSuggestion(id: number): Promise<void> {
-			await postNoBody(`/merge-suggestions/${id}/approve`, 'POST /merge-suggestions/approve');
+			await postNoBody(
+				`/merge-suggestions/${id}/approve`,
+				'POST /merge-suggestions/approve'
+			);
 		},
 		async rejectMergeSuggestion(id: number): Promise<void> {
-			await postNoBody(`/merge-suggestions/${id}/reject`, 'POST /merge-suggestions/reject');
+			await postNoBody(
+				`/merge-suggestions/${id}/reject`,
+				'POST /merge-suggestions/reject'
+			);
 		},
 		async getOntology(): Promise<Ontology> {
 			return getJson<Ontology>('/ontology', 'GET /ontology');
 		},
 		async getOntologyProposals(): Promise<OntologyProposalsResponse> {
-			return getJson<OntologyProposalsResponse>('/ontology/proposals', 'GET /ontology/proposals');
+			return getJson<OntologyProposalsResponse>(
+				'/ontology/proposals',
+				'GET /ontology/proposals'
+			);
 		},
 		async approveOntologyProposal(id: number): Promise<OntologyTypeProposal> {
 			return postJson<OntologyTypeProposal>(
@@ -382,7 +440,10 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 			);
 		},
 		async getInferenceProposals(): Promise<ChatInferenceProposal[]> {
-			return getJson<ChatInferenceProposal[]>('/chat/inferences', 'GET /chat/inferences');
+			return getJson<ChatInferenceProposal[]>(
+				'/chat/inferences',
+				'GET /chat/inferences'
+			);
 		},
 		async endorseInferenceProposal(id: number): Promise<ChatInferenceProposal> {
 			return postJson<ChatInferenceProposal>(

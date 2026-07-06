@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/svelte';
+import {
+	render,
+	screen,
+	fireEvent,
+	waitFor,
+	cleanup
+} from '@testing-library/svelte';
 import PendingCaptures from '../../src/lib/capture/PendingCaptures.svelte';
 import { PendingCapturesStore } from '../../src/lib/state/pending-captures.svelte';
 import type { IdbStore, PendingCapture } from '../../src/lib/state/idb';
@@ -106,7 +112,9 @@ describe('PendingCaptures — review-and-confirm surface (ADR-0005/0007)', () =>
 		render(PendingCaptures, {
 			props: { store, ingest: fakeIngest(INGESTED), oningest: vi.fn() }
 		});
-		const textarea = screen.getByTestId('pending-capture-text') as HTMLTextAreaElement;
+		const textarea = screen.getByTestId(
+			'pending-capture-text'
+		) as HTMLTextAreaElement;
 		expect(textarea.value).toBe('offline thought one');
 	});
 
@@ -133,15 +141,23 @@ describe('PendingCaptures — review-and-confirm surface (ADR-0005/0007)', () =>
 		});
 		render(PendingCaptures, { props: { store, ingest, oningest } });
 
-		const textarea = screen.getByTestId('pending-capture-text') as HTMLTextAreaElement;
-		await fireEvent.input(textarea, { target: { value: 'corrected offline thought' } });
+		const textarea = screen.getByTestId(
+			'pending-capture-text'
+		) as HTMLTextAreaElement;
+		await fireEvent.input(textarea, {
+			target: { value: 'corrected offline thought' }
+		});
 
 		await fireEvent.click(screen.getByTestId('pending-capture-submit'));
 
-		await waitFor(() => expect(ingest.calls).toEqual(['corrected offline thought']));
+		await waitFor(() =>
+			expect(ingest.calls).toEqual(['corrected offline thought'])
+		);
 		expect(oningest).toHaveBeenCalledWith(INGESTED);
 		expect(store.items).toHaveLength(0);
-		await waitFor(() => expect(screen.getByTestId('pending-captures-empty')).toBeTruthy());
+		await waitFor(() =>
+			expect(screen.getByTestId('pending-captures-empty')).toBeTruthy()
+		);
 		expect(merged.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c2']);
 		expect(merged.edges.map((e) => e.id)).toContain('e1');
 	});
@@ -159,7 +175,9 @@ describe('PendingCaptures — review-and-confirm surface (ADR-0005/0007)', () =>
 		await fireEvent.click(screen.getByTestId('pending-capture-submit'));
 
 		await waitFor(() =>
-			expect(screen.getByTestId('pending-capture-error').textContent).toMatch(/503/)
+			expect(screen.getByTestId('pending-capture-error').textContent).toMatch(
+				/503/
+			)
 		);
 		expect(oningest).not.toHaveBeenCalled();
 		expect(store.items).toHaveLength(1);

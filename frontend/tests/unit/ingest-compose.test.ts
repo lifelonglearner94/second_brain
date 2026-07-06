@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createIngestApi, type IngestApi, type IngestResponse } from '../../src/lib/capture/ingest';
+import {
+	createIngestApi,
+	type IngestApi,
+	type IngestResponse
+} from '../../src/lib/capture/ingest';
 import type { BraindumpDto, GraphDelta } from '../../src/lib/api/client';
 
 const BRAINDUMP: BraindumpDto = {
@@ -11,9 +15,7 @@ const BRAINDUMP: BraindumpDto = {
 
 const DELTA: GraphDelta = {
 	cursor: 1_800,
-	added_concepts: [
-		{ id: 'c3', label: 'caffeine', created_at: '1790' }
-	],
+	added_concepts: [{ id: 'c3', label: 'caffeine', created_at: '1790' }],
 	added_edges: [
 		{
 			id: 'e2',
@@ -40,7 +42,10 @@ describe('createIngestApi — POST /braindumps then GET /graph/delta → optimis
 	it('submits the verbatim, fetches the delta since the cursor, and packages concepts/edges + fresh cursor', async () => {
 		const submitBraindump = vi.fn(async () => BRAINDUMP);
 		const getGraphDelta = vi.fn(async () => DELTA);
-		const ingest: IngestApi = createIngestApi(clientStub(submitBraindump, getGraphDelta), () => 1_780);
+		const ingest: IngestApi = createIngestApi(
+			clientStub(submitBraindump, getGraphDelta),
+			() => 1_780
+		);
 
 		const res: IngestResponse = await ingest.ingest('caffeine disrupts sleep');
 
@@ -55,7 +60,10 @@ describe('createIngestApi — POST /braindumps then GET /graph/delta → optimis
 
 	it('returns the freshly-extracted concepts/edges as the optimistic-merge source of truth', async () => {
 		const ingest = createIngestApi(
-			clientStub(vi.fn(async () => BRAINDUMP), vi.fn(async () => DELTA)),
+			clientStub(
+				vi.fn(async () => BRAINDUMP),
+				vi.fn(async () => DELTA)
+			),
 			() => 0
 		);
 		const res = await ingest.ingest('caffeine disrupts sleep');
@@ -68,7 +76,10 @@ describe('createIngestApi — POST /braindumps then GET /graph/delta → optimis
 			throw new Error('POST /braindumps failed: 400');
 		});
 		const getGraphDelta = vi.fn(async () => DELTA);
-		const ingest = createIngestApi(clientStub(submitBraindump, getGraphDelta), () => 1_780);
+		const ingest = createIngestApi(
+			clientStub(submitBraindump, getGraphDelta),
+			() => 1_780
+		);
 		await expect(ingest.ingest('x')).rejects.toThrow(/400/);
 		expect(getGraphDelta).not.toHaveBeenCalled();
 	});
@@ -78,7 +89,10 @@ describe('createIngestApi — POST /braindumps then GET /graph/delta → optimis
 			throw new Error('GET /graph/delta failed: 503');
 		});
 		const ingest = createIngestApi(
-			clientStub(vi.fn(async () => BRAINDUMP), getGraphDelta),
+			clientStub(
+				vi.fn(async () => BRAINDUMP),
+				getGraphDelta
+			),
 			() => 1_780
 		);
 		await expect(ingest.ingest('x')).rejects.toThrow(/503/);
@@ -88,7 +102,10 @@ describe('createIngestApi — POST /braindumps then GET /graph/delta → optimis
 		let cursor = 1_780;
 		const getGraphDelta = vi.fn(async () => ({ ...DELTA, cursor: 1_900 }));
 		const ingest = createIngestApi(
-			clientStub(vi.fn(async () => BRAINDUMP), getGraphDelta),
+			clientStub(
+				vi.fn(async () => BRAINDUMP),
+				getGraphDelta
+			),
 			() => cursor
 		);
 		await ingest.ingest('first');

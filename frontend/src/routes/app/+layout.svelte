@@ -20,7 +20,9 @@
 				href={tab.href}
 				class="tab"
 				class:active={isTabActive(tab.href, page.url.pathname)}
-				aria-current={isTabActive(tab.href, page.url.pathname) ? 'page' : undefined}
+				aria-current={isTabActive(tab.href, page.url.pathname)
+					? 'page'
+					: undefined}
 				data-testid={`app-tab-${tab.slug}`}
 			>
 				{tab.label}

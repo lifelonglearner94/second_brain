@@ -4,7 +4,7 @@ Backend ADR-0007 establishes two texts per braindump: the verbatim (the user's c
 
 ## Considered options
 
-- **Edit the cleaned rendering** (populate the edit field with the text shown by default): rejected — it would collapse the verbatim/cleaned distinction. The cleaned text is an LLM projection of clarity, not the human's actual thought. Letting the user edit it would make the cleaned text the editable surface and demote the verbatim to a frozen artifact nobody touches, contradicting backend ADR-0007's model where the verbatim is the source of truth and edits are error-corrections applied to *it*. The UX convenience of "edit what you see" does not justify collapsing the semantic boundary.
+- **Edit the cleaned rendering** (populate the edit field with the text shown by default): rejected — it would collapse the verbatim/cleaned distinction. The cleaned text is an LLM projection of clarity, not the human's actual thought. Letting the user edit it would make the cleaned text the editable surface and demote the verbatim to a frozen artifact nobody touches, contradicting backend ADR-0007's model where the verbatim is the source of truth and edits are error-corrections applied to _it_. The UX convenience of "edit what you see" does not justify collapsing the semantic boundary.
 - **Show verbatim by default, edit verbatim**: rejected — the cleaned rendering exists for readability (backend ADR-0007); hiding it by default defeats its purpose. The default view stays cleaned; the edit surface switches to verbatim.
 
 ## Consequences

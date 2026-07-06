@@ -16,12 +16,18 @@ class FakeSigma implements SigmaLike {
 	graph: unknown;
 	container: HTMLElement;
 	settings: Record<string, unknown>;
-	nodeReducer: ((node: string, data: Record<string, unknown>) => Record<string, unknown>) | null = null;
+	nodeReducer:
+		| ((node: string, data: Record<string, unknown>) => Record<string, unknown>)
+		| null = null;
 	private handlers = new Map<string, Handler[]>();
 	refreshed = 0;
 	killed = false;
 
-	constructor(graph: unknown, container: HTMLElement, settings: Record<string, unknown>) {
+	constructor(
+		graph: unknown,
+		container: HTMLElement,
+		settings: Record<string, unknown>
+	) {
 		this.graph = graph;
 		this.container = container;
 		this.settings = settings;
@@ -52,8 +58,24 @@ class FakeSigma implements SigmaLike {
 
 function makeGraph(): MultiDirectedGraph {
 	const g = new MultiDirectedGraph();
-	g.addNode('c1', { label: 'sleep', group: 0, partition: 0, color: partitionColor(0), x: 1, y: 2, z: 0 });
-	g.addNode('c2', { label: 'caffeine', group: 1, partition: 1, color: partitionColor(1), x: 3, y: 4, z: 40 });
+	g.addNode('c1', {
+		label: 'sleep',
+		group: 0,
+		partition: 0,
+		color: partitionColor(0),
+		x: 1,
+		y: 2,
+		z: 0
+	});
+	g.addNode('c2', {
+		label: 'caffeine',
+		group: 1,
+		partition: 1,
+		color: partitionColor(1),
+		x: 3,
+		y: 4,
+		z: 40
+	});
 	g.addEdge('c1', 'c2', { label: 'disrupts' });
 	return g;
 }
@@ -106,10 +128,18 @@ describe('renderSpatialViewGraph2D — sigma.js v3 2D WebGL fallback over the sa
 			sigmaFactory: () => fake
 		});
 		expect(fake.nodeReducer).not.toBeNull();
-		const sleepData = { color: graph.getNodeAttribute('c1', 'color'), label: 'sleep' };
-		const cafData = { color: graph.getNodeAttribute('c2', 'color'), label: 'caffeine' };
+		const sleepData = {
+			color: graph.getNodeAttribute('c1', 'color'),
+			label: 'sleep'
+		};
+		const cafData = {
+			color: graph.getNodeAttribute('c2', 'color'),
+			label: 'caffeine'
+		};
 		expect(fake.nodeReducer!('c1', sleepData).color).toBe(HIGHLIGHT_2D);
-		expect(fake.nodeReducer!('c2', cafData).color).toBe(graph.getNodeAttribute('c2', 'color'));
+		expect(fake.nodeReducer!('c2', cafData).color).toBe(
+			graph.getNodeAttribute('c2', 'color')
+		);
 	});
 
 	it('reports clickNode as a selection (id + label) from the graphology model', async () => {
@@ -151,10 +181,18 @@ describe('renderSpatialViewGraph2D — sigma.js v3 2D WebGL fallback over the sa
 		});
 		handle.setSelected('c2');
 		expect(fake.refreshed).toBeGreaterThan(0);
-		const cafData = { color: graph.getNodeAttribute('c2', 'color'), label: 'caffeine' };
-		const sleepData = { color: graph.getNodeAttribute('c1', 'color'), label: 'sleep' };
+		const cafData = {
+			color: graph.getNodeAttribute('c2', 'color'),
+			label: 'caffeine'
+		};
+		const sleepData = {
+			color: graph.getNodeAttribute('c1', 'color'),
+			label: 'sleep'
+		};
 		expect(fake.nodeReducer!('c2', cafData).color).toBe(HIGHLIGHT_2D);
-		expect(fake.nodeReducer!('c1', sleepData).color).toBe(graph.getNodeAttribute('c1', 'color'));
+		expect(fake.nodeReducer!('c1', sleepData).color).toBe(
+			graph.getNodeAttribute('c1', 'color')
+		);
 	});
 
 	it('destroy() kills sigma so the canvas/WebGL resources are released', async () => {
@@ -173,15 +211,28 @@ describe('renderSpatialViewGraph2D — sigma.js v3 2D WebGL fallback over the sa
 	it('a node with NO_PARTITION keeps its fallback cluster color through the reducer (cluster feeling preserved)', async () => {
 		const container = document.createElement('div');
 		const graph = makeGraph();
-		graph.addNode('c9', { label: 'orphan', group: NO_PARTITION, partition: NO_PARTITION, color: partitionColor(NO_PARTITION), x: 5, y: 6, z: -40 });
+		graph.addNode('c9', {
+			label: 'orphan',
+			group: NO_PARTITION,
+			partition: NO_PARTITION,
+			color: partitionColor(NO_PARTITION),
+			x: 5,
+			y: 6,
+			z: -40
+		});
 		const fake = new FakeSigma(graph, container, {});
 		await renderSpatialViewGraph2D(container, graph, {
 			selectedNodeId: 'c1',
 			onSelectNode: vi.fn(),
 			sigmaFactory: () => fake
 		});
-		const orphanData = { color: graph.getNodeAttribute('c9', 'color'), label: 'orphan' };
-		expect(fake.nodeReducer!('c9', orphanData).color).toBe(partitionColor(NO_PARTITION));
+		const orphanData = {
+			color: graph.getNodeAttribute('c9', 'color'),
+			label: 'orphan'
+		};
+		expect(fake.nodeReducer!('c9', orphanData).color).toBe(
+			partitionColor(NO_PARTITION)
+		);
 	});
 
 	it('builds the Spatial View-Graph with a tappable node size on every concept (issue #57: nodes too small to tap on mobile)', () => {

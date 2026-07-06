@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { detectRendererCapability, type CapabilityEnv } from '../../src/lib/graph/capability';
+import {
+	detectRendererCapability,
+	type CapabilityEnv
+} from '../../src/lib/graph/capability';
 
 const DESKTOP_CHROME: CapabilityEnv = {
 	userAgent:
 		'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
 	hasWebGL2: true,
-	webglRenderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0)',
+	webglRenderer:
+		'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0)',
 	hardwareConcurrency: 8
 };
 

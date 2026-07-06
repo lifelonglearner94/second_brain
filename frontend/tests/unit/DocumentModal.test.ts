@@ -26,7 +26,9 @@ function apiStub(getBraindump: BraindumpApi['getBraindump']): BraindumpApi {
 
 describe('DocumentModal — isolated braindump reader (ADR-0003, ADR-0005)', () => {
 	it('renders a loading state while the braindump is being fetched', () => {
-		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(() => new Promise<Braindump>(() => {}));
+		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
+			() => new Promise<Braindump>(() => {})
+		);
 		const { getByTestId } = render(DocumentModal, {
 			props: { braindumpId: 42, api: apiStub(getBraindump), onClose: vi.fn() }
 		});
@@ -34,11 +36,15 @@ describe('DocumentModal — isolated braindump reader (ADR-0003, ADR-0005)', () 
 	});
 
 	it('fetches GET /braindumps/:id and shows the cleaned text by default', async () => {
-		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(async () => BRAINDUMP);
+		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
+			async () => BRAINDUMP
+		);
 		const { getByTestId, queryByTestId } = render(DocumentModal, {
 			props: { braindumpId: 42, api: apiStub(getBraindump), onClose: vi.fn() }
 		});
-		await waitFor(() => expect(getByTestId('document-modal-cleaned')).toBeTruthy());
+		await waitFor(() =>
+			expect(getByTestId('document-modal-cleaned')).toBeTruthy()
+		);
 		expect(getByTestId('document-modal-cleaned').textContent).toBe(
 			'Maria leaving tanks the timeline.'
 		);
@@ -47,13 +53,19 @@ describe('DocumentModal — isolated braindump reader (ADR-0003, ADR-0005)', () 
 	});
 
 	it('the View Raw toggle swaps the rendered text from cleaned to verbatim', async () => {
-		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(async () => BRAINDUMP);
+		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
+			async () => BRAINDUMP
+		);
 		const { getByTestId, queryByTestId } = render(DocumentModal, {
 			props: { braindumpId: 42, api: apiStub(getBraindump), onClose: vi.fn() }
 		});
-		await waitFor(() => expect(getByTestId('document-modal-cleaned')).toBeTruthy());
+		await waitFor(() =>
+			expect(getByTestId('document-modal-cleaned')).toBeTruthy()
+		);
 		getByTestId('document-modal-toggle-raw').click();
-		await waitFor(() => expect(getByTestId('document-modal-verbatim')).toBeTruthy());
+		await waitFor(() =>
+			expect(getByTestId('document-modal-verbatim')).toBeTruthy()
+		);
 		expect(getByTestId('document-modal-verbatim').textContent).toBe(
 			'maria leaving tanks the timeline'
 		);
@@ -61,12 +73,16 @@ describe('DocumentModal — isolated braindump reader (ADR-0003, ADR-0005)', () 
 	});
 
 	it('the close button calls onClose', async () => {
-		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(async () => BRAINDUMP);
+		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
+			async () => BRAINDUMP
+		);
 		const onClose = vi.fn();
 		const { getByTestId } = render(DocumentModal, {
 			props: { braindumpId: 42, api: apiStub(getBraindump), onClose }
 		});
-		await waitFor(() => expect(getByTestId('document-modal-cleaned')).toBeTruthy());
+		await waitFor(() =>
+			expect(getByTestId('document-modal-cleaned')).toBeTruthy()
+		);
 		getByTestId('document-modal-close').click();
 		expect(onClose).toHaveBeenCalledOnce();
 	});
@@ -78,16 +94,24 @@ describe('DocumentModal — isolated braindump reader (ADR-0003, ADR-0005)', () 
 		const { getByTestId } = render(DocumentModal, {
 			props: { braindumpId: 9999, api: apiStub(getBraindump), onClose: vi.fn() }
 		});
-		await waitFor(() => expect(getByTestId('document-modal-error')).toBeTruthy());
-		expect(getByTestId('document-modal-error').textContent).toContain('not found');
+		await waitFor(() =>
+			expect(getByTestId('document-modal-error')).toBeTruthy()
+		);
+		expect(getByTestId('document-modal-error').textContent).toContain(
+			'not found'
+		);
 	});
 
 	it('does not render any graph-navigation control — citations are a reading interaction, not navigation (does not move the Spatial View-Graph camera)', async () => {
-		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(async () => BRAINDUMP);
+		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
+			async () => BRAINDUMP
+		);
 		const { getByTestId, queryByTestId, container } = render(DocumentModal, {
 			props: { braindumpId: 42, api: apiStub(getBraindump), onClose: vi.fn() }
 		});
-		await waitFor(() => expect(getByTestId('document-modal-cleaned')).toBeTruthy());
+		await waitFor(() =>
+			expect(getByTestId('document-modal-cleaned')).toBeTruthy()
+		);
 		expect(queryByTestId('document-modal-focus-concept')).toBeNull();
 		expect(container.querySelector('[data-testid="graph-view"]')).toBeNull();
 	});

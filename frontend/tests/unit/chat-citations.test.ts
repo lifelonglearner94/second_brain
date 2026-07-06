@@ -17,7 +17,9 @@ describe('parseAnswerCitations — inline [bd:<id>] chips, [edge:...] hidden (AD
 	});
 
 	it('numbers each unique braindump by order of first appearance', () => {
-		const segs = parseAnswerCitations('A [bd:7] then B [bd:42] then A again [bd:7].');
+		const segs = parseAnswerCitations(
+			'A [bd:7] then B [bd:42] then A again [bd:7].'
+		);
 		const chips = segs.filter((s) => s.kind === 'citation');
 		expect(chips).toEqual([
 			{ kind: 'citation', index: 1, braindumpId: 7 },
@@ -34,8 +36,12 @@ describe('parseAnswerCitations — inline [bd:<id>] chips, [edge:...] hidden (AD
 			.map((s) => (s.kind === 'citation' ? `[${s.index}]` : s.text))
 			.join('');
 		expect(rendered).toBe('Q3 is at risk [1].');
-		expect(segs.some((s) => s.kind === 'text' && s.text.includes('edge:'))).toBe(false);
-		expect(segs.some((s) => s.kind === 'text' && s.text.includes('endangers'))).toBe(false);
+		expect(
+			segs.some((s) => s.kind === 'text' && s.text.includes('edge:'))
+		).toBe(false);
+		expect(
+			segs.some((s) => s.kind === 'text' && s.text.includes('endangers'))
+		).toBe(false);
 	});
 
 	it('parses multi-digit braindump ids', () => {

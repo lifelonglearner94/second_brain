@@ -23,11 +23,19 @@ export default ts.config(
 		}
 	},
 	{
-		files: ['**/*.svelte'],
+		files: ['**/*.svelte', '**/*.svelte.js', '**/*.svelte.ts'],
 		languageOptions: {
 			parserOptions: {
 				parser: ts.parser
 			}
+		}
+	},
+	{
+		rules: {
+			'no-useless-assignment': 'off',
+			'svelte/no-navigation-without-resolve': 'off',
+			'svelte/prefer-svelte-reactivity': 'off',
+			'svelte/require-each-key': 'off'
 		}
 	}
 );

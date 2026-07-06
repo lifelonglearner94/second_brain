@@ -68,7 +68,10 @@ export function buildSpatialViewGraph(
 	}
 
 	for (const edge of snapshot.edges) {
-		if (!knownConcepts.has(edge.source_concept_id) || !knownConcepts.has(edge.target_concept_id)) {
+		if (
+			!knownConcepts.has(edge.source_concept_id) ||
+			!knownConcepts.has(edge.target_concept_id)
+		) {
 			continue;
 		}
 		if (edge.source_concept_id === edge.target_concept_id) {
@@ -94,9 +97,7 @@ export function buildSpatialViewGraph(
 	return graph;
 }
 
-export function projectToGraphData(
-	graph: MultiDirectedGraph
-): GraphData {
+export function projectToGraphData(graph: MultiDirectedGraph): GraphData {
 	const nodes: GraphNode[] = [];
 	graph.forEachNode((key, attrs) => {
 		const x = attrs.x as number;
@@ -106,7 +107,9 @@ export function projectToGraphData(
 			id: key,
 			label: (attrs.label as string) ?? key,
 			group: (attrs.group as number) ?? NO_PARTITION,
-			color: (attrs.color as string) ?? partitionColor((attrs.group as number) ?? NO_PARTITION),
+			color:
+				(attrs.color as string) ??
+				partitionColor((attrs.group as number) ?? NO_PARTITION),
 			x,
 			y,
 			z,

@@ -18,10 +18,16 @@ export function applyConceptMerge(
 
 	const edges = [];
 	for (const edge of snapshot.edges) {
-		const source = edge.source_concept_id === foldId ? keepId : edge.source_concept_id;
-		const target = edge.target_concept_id === foldId ? keepId : edge.target_concept_id;
+		const source =
+			edge.source_concept_id === foldId ? keepId : edge.source_concept_id;
+		const target =
+			edge.target_concept_id === foldId ? keepId : edge.target_concept_id;
 		if (source === target) continue;
-		edges.push({ ...edge, source_concept_id: source, target_concept_id: target });
+		edges.push({
+			...edge,
+			source_concept_id: source,
+			target_concept_id: target
+		});
 	}
 
 	return { concepts, edges, partitions };

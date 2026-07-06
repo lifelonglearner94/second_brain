@@ -61,9 +61,14 @@ describe('Active Capture vertical slice — STT → buffer → explicit submit �
 		await store.startStt(fakeDeepgramSource(['caffeine ', 'disrupts sleep']));
 		expect(store.text).toBe('caffeine disrupts sleep');
 
-		const outcome = await store.submit(makeIngest(ingested), true, pendingStore());
+		const outcome = await store.submit(
+			makeIngest(ingested),
+			true,
+			pendingStore()
+		);
 		expect(outcome.kind).toBe('submitted');
-		if (outcome.kind !== 'submitted') throw new Error('expected submitted outcome');
+		if (outcome.kind !== 'submitted')
+			throw new Error('expected submitted outcome');
 		const res = outcome.res;
 		expect(res.concepts[0]?.label).toBe('caffeine');
 
@@ -126,7 +131,12 @@ describe('Active Capture vertical slice — STT → buffer → explicit submit �
 		const ingest: IngestApi = {
 			async ingest(verbatim) {
 				calls.push(verbatim);
-				return { braindump: { id: 'b', created_at: '1' }, concepts: [], edges: [], cursor: 1 };
+				return {
+					braindump: { id: 'b', created_at: '1' },
+					concepts: [],
+					edges: [],
+					cursor: 1
+				};
 			}
 		};
 		await store.startStt(fakeDeepgramSource(['a chunk']));

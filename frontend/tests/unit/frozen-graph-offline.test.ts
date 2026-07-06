@@ -1,13 +1,19 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fakeIndexedDB from 'fake-indexeddb';
-import { createIdb, type IdbStore, type TopologySnapshot } from '../../src/lib/state/idb';
+import {
+	createIdb,
+	type IdbStore,
+	type TopologySnapshot
+} from '../../src/lib/state/idb';
 import { loadSpatialViewGraph } from '../../src/lib/graph/load';
 import { frozenGraphStatus } from '../../src/lib/graph/frozen-graph';
 import type { GlobalTopologySnapshot } from '../../src/lib/api/client';
 
 const CACHED: TopologySnapshot = {
 	fetchedAt: '2026-06-01T00:00:00Z',
-	concepts: [{ id: 'c9', label: 'stale concept', created_at: '2026-05-01T00:00:00Z' }],
+	concepts: [
+		{ id: 'c9', label: 'stale concept', created_at: '2026-05-01T00:00:00Z' }
+	],
 	edges: [],
 	partitions: [{ concept_id: 'c9', partition_id: 2 }]
 };
@@ -47,7 +53,11 @@ describe('offline-open story — frozen-graph render, staleness indicator, captu
 		expect(loaded.snapshot.fetchedAt).toBe(CACHED.fetchedAt);
 		expect(loaded.snapshot.concepts[0]?.id).toBe('c9');
 
-		const frozen = frozenGraphStatus(loaded.source, loaded.snapshot.fetchedAt, false);
+		const frozen = frozenGraphStatus(
+			loaded.source,
+			loaded.snapshot.fetchedAt,
+			false
+		);
 		expect(frozen.status).toBe('offline');
 		expect(frozen.label).not.toBeNull();
 		expect(frozen.label).toContain(CACHED.fetchedAt);
@@ -77,12 +87,22 @@ describe('offline-open story — frozen-graph render, staleness indicator, captu
 	});
 
 	it('does not flag staleness when the backend is reachable and online — captures ingest immediately', async () => {
-		const freshApi = { getGraph: vi.fn(async (): Promise<GlobalTopologySnapshot> => RAW) };
+		const freshApi = {
+			getGraph: vi.fn(async (): Promise<GlobalTopologySnapshot> => RAW)
+		};
 
-		const loaded = await loadSpatialViewGraph(freshApi, idb, () => '2026-07-04T12:00:00Z');
+		const loaded = await loadSpatialViewGraph(
+			freshApi,
+			idb,
+			() => '2026-07-04T12:00:00Z'
+		);
 		expect(loaded.source).toBe('network');
 
-		const frozen = frozenGraphStatus(loaded.source, loaded.snapshot.fetchedAt, true);
+		const frozen = frozenGraphStatus(
+			loaded.source,
+			loaded.snapshot.fetchedAt,
+			true
+		);
 		expect(frozen.status).toBe('ready');
 		expect(frozen.label).toBeNull();
 	});

@@ -6,7 +6,10 @@ import {
 	type DeltaSyncApi,
 	type DeltaSyncOutcome
 } from '../../src/lib/graph/delta-sync';
-import type { GlobalTopologySnapshot, GraphDelta } from '../../src/lib/api/client';
+import type {
+	GlobalTopologySnapshot,
+	GraphDelta
+} from '../../src/lib/api/client';
 
 const SNAPSHOT: GlobalTopologySnapshot = {
 	concepts: [
@@ -34,7 +37,9 @@ describe('syncDelta — pull-on-focus Delta Sync orchestrator', () => {
 		it('fetches changes since the cursor and advances last_sync_timestamp to the fresh cursor on success', async () => {
 			const delta: GraphDelta = {
 				cursor: 1700000500,
-				added_concepts: [{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }],
+				added_concepts: [
+					{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }
+				],
 				added_edges: [],
 				deleted_concept_ids: [],
 				deleted_edge_ids: [],
@@ -54,7 +59,9 @@ describe('syncDelta — pull-on-focus Delta Sync orchestrator', () => {
 		it('reconciles the snapshot with the fetched delta', async () => {
 			const delta: GraphDelta = {
 				cursor: 1700000500,
-				added_concepts: [{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }],
+				added_concepts: [
+					{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }
+				],
 				added_edges: [],
 				deleted_concept_ids: ['c2'],
 				deleted_edge_ids: [],
@@ -66,7 +73,10 @@ describe('syncDelta — pull-on-focus Delta Sync orchestrator', () => {
 			const outcome = await syncDelta(state, api);
 
 			expect(outcome.applied).toBe(true);
-			expect(outcome.state.snapshot.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c3']);
+			expect(outcome.state.snapshot.concepts.map((c) => c.id).sort()).toEqual([
+				'c1',
+				'c3'
+			]);
 			if (outcome.applied) {
 				expect(outcome.delta).toEqual(delta);
 			}
@@ -107,7 +117,10 @@ describe('syncDelta — pull-on-focus Delta Sync orchestrator', () => {
 
 			expect(outcome.applied).toBe(true);
 			expect(outcome.state.cursor).toBe(1700000500);
-			expect(outcome.state.snapshot.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c2']);
+			expect(outcome.state.snapshot.concepts.map((c) => c.id).sort()).toEqual([
+				'c1',
+				'c2'
+			]);
 		});
 	});
 
@@ -139,7 +152,9 @@ describe('syncDelta — pull-on-focus Delta Sync orchestrator', () => {
 		it('a window focus event triggers a delta fetch against the current cursor and reconciles the view', async () => {
 			const delta: GraphDelta = {
 				cursor: 1700000500,
-				added_concepts: [{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }],
+				added_concepts: [
+					{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }
+				],
 				added_edges: [],
 				deleted_concept_ids: [],
 				deleted_edge_ids: [],
@@ -164,7 +179,11 @@ describe('syncDelta — pull-on-focus Delta Sync orchestrator', () => {
 			expect(getGraphDelta).toHaveBeenCalledWith(1700000000);
 			expect(outcome?.applied).toBe(true);
 			expect(outcome?.state.cursor).toBe(1700000500);
-			expect(outcome?.state.snapshot.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c2', 'c3']);
+			expect(outcome?.state.snapshot.concepts.map((c) => c.id).sort()).toEqual([
+				'c1',
+				'c2',
+				'c3'
+			]);
 		});
 	});
 
@@ -172,7 +191,9 @@ describe('syncDelta — pull-on-focus Delta Sync orchestrator', () => {
 		it('overlays the delta onto the post-ingestion view so the new concepts/edges appear', async () => {
 			const delta: GraphDelta = {
 				cursor: 1700000500,
-				added_concepts: [{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }],
+				added_concepts: [
+					{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }
+				],
 				added_edges: [
 					{
 						id: 'e2',
@@ -193,8 +214,15 @@ describe('syncDelta — pull-on-focus Delta Sync orchestrator', () => {
 			const outcome = await syncDelta(state, api);
 
 			expect(api.getGraphDelta).toHaveBeenCalledWith(1700000000);
-			expect(outcome.state.snapshot.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c2', 'c3']);
-			expect(outcome.state.snapshot.edges.map((e) => e.id).sort()).toEqual(['e1', 'e2']);
+			expect(outcome.state.snapshot.concepts.map((c) => c.id).sort()).toEqual([
+				'c1',
+				'c2',
+				'c3'
+			]);
+			expect(outcome.state.snapshot.edges.map((e) => e.id).sort()).toEqual([
+				'e1',
+				'e2'
+			]);
 			expect(outcome.state.cursor).toBe(1700000500);
 		});
 	});

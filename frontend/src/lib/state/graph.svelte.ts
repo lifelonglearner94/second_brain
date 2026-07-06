@@ -3,7 +3,11 @@ import { buildGraphData, type GraphData } from '$lib/graph/build';
 import { applyDelta } from '$lib/graph/delta';
 import { applyConceptMerge, applyTypeMerge } from '$lib/graph/merge';
 import { syncDelta, type DeltaSyncApi } from '$lib/graph/delta-sync';
-import { loadSpatialViewGraph, type SnapshotApi, type SnapshotSource } from '$lib/graph/load';
+import {
+	loadSpatialViewGraph,
+	type SnapshotApi,
+	type SnapshotSource
+} from '$lib/graph/load';
 import type { IdbStore, TopologySnapshot } from '$lib/state/idb';
 import type {
 	ChatInferenceProposal,
@@ -36,7 +40,10 @@ export class GraphStore {
 		now: () => string = (): string => new Date().toISOString()
 	): Promise<{ source: SnapshotSource; fetchedAt: string }> {
 		if (this.snapshot) {
-			return { source: this.source ?? 'network', fetchedAt: this.fetchedAt ?? '' };
+			return {
+				source: this.source ?? 'network',
+				fetchedAt: this.fetchedAt ?? ''
+			};
 		}
 		this.status = 'loading';
 		this.error = null;
@@ -44,7 +51,9 @@ export class GraphStore {
 		this.snapshot = loaded.snapshot;
 		this.fetchedAt = loaded.snapshot.fetchedAt;
 		this.source = loaded.source;
-		this.cursor = Math.floor(new Date(loaded.snapshot.fetchedAt).getTime() / 1000);
+		this.cursor = Math.floor(
+			new Date(loaded.snapshot.fetchedAt).getTime() / 1000
+		);
 		this.data = buildGraphData(loaded.snapshot);
 		this.status = 'loaded';
 		return { source: loaded.source, fetchedAt: loaded.snapshot.fetchedAt };
@@ -52,7 +61,10 @@ export class GraphStore {
 
 	async syncDelta(api: DeltaSyncApi): Promise<SyncDeltaOutcome> {
 		if (!this.snapshot) return { applied: false };
-		const outcome = await syncDelta({ snapshot: this.snapshot, cursor: this.cursor }, api);
+		const outcome = await syncDelta(
+			{ snapshot: this.snapshot, cursor: this.cursor },
+			api
+		);
 		if (!outcome.applied) return { applied: false };
 		this.snapshot = stampFetchedAt(outcome.state.snapshot, this.fetchedAt);
 		this.cursor = outcome.state.cursor;
@@ -83,28 +95,44 @@ export class GraphStore {
 		this.data = mergeEndorsedEdge(this.data, proposal);
 	}
 
-	applyConceptMerge(suggestion: ConceptMergeSuggestion): GlobalTopologySnapshot | null {
+	applyConceptMerge(
+		suggestion: ConceptMergeSuggestion
+	): GlobalTopologySnapshot | null {
 		if (!this.snapshot) return null;
-		this.snapshot = stampFetchedAt(applyConceptMerge(this.snapshot, suggestion), this.fetchedAt);
+		this.snapshot = stampFetchedAt(
+			applyConceptMerge(this.snapshot, suggestion),
+			this.fetchedAt
+		);
 		this.data = buildGraphData(this.snapshot);
 		return this.snapshot;
 	}
 
-	applyTypeMerge(proposal: OntologyTypeProposal): GlobalTopologySnapshot | null {
+	applyTypeMerge(
+		proposal: OntologyTypeProposal
+	): GlobalTopologySnapshot | null {
 		if (!this.snapshot) return null;
-		this.snapshot = stampFetchedAt(applyTypeMerge(this.snapshot, proposal), this.fetchedAt);
+		this.snapshot = stampFetchedAt(
+			applyTypeMerge(this.snapshot, proposal),
+			this.fetchedAt
+		);
 		this.data = buildGraphData(this.snapshot);
 		return this.snapshot;
 	}
 
 	loadSnapshot(snapshot: GlobalTopologySnapshot): void {
-		this.snapshot = { ...snapshot, fetchedAt: this.fetchedAt ?? new Date(0).toISOString() };
+		this.snapshot = {
+			...snapshot,
+			fetchedAt: this.fetchedAt ?? new Date(0).toISOString()
+		};
 		this.data = buildGraphData(snapshot);
 		this.status = 'loaded';
 	}
 }
 
-function stampFetchedAt(snapshot: GlobalTopologySnapshot, fetchedAt: string | null): TopologySnapshot {
+function stampFetchedAt(
+	snapshot: GlobalTopologySnapshot,
+	fetchedAt: string | null
+): TopologySnapshot {
 	return { ...snapshot, fetchedAt: fetchedAt ?? new Date(0).toISOString() };
 }
 

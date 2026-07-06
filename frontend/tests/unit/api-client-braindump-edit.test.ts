@@ -31,7 +31,9 @@ describe('apiClient.editBraindump — PATCH /braindumps/:id (backend #5, ADR-000
 		expect(init?.method).toBe('PATCH');
 		expect(init?.credentials).toBe('include');
 		expect(init?.headers).toMatchObject({ 'content-type': 'application/json' });
-		expect(JSON.parse(init?.body as string)).toEqual({ verbatim: 'maria leaving tanks the timeline' });
+		expect(JSON.parse(init?.body as string)).toEqual({
+			verbatim: 'maria leaving tanks the timeline'
+		});
 	});
 
 	it('parses the returned Braindump — id and created_at stable, cleaned freshly re-derived by the backend', async () => {
@@ -43,7 +45,10 @@ describe('apiClient.editBraindump — PATCH /braindumps/:id (backend #5, ADR-000
 		};
 		fetchMock.mockResolvedValue(okResponse(edited));
 		const api = createApiClient({ fetch: fetchMock });
-		const res = await api.editBraindump(42, 'Maria is leaving, which tanks the timeline.');
+		const res = await api.editBraindump(
+			42,
+			'Maria is leaving, which tanks the timeline.'
+		);
 		expect(res).toEqual(edited);
 		expect(res.id).toBe(42);
 		expect(res.created_at).toBe(1_700_000_000);
@@ -53,12 +58,16 @@ describe('apiClient.editBraindump — PATCH /braindumps/:id (backend #5, ADR-000
 	it('throws on 400 (empty verbatim rejected by the backend) with the errorLabel prefix', async () => {
 		fetchMock.mockResolvedValue(new Response('bad request', { status: 400 }));
 		const api = createApiClient({ fetch: fetchMock });
-		await expect(api.editBraindump(42, '')).rejects.toThrow('PATCH /braindumps/:id failed: 400');
+		await expect(api.editBraindump(42, '')).rejects.toThrow(
+			'PATCH /braindumps/:id failed: 400'
+		);
 	});
 
 	it('throws on 404 so the Document Modal can keep the user in edit mode with an error', async () => {
 		fetchMock.mockResolvedValue(new Response('not found', { status: 404 }));
 		const api = createApiClient({ fetch: fetchMock });
-		await expect(api.editBraindump(9999, 'x')).rejects.toThrow('PATCH /braindumps/:id failed: 404');
+		await expect(api.editBraindump(9999, 'x')).rejects.toThrow(
+			'PATCH /braindumps/:id failed: 404'
+		);
 	});
 });

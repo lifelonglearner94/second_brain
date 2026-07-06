@@ -54,7 +54,13 @@ describe('apiClient — admin logs surface against backend #4', () => {
 	});
 
 	it('forwards ?limit=N when a limit is supplied (capped server-side at capacity)', async () => {
-		fetchMock.mockResolvedValue(okResponse({ logs: LOGS_BODY.logs.slice(0, 1), count: 1, capacity: 1_000 }));
+		fetchMock.mockResolvedValue(
+			okResponse({
+				logs: LOGS_BODY.logs.slice(0, 1),
+				count: 1,
+				capacity: 1_000
+			})
+		);
 		const api = createApiClient({ fetch: fetchMock });
 		await api.getAdminLogs(50);
 		expect(fetchMock.mock.calls[0][0]).toBe('/api/admin/logs?limit=50');

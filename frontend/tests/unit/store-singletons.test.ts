@@ -1,9 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { AdminLogStore, adminLogs } from '../../src/lib/state/admin-logs.svelte';
+import {
+	AdminLogStore,
+	adminLogs
+} from '../../src/lib/state/admin-logs.svelte';
 import { SessionStore, session } from '../../src/lib/state/session.svelte';
-import { PendingCapturesStore, pendingCaptures } from '../../src/lib/state/pending-captures.svelte';
-import { EndorsementStore, endorsementQueue } from '../../src/lib/state/endorsement-queue.svelte';
-import { HousekeepingStore, housekeeping } from '../../src/lib/state/housekeeping.svelte';
+import {
+	PendingCapturesStore,
+	pendingCaptures
+} from '../../src/lib/state/pending-captures.svelte';
+import {
+	EndorsementStore,
+	endorsementQueue
+} from '../../src/lib/state/endorsement-queue.svelte';
+import {
+	HousekeepingStore,
+	housekeeping
+} from '../../src/lib/state/housekeeping.svelte';
 import { GraphStore, graphStore } from '../../src/lib/state/graph.svelte';
 
 describe('store singletons — one shared instance exported from each store module (the spatial-graph pattern)', () => {

@@ -2,7 +2,11 @@
 	import { goto } from '$app/navigation';
 	import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
 	import { apiClient } from '$lib/api';
-	import { registerPasskey, loginPasskey, recoverPasskey } from '$lib/auth/flow';
+	import {
+		registerPasskey,
+		loginPasskey,
+		recoverPasskey
+	} from '$lib/auth/flow';
 	import { session } from '$lib/state/session.svelte';
 
 	let busy = $state<null | 'register' | 'login' | 'recover'>(null);

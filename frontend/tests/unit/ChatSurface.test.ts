@@ -11,7 +11,8 @@ const BRAINDUMP: Braindump = {
 };
 
 const GROUNDED: ChatResponse = {
-	answer: 'Q3 launch is at risk because Maria is leaving [bd:42] [edge:Maria —endangers→ Q3 launch].',
+	answer:
+		'Q3 launch is at risk because Maria is leaving [bd:42] [edge:Maria —endangers→ Q3 launch].',
 	citations: [
 		{
 			id: 42,
@@ -49,11 +50,16 @@ type ChatApi = {
 	editBraindump(id: number, verbatim: string): Promise<Braindump>;
 };
 
-function apiStub(chat: ChatApi['chat'], getBraindump: ChatApi['getBraindump']): ChatApi {
+function apiStub(
+	chat: ChatApi['chat'],
+	getBraindump: ChatApi['getBraindump']
+): ChatApi {
 	return {
 		chat,
 		getBraindump,
-		editBraindump: vi.fn<ChatApi['editBraindump']>(() => new Promise<Braindump>(() => {}))
+		editBraindump: vi.fn<ChatApi['editBraindump']>(
+			() => new Promise<Braindump>(() => {})
+		)
 	};
 }
 
@@ -84,7 +90,9 @@ describe('ChatSurface — conversational read surface (ADR-0005, backend #10)', 
 		await submitQuery(getByTestId, 'is Q3 at risk?');
 		expect(chat).toHaveBeenCalledWith('is Q3 at risk?');
 		await waitFor(() => expect(getByTestId('chat-answer')).toBeTruthy());
-		expect(getByTestId('chat-answer').textContent).toContain('Q3 launch is at risk');
+		expect(getByTestId('chat-answer').textContent).toContain(
+			'Q3 launch is at risk'
+		);
 		const chip = getByTestId('chat-citation-chip');
 		expect(chip.textContent).toBe('[1]');
 		expect(chip.getAttribute('data-braindump-id')).toBe('42');
@@ -99,7 +107,9 @@ describe('ChatSurface — conversational read surface (ADR-0005, backend #10)', 
 		await submitQuery(getByTestId, 'is Q3 at risk?');
 		await waitFor(() => expect(getByTestId('chat-citation-chip')).toBeTruthy());
 		await fireEvent.click(getByTestId('chat-citation-chip'));
-		await waitFor(() => expect(getByTestId('document-modal-cleaned')).toBeTruthy());
+		await waitFor(() =>
+			expect(getByTestId('document-modal-cleaned')).toBeTruthy()
+		);
 		expect(getByTestId('document-modal-cleaned').textContent).toBe(
 			'Maria leaving tanks the timeline.'
 		);
@@ -113,7 +123,9 @@ describe('ChatSurface — conversational read surface (ADR-0005, backend #10)', 
 			props: { api: apiStub(chat, getBraindump) }
 		});
 		await submitQuery(getByTestId, 'what is the meaning of life?');
-		await waitFor(() => expect(getByTestId('chat-explicit-silence')).toBeTruthy());
+		await waitFor(() =>
+			expect(getByTestId('chat-explicit-silence')).toBeTruthy()
+		);
 		expect(getByTestId('chat-explicit-silence').textContent).toBe(
 			'I cannot find graph-supported evidence to answer this.'
 		);
@@ -179,8 +191,12 @@ describe('ChatSurface — chat is unavailable offline (ADR-0005, issue #21)', ()
 		const offline = getByTestId('chat-offline');
 		expect(offline).toBeTruthy();
 		expect(offline.textContent).toContain('Chat unavailable offline');
-		expect((getByTestId('chat-submit') as HTMLButtonElement).disabled).toBe(true);
-		expect((getByTestId('chat-query-input') as HTMLInputElement).disabled).toBe(true);
+		expect((getByTestId('chat-submit') as HTMLButtonElement).disabled).toBe(
+			true
+		);
+		expect((getByTestId('chat-query-input') as HTMLInputElement).disabled).toBe(
+			true
+		);
 	});
 
 	it('never calls api.chat when offline, even if the form is submitted directly (defense-in-depth)', async () => {
@@ -203,7 +219,11 @@ describe('ChatSurface — chat is unavailable offline (ADR-0005, issue #21)', ()
 			props: { api: apiStub(chat, getBraindump), online: true }
 		});
 		expect(queryByTestId('chat-offline')).toBeNull();
-		expect((getByTestId('chat-submit') as HTMLButtonElement).disabled).toBe(false);
-		expect((getByTestId('chat-query-input') as HTMLInputElement).disabled).toBe(false);
+		expect((getByTestId('chat-submit') as HTMLButtonElement).disabled).toBe(
+			false
+		);
+		expect((getByTestId('chat-query-input') as HTMLInputElement).disabled).toBe(
+			false
+		);
 	});
 });

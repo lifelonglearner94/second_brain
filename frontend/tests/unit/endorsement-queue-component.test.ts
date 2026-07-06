@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, within } from '@testing-library/svelte';
+import {
+	render,
+	screen,
+	fireEvent,
+	cleanup,
+	within
+} from '@testing-library/svelte';
 import EndorsementQueue from '../../src/lib/endorsement/EndorsementQueue.svelte';
 import { mergeEndorsedEdge } from '../../src/lib/endorsement/merge';
 import { EDGE_COLOR, type GraphData } from '../../src/lib/graph/build';
@@ -81,7 +87,11 @@ afterEach(() => {
 describe('EndorsementQueue — Evidence Disclosure surface (ADR-0004/0009)', () => {
 	it('lists every pending chat-inferred edge proposal from the backend', () => {
 		render(EndorsementQueue, {
-			props: { proposals: [STRUCTURAL, THEMATIC], labelFor, onApproveConnection: vi.fn() }
+			props: {
+				proposals: [STRUCTURAL, THEMATIC],
+				labelFor,
+				onApproveConnection: vi.fn()
+			}
 		});
 		const items = screen.getAllByTestId(/^endorsement-item-/);
 		expect(items).toHaveLength(2);
@@ -91,7 +101,11 @@ describe('EndorsementQueue — Evidence Disclosure surface (ADR-0004/0009)', () 
 
 	it('uses the action verb "Approve Connection" — never "Merge"', () => {
 		render(EndorsementQueue, {
-			props: { proposals: [STRUCTURAL, THEMATIC], labelFor, onApproveConnection: vi.fn() }
+			props: {
+				proposals: [STRUCTURAL, THEMATIC],
+				labelFor,
+				onApproveConnection: vi.fn()
+			}
 		});
 		const verbs = screen.getAllByTestId('approve-connection');
 		expect(verbs).toHaveLength(2);
@@ -104,7 +118,11 @@ describe('EndorsementQueue — Evidence Disclosure surface (ADR-0004/0009)', () 
 
 	it('shows NO academic "Structural"/"Thematic" type labels — the distinction is the evidence payload, not a name', () => {
 		render(EndorsementQueue, {
-			props: { proposals: [STRUCTURAL, THEMATIC], labelFor, onApproveConnection: vi.fn() }
+			props: {
+				proposals: [STRUCTURAL, THEMATIC],
+				labelFor,
+				onApproveConnection: vi.fn()
+			}
 		});
 		expect(screen.queryByText('Structural')).toBeNull();
 		expect(screen.queryByText('Thematic')).toBeNull();
@@ -127,7 +145,11 @@ describe('EndorsementQueue — Evidence Disclosure surface (ADR-0004/0009)', () 
 	describe('expand-evidence — structural proposal', () => {
 		it('discloses the heading "Based on existing path" and, on expand, the traversable node-edge-node chain', async () => {
 			render(EndorsementQueue, {
-				props: { proposals: [STRUCTURAL], labelFor, onApproveConnection: vi.fn() }
+				props: {
+					proposals: [STRUCTURAL],
+					labelFor,
+					onApproveConnection: vi.fn()
+				}
 			});
 			const toggle = screen.getByTestId('evidence-toggle-101');
 			expect(toggle.textContent).toContain('Based on existing path');
@@ -165,10 +187,16 @@ describe('EndorsementQueue — Evidence Disclosure surface (ADR-0004/0009)', () 
 	describe('approve → optimistic-merge into the Spatial View-Graph', () => {
 		it('fires onApproveConnection with the proposal, whose wiring optimistically merges the edge into the view-graph', async () => {
 			let graph = emptyGraph();
-			const onApproveConnection = vi.fn(async (proposal: ChatInferenceProposal) => {
-				const endorsed: ChatInferenceProposal = { ...proposal, status: 'endorsed', resolved_at: 1 };
-				graph = mergeEndorsedEdge(graph, endorsed);
-			});
+			const onApproveConnection = vi.fn(
+				async (proposal: ChatInferenceProposal) => {
+					const endorsed: ChatInferenceProposal = {
+						...proposal,
+						status: 'endorsed',
+						resolved_at: 1
+					};
+					graph = mergeEndorsedEdge(graph, endorsed);
+				}
+			);
 			render(EndorsementQueue, {
 				props: { proposals: [STRUCTURAL], labelFor, onApproveConnection }
 			});

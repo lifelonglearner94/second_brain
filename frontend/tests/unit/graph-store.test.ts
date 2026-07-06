@@ -61,10 +61,14 @@ function deltaApiThrowing(error: Error) {
 	};
 }
 
-function ingestResponse(overrides: Partial<IngestResponse> = {}): IngestResponse {
+function ingestResponse(
+	overrides: Partial<IngestResponse> = {}
+): IngestResponse {
 	return {
 		braindump: { id: '7', created_at: '1790' },
-		concepts: [{ id: 'c3', label: 'caffeine', created_at: '2026-07-04T00:00:00Z' }],
+		concepts: [
+			{ id: 'c3', label: 'caffeine', created_at: '2026-07-04T00:00:00Z' }
+		],
 		edges: [
 			{
 				id: 'e2',
@@ -80,7 +84,11 @@ function ingestResponse(overrides: Partial<IngestResponse> = {}): IngestResponse
 	};
 }
 
-function proposal(id: number, source: number, target: number): ChatInferenceProposal {
+function proposal(
+	id: number,
+	source: number,
+	target: number
+): ChatInferenceProposal {
 	return {
 		id,
 		mode: 'structural_inference',
@@ -170,7 +178,11 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 		it('fetches from the backend, stamps fetchedAt, caches in IDB, builds the view-graph, reports source=network', async () => {
 			const store = new GraphStore();
 			const api = graphApiReturning(SNAPSHOT);
-			const result = await store.loadFromNetworkOrCache(api, idb, () => FIXED_NOW);
+			const result = await store.loadFromNetworkOrCache(
+				api,
+				idb,
+				() => FIXED_NOW
+			);
 
 			expect(result.source).toBe('network');
 			expect(result.fetchedAt).toBe(FIXED_NOW);
@@ -178,7 +190,10 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 			expect(store.source).toBe('network');
 			expect(store.fetchedAt).toBe(FIXED_NOW);
 			expect(store.status).toBe('loaded');
-			expect(store.snapshot?.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c2']);
+			expect(store.snapshot?.concepts.map((c) => c.id).sort()).toEqual([
+				'c1',
+				'c2'
+			]);
 			expect(store.cursor).toBe(FIXED_CURSOR);
 			expect(store.data.nodes.map((n) => n.id).sort()).toEqual(['c1', 'c2']);
 			expect(store.data.links.map((l) => l.label)).toEqual(['affects']);
@@ -187,7 +202,10 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 		});
 
 		it('falls back to the cached snapshot (Frozen Graph) when the backend is unreachable', async () => {
-			await idb.saveTopologySnapshot({ ...SNAPSHOT, fetchedAt: '2026-06-01T00:00:00Z' });
+			await idb.saveTopologySnapshot({
+				...SNAPSHOT,
+				fetchedAt: '2026-06-01T00:00:00Z'
+			});
 			const store = new GraphStore();
 			const api = graphApiThrowing(new Error('backend unreachable'));
 
@@ -202,7 +220,9 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 		it('throws when the backend is unreachable AND no snapshot is cached (propagates the Frozen Graph miss)', async () => {
 			const store = new GraphStore();
 			const api = graphApiThrowing(new Error('down'));
-			await expect(store.loadFromNetworkOrCache(api, idb)).rejects.toThrow(/unavailable|cached/i);
+			await expect(store.loadFromNetworkOrCache(api, idb)).rejects.toThrow(
+				/unavailable|cached/i
+			);
 			expect(store.snapshot).toBeNull();
 		});
 
@@ -217,7 +237,9 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 		it('retries after a failed load (a prior miss leaves the store empty, so the next call fetches again)', async () => {
 			const store = new GraphStore();
 			const throwingApi = graphApiThrowing(new Error('down'));
-			await expect(store.loadFromNetworkOrCache(throwingApi, idb)).rejects.toThrow();
+			await expect(
+				store.loadFromNetworkOrCache(throwingApi, idb)
+			).rejects.toThrow();
 			const okApi = graphApiReturning(SNAPSHOT);
 			await store.loadFromNetworkOrCache(okApi, idb, () => FIXED_NOW);
 			expect(okApi.getGraph).toHaveBeenCalledOnce();
@@ -232,7 +254,9 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 			store.cursor = FIXED_CURSOR;
 			const delta: GraphDelta = {
 				cursor: FIXED_CURSOR + 500,
-				added_concepts: [{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }],
+				added_concepts: [
+					{ id: 'c3', label: 'caffeine', created_at: '2026-07-03T00:00:00Z' }
+				],
 				added_edges: [],
 				deleted_concept_ids: [],
 				deleted_edge_ids: [],
@@ -246,8 +270,16 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 			expect(outcome.applied).toBe(true);
 			expect(outcome.delta).toEqual(delta);
 			expect(store.cursor).toBe(FIXED_CURSOR + 500);
-			expect(store.snapshot?.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c2', 'c3']);
-			expect(store.data.nodes.map((n) => n.id).sort()).toEqual(['c1', 'c2', 'c3']);
+			expect(store.snapshot?.concepts.map((c) => c.id).sort()).toEqual([
+				'c1',
+				'c2',
+				'c3'
+			]);
+			expect(store.data.nodes.map((n) => n.id).sort()).toEqual([
+				'c1',
+				'c2',
+				'c3'
+			]);
 		});
 
 		it('is a no-op (applied=false) when the store has no snapshot loaded', async () => {
@@ -276,7 +308,10 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 
 			expect(outcome.applied).toBe(false);
 			expect(store.cursor).toBe(FIXED_CURSOR);
-			expect(store.snapshot?.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c2']);
+			expect(store.snapshot?.concepts.map((c) => c.id).sort()).toEqual([
+				'c1',
+				'c2'
+			]);
 		});
 
 		it('does not rebuild the view-graph when the delta carries no changes (empty sync)', async () => {
@@ -307,9 +342,20 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 			store.mergeIngest(ingestResponse());
 
 			expect(store.cursor).toBe(FIXED_CURSOR + 500);
-			expect(store.snapshot?.concepts.map((c) => c.id).sort()).toEqual(['c1', 'c2', 'c3']);
-			expect(store.snapshot?.edges.map((e) => e.id).sort()).toEqual(['e1', 'e2']);
-			expect(store.data.nodes.map((n) => n.id).sort()).toEqual(['c1', 'c2', 'c3']);
+			expect(store.snapshot?.concepts.map((c) => c.id).sort()).toEqual([
+				'c1',
+				'c2',
+				'c3'
+			]);
+			expect(store.snapshot?.edges.map((e) => e.id).sort()).toEqual([
+				'e1',
+				'e2'
+			]);
+			expect(store.data.nodes.map((n) => n.id).sort()).toEqual([
+				'c1',
+				'c2',
+				'c3'
+			]);
 		});
 
 		it('leaves the Louvain partitions untouched — new concepts get NO_PARTITION until the next sync', () => {
@@ -317,7 +363,9 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 			store.loadSnapshot(SNAPSHOT);
 			store.mergeIngest(ingestResponse());
 			expect(store.snapshot?.partitions).toEqual(SNAPSHOT.partitions);
-			expect(store.data.nodes.find((n) => n.id === 'c3')?.group).toBe(NO_PARTITION);
+			expect(store.data.nodes.find((n) => n.id === 'c3')?.group).toBe(
+				NO_PARTITION
+			);
 		});
 
 		it('is a no-op when the store has no snapshot loaded', () => {
@@ -330,7 +378,9 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 		it('does not mutate the prior snapshot reference (pure merge — the next Delta Sync overwrites the view)', () => {
 			const store = new GraphStore();
 			store.loadSnapshot(SNAPSHOT);
-			const before = JSON.parse(JSON.stringify(store.snapshot)) as GlobalTopologySnapshot;
+			const before = JSON.parse(
+				JSON.stringify(store.snapshot)
+			) as GlobalTopologySnapshot;
 			store.mergeIngest(ingestResponse());
 			expect(before.concepts).toHaveLength(2);
 			expect(before.edges).toHaveLength(1);
@@ -343,7 +393,9 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 			store.loadSnapshot(MERGE_SNAPSHOT);
 			store.mergeEndorsedEdge(proposal(101, 1, 2));
 			expect(store.data.links).toHaveLength(2);
-			const merged = store.data.links.find((l) => l.source === '1' && l.target === '2' && l.label === 'endangers');
+			const merged = store.data.links.find(
+				(l) => l.source === '1' && l.target === '2' && l.label === 'endangers'
+			);
 			expect(merged).toBeTruthy();
 			expect(merged?.asserted_by).toEqual([101]);
 			expect(merged?.color).toBe(EDGE_COLOR);
@@ -361,12 +413,19 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 			const store = new GraphStore();
 			store.loadSnapshot({
 				...MERGE_SNAPSHOT,
-				concepts: [...MERGE_SNAPSHOT.concepts, { id: '3', label: 'caffeine', created_at: 't' }]
+				concepts: [
+					...MERGE_SNAPSHOT.concepts,
+					{ id: '3', label: 'caffeine', created_at: 't' }
+				]
 			});
 			store.mergeEndorsedEdge(proposal(101, 1, 2));
 			store.mergeEndorsedEdge(proposal(102, 1, 3));
-			expect(store.data.links.filter((l) => l.asserted_by?.includes(101))).toHaveLength(1);
-			expect(store.data.links.filter((l) => l.asserted_by?.includes(102))).toHaveLength(1);
+			expect(
+				store.data.links.filter((l) => l.asserted_by?.includes(101))
+			).toHaveLength(1);
+			expect(
+				store.data.links.filter((l) => l.asserted_by?.includes(102))
+			).toHaveLength(1);
 		});
 	});
 
@@ -400,8 +459,12 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 				partitions: []
 			});
 			store.applyConceptMerge(CONCEPT_SUGGESTION);
-			expect(store.snapshot?.edges.find((e) => e.id === 'e1')?.source_concept_id).toBe('1');
-			expect(store.snapshot?.edges.find((e) => e.id === 'e1')?.target_concept_id).toBe('3');
+			expect(
+				store.snapshot?.edges.find((e) => e.id === 'e1')?.source_concept_id
+			).toBe('1');
+			expect(
+				store.snapshot?.edges.find((e) => e.id === 'e1')?.target_concept_id
+			).toBe('3');
 		});
 
 		it('preserves the fetchedAt stamp across the merge (the Frozen Graph label does not reset)', () => {
@@ -424,8 +487,13 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 			const store = new GraphStore();
 			store.loadSnapshot(SNAPSHOT);
 			store.applyTypeMerge(TYPE_PROPOSAL);
-			expect(store.snapshot?.edges.find((e) => e.id === 'e1')?.current_type).toBe('endangers');
-			expect(store.data.links.find((l) => l.source === 'c1' && l.target === 'c2')?.label).toBe('endangers');
+			expect(
+				store.snapshot?.edges.find((e) => e.id === 'e1')?.current_type
+			).toBe('endangers');
+			expect(
+				store.data.links.find((l) => l.source === 'c1' && l.target === 'c2')
+					?.label
+			).toBe('endangers');
 		});
 
 		it('leaves edges of other types untouched', () => {
@@ -445,7 +513,9 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 				]
 			});
 			store.applyTypeMerge(TYPE_PROPOSAL);
-			expect(store.snapshot?.edges.find((e) => e.id === 'e2')?.current_type).toBe('disrupts');
+			expect(
+				store.snapshot?.edges.find((e) => e.id === 'e2')?.current_type
+			).toBe('disrupts');
 		});
 
 		it('preserves the fetchedAt stamp across the merge', () => {

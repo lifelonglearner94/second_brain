@@ -107,9 +107,16 @@ describe('mergeEndorsedEdge — action-driven optimistic merge into the Spatial 
 
 	it('does not duplicate the edge when the same direct edge already exists in the view-graph', () => {
 		const graph = graphWith(1, 2, 3);
-		graph.links.push({ source: '1', target: '3', label: 'endangers', color: EDGE_COLOR });
+		graph.links.push({
+			source: '1',
+			target: '3',
+			label: 'endangers',
+			color: EDGE_COLOR
+		});
 		const merged = mergeEndorsedEdge(graph, STRUCTURAL);
-		expect(merged.links.filter((l) => l.source === '1' && l.target === '3')).toHaveLength(1);
+		expect(
+			merged.links.filter((l) => l.source === '1' && l.target === '3')
+		).toHaveLength(1);
 	});
 
 	it('does not mutate the input view-graph (the Spatial View-Graph is replaced, not patched in place)', () => {
@@ -121,11 +128,20 @@ describe('mergeEndorsedEdge — action-driven optimistic merge into the Spatial 
 
 	it('preserves every existing node and link when merging a new edge', () => {
 		const graph = graphWith(1, 2, 3);
-		graph.links.push({ source: '1', target: '2', label: 'endangers', color: EDGE_COLOR });
+		graph.links.push({
+			source: '1',
+			target: '2',
+			label: 'endangers',
+			color: EDGE_COLOR
+		});
 		const merged = mergeEndorsedEdge(graph, STRUCTURAL);
 		expect(merged.nodes).toHaveLength(3);
 		expect(merged.links).toHaveLength(2);
-		expect(merged.links.some((l) => l.source === '1' && l.target === '2')).toBe(true);
-		expect(merged.links.some((l) => l.source === '1' && l.target === '3')).toBe(true);
+		expect(merged.links.some((l) => l.source === '1' && l.target === '2')).toBe(
+			true
+		);
+		expect(merged.links.some((l) => l.source === '1' && l.target === '3')).toBe(
+			true
+		);
 	});
 });

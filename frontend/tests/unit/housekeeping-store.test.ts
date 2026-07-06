@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { HousekeepingStore, type HousekeepingApi, type HousekeepingItem } from '../../src/lib/state/housekeeping.svelte';
+import {
+	HousekeepingStore,
+	type HousekeepingApi,
+	type HousekeepingItem
+} from '../../src/lib/state/housekeeping.svelte';
 import { GraphStore } from '../../src/lib/state/graph.svelte';
 import type {
 	GlobalTopologySnapshot,
@@ -75,8 +79,14 @@ function apiStub(overrides: Partial<HousekeepingApi> = {}): HousekeepingApi {
 		getMergeSuggestions: vi.fn(async () => [CONCEPT_SUGGESTION]),
 		approveMergeSuggestion: vi.fn(async () => undefined),
 		getOntology: vi.fn(async () => ONTOLOGY),
-		getOntologyProposals: vi.fn(async () => ({ proposals: [TYPE_PROPOSAL] }) satisfies OntologyProposalsResponse),
-		approveOntologyProposal: vi.fn(async () => ({ ...TYPE_PROPOSAL, status: 'approved' })),
+		getOntologyProposals: vi.fn(
+			async () =>
+				({ proposals: [TYPE_PROPOSAL] }) satisfies OntologyProposalsResponse
+		),
+		approveOntologyProposal: vi.fn(async () => ({
+			...TYPE_PROPOSAL,
+			status: 'approved'
+		})),
 		...overrides
 	};
 }
@@ -122,7 +132,9 @@ describe('HousekeepingStore — the low-epistemic-weight HITL surface (ADR-0004)
 		it('shows the borderline pair and a similarity score for a concept suggestion (verb is Merge, set by the UI)', async () => {
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
-			const concept = store.items.find((i) => i.kind === 'concept') as HousekeepingItem;
+			const concept = store.items.find(
+				(i) => i.kind === 'concept'
+			) as HousekeepingItem;
 			expect(concept.leftLabel).toBe('Apples');
 			expect(concept.rightLabel).toBe('sleep');
 			expect(concept.similarity).toBe(0.92);
@@ -131,14 +143,18 @@ describe('HousekeepingStore — the low-epistemic-weight HITL surface (ADR-0004)
 		it('resolves the existing concept label from the shared GraphStore (the suggestion carries only an id)', async () => {
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
-			const concept = store.items.find((i) => i.kind === 'concept') as HousekeepingItem;
+			const concept = store.items.find(
+				(i) => i.kind === 'concept'
+			) as HousekeepingItem;
 			expect(concept.rightLabel).toBe('sleep');
 		});
 
 		it('shows the borderline pair and a similarity score for a type suggestion, resolving the near-match label from GET /ontology', async () => {
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
-			const type = store.items.find((i) => i.kind === 'type') as HousekeepingItem;
+			const type = store.items.find(
+				(i) => i.kind === 'type'
+			) as HousekeepingItem;
 			expect(type.leftLabel).toBe('Endangers');
 			expect(type.rightLabel).toBe('Affects');
 			expect(type.similarity).toBe(0.88);
@@ -165,7 +181,14 @@ describe('HousekeepingStore — the low-epistemic-weight HITL surface (ADR-0004)
 				near_match_slug: null,
 				near_match_similarity: null
 			};
-			api = apiStub({ getOntologyProposals: vi.fn(async () => ({ proposals: [TYPE_PROPOSAL, pureNew] }) satisfies OntologyProposalsResponse) });
+			api = apiStub({
+				getOntologyProposals: vi.fn(
+					async () =>
+						({
+							proposals: [TYPE_PROPOSAL, pureNew]
+						}) satisfies OntologyProposalsResponse
+				)
+			});
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
 			expect(store.items.filter((i) => i.kind === 'type')).toHaveLength(1);
@@ -173,7 +196,11 @@ describe('HousekeepingStore — the low-epistemic-weight HITL surface (ADR-0004)
 		});
 
 		it('flips to error and does not populate the queue when a fetch rejects', async () => {
-			api = apiStub({ getMergeSuggestions: vi.fn(async () => { throw new Error('GET /merge-suggestions failed: 401'); }) });
+			api = apiStub({
+				getMergeSuggestions: vi.fn(async () => {
+					throw new Error('GET /merge-suggestions failed: 401');
+				})
+			});
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
 			expect(store.status).toBe('error');
@@ -195,44 +222,62 @@ describe('HousekeepingStore — the low-epistemic-weight HITL surface (ADR-0004)
 			expect(api.approveMergeSuggestion).toHaveBeenCalledWith(11);
 			const after = store.snapshot!;
 			expect(after.concepts.map((c) => c.id).sort()).toEqual(['1', '3']);
-			expect(after.edges.find((e) => e.id === 'e2')?.target_concept_id).toBe('1');
+			expect(after.edges.find((e) => e.id === 'e2')?.target_concept_id).toBe(
+				'1'
+			);
 		});
 
 		it('removes the confirmed concept suggestion from the queue after merge', async () => {
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
 			await store.confirmMerge(11, 'concept');
-			expect(store.items.find((i) => i.id === 11 && i.kind === 'concept')).toBeUndefined();
+			expect(
+				store.items.find((i) => i.id === 11 && i.kind === 'concept')
+			).toBeUndefined();
 		});
 
 		it('POSTs the type-merge approve and optimistically retags edges of the merge_of type to the new slug', async () => {
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
-			expect(store.snapshot!.edges.find((e) => e.id === 'e1')?.current_type).toBe('affects');
+			expect(
+				store.snapshot!.edges.find((e) => e.id === 'e1')?.current_type
+			).toBe('affects');
 
 			await store.confirmMerge(33, 'type');
 
 			expect(api.approveOntologyProposal).toHaveBeenCalledWith(33);
-			expect(store.snapshot!.edges.find((e) => e.id === 'e1')?.current_type).toBe('endangers');
-			expect(store.snapshot!.edges.find((e) => e.id === 'e2')?.current_type).toBe('disrupts');
+			expect(
+				store.snapshot!.edges.find((e) => e.id === 'e1')?.current_type
+			).toBe('endangers');
+			expect(
+				store.snapshot!.edges.find((e) => e.id === 'e2')?.current_type
+			).toBe('disrupts');
 		});
 
 		it('adds the approved type to the local ontology context (read from GET /ontology)', async () => {
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
 			await store.confirmMerge(33, 'type');
-			expect(store.ontology?.edge_types.some((t) => t.slug === 'endangers')).toBe(true);
+			expect(
+				store.ontology?.edge_types.some((t) => t.slug === 'endangers')
+			).toBe(true);
 		});
 
 		it('removes the confirmed type suggestion from the queue after merge', async () => {
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
 			await store.confirmMerge(33, 'type');
-			expect(store.items.find((i) => i.id === 33 && i.kind === 'type')).toBeUndefined();
+			expect(
+				store.items.find((i) => i.id === 33 && i.kind === 'type')
+			).toBeUndefined();
 		});
 
 		it('does not optimistically merge when the POST fails (no local mutation on failure)', async () => {
-			api = apiStub({ approveMergeSuggestion: vi.fn(async () => { throw new Error('POST /merge-suggestions/approve failed: 500'); }) });
+			api = apiStub({
+				approveMergeSuggestion: vi.fn(async () => {
+					throw new Error('POST /merge-suggestions/approve failed: 500');
+				})
+			});
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
 			await expect(store.confirmMerge(11, 'concept')).rejects.toThrow(/500/);

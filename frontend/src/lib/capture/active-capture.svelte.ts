@@ -4,16 +4,10 @@ import type { PendingCapturesStore } from '$lib/state/pending-captures.svelte';
 import type { PendingCapture } from '$lib/state/idb';
 
 export type ActiveCaptureStatus =
-	| 'idle'
-	| 'listening'
-	| 'submitting'
-	| 'submitted'
-	| 'queued'
-	| 'error';
+	'idle' | 'listening' | 'submitting' | 'submitted' | 'queued' | 'error';
 
 export type CaptureSubmission =
-	| { kind: 'submitted'; res: IngestResponse }
-	| { kind: 'queued' };
+	{ kind: 'submitted'; res: IngestResponse } | { kind: 'queued' };
 
 export class ActiveCaptureStore {
 	text = $state<string>('');
@@ -69,7 +63,10 @@ export class ActiveCaptureStore {
 				return fallback.label;
 			}
 			this.status = 'error';
-			this.error = primaryError instanceof Error ? primaryError.message : String(primaryError);
+			this.error =
+				primaryError instanceof Error
+					? primaryError.message
+					: String(primaryError);
 			throw primaryError;
 		}
 	}

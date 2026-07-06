@@ -51,10 +51,17 @@ describe('apiClient.getMergeSuggestions — backend #7 GET /merge-suggestions (c
 
 	it('hits the /merge-suggestions path under the configured base URL with credentials', async () => {
 		fetchMock.mockResolvedValue(okResponse(SUGGESTIONS));
-		const api = createApiClient({ baseUrl: 'https://brain.example.test', fetch: fetchMock });
+		const api = createApiClient({
+			baseUrl: 'https://brain.example.test',
+			fetch: fetchMock
+		});
 		await api.getMergeSuggestions();
-		expect(fetchMock.mock.calls[0][0]).toBe('https://brain.example.test/merge-suggestions');
-		expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' });
+		expect(fetchMock.mock.calls[0][0]).toBe(
+			'https://brain.example.test/merge-suggestions'
+		);
+		expect(fetchMock.mock.calls[0][1]).toMatchObject({
+			credentials: 'include'
+		});
 	});
 
 	it('throws on a non-2xx so the Housekeeping Queue can surface a load error', async () => {
@@ -135,10 +142,17 @@ describe('apiClient.getOntology — backend #3 GET /ontology (type context, publ
 
 	it('hits the /ontology path under the configured base URL with credentials', async () => {
 		fetchMock.mockResolvedValue(okResponse(ONTOLOGY));
-		const api = createApiClient({ baseUrl: 'https://brain.example.test', fetch: fetchMock });
+		const api = createApiClient({
+			baseUrl: 'https://brain.example.test',
+			fetch: fetchMock
+		});
 		await api.getOntology();
-		expect(fetchMock.mock.calls[0][0]).toBe('https://brain.example.test/ontology');
-		expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' });
+		expect(fetchMock.mock.calls[0][0]).toBe(
+			'https://brain.example.test/ontology'
+		);
+		expect(fetchMock.mock.calls[0][1]).toMatchObject({
+			credentials: 'include'
+		});
 	});
 });
 
@@ -173,10 +187,17 @@ describe('apiClient.getOntologyProposals — backend #3 GET /ontology/proposals 
 
 	it('hits the /ontology/proposals path under the configured base URL with credentials', async () => {
 		fetchMock.mockResolvedValue(okResponse(RESPONSE));
-		const api = createApiClient({ baseUrl: 'https://brain.example.test', fetch: fetchMock });
+		const api = createApiClient({
+			baseUrl: 'https://brain.example.test',
+			fetch: fetchMock
+		});
 		await api.getOntologyProposals();
-		expect(fetchMock.mock.calls[0][0]).toBe('https://brain.example.test/ontology/proposals');
-		expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' });
+		expect(fetchMock.mock.calls[0][0]).toBe(
+			'https://brain.example.test/ontology/proposals'
+		);
+		expect(fetchMock.mock.calls[0][1]).toMatchObject({
+			credentials: 'include'
+		});
 	});
 });
 
@@ -201,9 +222,13 @@ describe('apiClient.approveOntologyProposal — backend #3 POST /ontology/propos
 		fetchMock.mockResolvedValue(okResponse(approved));
 		const api = createApiClient({ fetch: fetchMock });
 		const result = await api.approveOntologyProposal(3);
-		expect(fetchMock.mock.calls[0][0]).toBe('/api/ontology/proposals/3/approve');
+		expect(fetchMock.mock.calls[0][0]).toBe(
+			'/api/ontology/proposals/3/approve'
+		);
 		expect(fetchMock.mock.calls[0][1]?.method).toBe('POST');
-		expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' });
+		expect(fetchMock.mock.calls[0][1]).toMatchObject({
+			credentials: 'include'
+		});
 		expect(result.status).toBe('approved');
 		expect(result.slug).toBe('endangers');
 	});

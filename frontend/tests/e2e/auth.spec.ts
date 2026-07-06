@@ -8,7 +8,11 @@ const GRAPH_BODY = {
 	partitions: [{ concept_id: 'c1', partition_id: 0 }]
 };
 
-function mockMe(page: import('@playwright/test').Page, status: number, body: unknown) {
+function mockMe(
+	page: import('@playwright/test').Page,
+	status: number,
+	body: unknown
+) {
 	return page.route('**/api/me', (route) =>
 		route.fulfill({
 			status,
@@ -18,7 +22,11 @@ function mockMe(page: import('@playwright/test').Page, status: number, body: unk
 	);
 }
 
-function mockGraph(page: import('@playwright/test').Page, status: number, body: unknown) {
+function mockGraph(
+	page: import('@playwright/test').Page,
+	status: number,
+	body: unknown
+) {
 	return page.route('**/api/graph', (route) =>
 		route.fulfill({
 			status,
@@ -47,20 +55,28 @@ test('authenticated: /app renders the protected surface when /me returns the acc
 
 	await page.goto('/app');
 
-	await expect(page.getByTestId('capture-section')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('capture-section')).toBeVisible({
+		timeout: 10_000
+	});
 	await expect(page.getByTestId('user-id')).toContainText(USER_ID);
 });
 
-test('reload stays authenticated (cookie-based session, not localStorage)', async ({ page }) => {
+test('reload stays authenticated (cookie-based session, not localStorage)', async ({
+	page
+}) => {
 	await mockMe(page, 200, { user_id: USER_ID });
 	await mockGraph(page, 200, GRAPH_BODY);
 
 	await page.goto('/app');
-	await expect(page.getByTestId('capture-section')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('capture-section')).toBeVisible({
+		timeout: 10_000
+	});
 
 	await page.reload();
 
-	await expect(page.getByTestId('capture-section')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('capture-section')).toBeVisible({
+		timeout: 10_000
+	});
 });
 
 test('logout invalidates the session and redirects to /login; a later /app visit is rejected', async ({
@@ -71,7 +87,9 @@ test('logout invalidates the session and redirects to /login; a later /app visit
 		route.fulfill({
 			status: meOk ? 200 : 401,
 			contentType: 'application/json',
-			body: JSON.stringify(meOk ? { user_id: USER_ID } : { error: 'unauthorized' })
+			body: JSON.stringify(
+				meOk ? { user_id: USER_ID } : { error: 'unauthorized' }
+			)
 		})
 	);
 	await mockGraph(page, 200, GRAPH_BODY);
@@ -84,7 +102,9 @@ test('logout invalidates the session and redirects to /login; a later /app visit
 	);
 
 	await page.goto('/app');
-	await expect(page.getByTestId('capture-section')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('capture-section')).toBeVisible({
+		timeout: 10_000
+	});
 
 	await page.getByTestId('logout-button').click();
 

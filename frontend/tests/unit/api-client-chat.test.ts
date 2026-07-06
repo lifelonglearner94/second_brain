@@ -14,7 +14,8 @@ function okResponse(body: unknown, status = 200): Response {
 }
 
 const GROUNDED: ChatResponse = {
-	answer: 'Q3 launch is at risk because Maria is leaving [bd:42] [edge:Maria —endangers→ Q3 launch].',
+	answer:
+		'Q3 launch is at risk because Maria is leaving [bd:42] [edge:Maria —endangers→ Q3 launch].',
 	citations: [
 		{
 			id: 42,
@@ -69,7 +70,9 @@ describe('apiClient — chat surface against backend #10 (POST /chat, ADR-0005)'
 		expect(init?.method).toBe('POST');
 		expect(init?.credentials).toBe('include');
 		expect(init?.headers).toMatchObject({ 'content-type': 'application/json' });
-		expect(JSON.parse(init?.body as string)).toEqual({ query: 'is Q3 at risk?' });
+		expect(JSON.parse(init?.body as string)).toEqual({
+			query: 'is Q3 at risk?'
+		});
 	});
 
 	it('parses the grounded answer, citations, traversed paths, and retrieval mode', async () => {

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SessionStore, type SessionApi } from '../../src/lib/state/session.svelte';
+import {
+	SessionStore,
+	type SessionApi
+} from '../../src/lib/state/session.svelte';
 import type { Me } from '../../src/lib/api/client';
 
 const ME: Me = { user_id: '00000000-0000-0000-0000-000000000001' };

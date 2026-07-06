@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { MultiDirectedGraph } from 'graphology';
-import { buildSpatialViewGraph, projectToGraphData } from '../../src/lib/graph/build';
+import {
+	buildSpatialViewGraph,
+	projectToGraphData
+} from '../../src/lib/graph/build';
 import { NO_PARTITION, partitionColor } from '../../src/lib/graph/colors';
 import type { GlobalTopologySnapshot } from '../../src/lib/api/client';
 
@@ -54,7 +57,9 @@ describe('buildSpatialViewGraph — the canonical graphology Spatial View-Graph'
 		const graph = buildSpatialViewGraph(SNAPSHOT);
 		expect(graph.getNodeAttribute('c1', 'color')).toBe(partitionColor(0));
 		expect(graph.getNodeAttribute('c3', 'color')).toBe(partitionColor(1));
-		expect(graph.getNodeAttribute('c4', 'color')).toBe(partitionColor(NO_PARTITION));
+		expect(graph.getNodeAttribute('c4', 'color')).toBe(
+			partitionColor(NO_PARTITION)
+		);
 	});
 
 	it('runs ForceAtlas2 locally so every node has finite x/y', () => {
@@ -67,8 +72,12 @@ describe('buildSpatialViewGraph — the canonical graphology Spatial View-Graph'
 
 	it('derives z from the partition so clusters separate (same partition ⇒ same z)', () => {
 		const graph = buildSpatialViewGraph(SNAPSHOT);
-		expect(graph.getNodeAttribute('c1', 'z')).toBe(graph.getNodeAttribute('c2', 'z'));
-		expect(graph.getNodeAttribute('c1', 'z')).not.toBe(graph.getNodeAttribute('c3', 'z'));
+		expect(graph.getNodeAttribute('c1', 'z')).toBe(
+			graph.getNodeAttribute('c2', 'z')
+		);
+		expect(graph.getNodeAttribute('c1', 'z')).not.toBe(
+			graph.getNodeAttribute('c3', 'z')
+		);
 	});
 
 	it('preserves edge direction and current_type as the edge label', () => {
@@ -79,7 +88,11 @@ describe('buildSpatialViewGraph — the canonical graphology Spatial View-Graph'
 	});
 
 	it('handles an empty snapshot as an empty graph', () => {
-		const graph = buildSpatialViewGraph({ concepts: [], edges: [], partitions: [] });
+		const graph = buildSpatialViewGraph({
+			concepts: [],
+			edges: [],
+			partitions: []
+		});
 		expect(graph.order).toBe(0);
 		expect(graph.size).toBe(0);
 	});
