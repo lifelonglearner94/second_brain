@@ -10,7 +10,7 @@
 # Build the SvelteKit adapter-static output (frontend/build/) at image-build
 # time. The PWA Bundle is baked in, not mounted from a shared volume, so the
 # Edge stays stateless and disposable (ADR-0001).
-FROM node:22-trixie-slim AS bundle
+FROM node:24-trixie-slim AS bundle
 WORKDIR /app/frontend
 # Cache npm deps across source changes.
 COPY frontend/package.json frontend/package-lock.json ./
