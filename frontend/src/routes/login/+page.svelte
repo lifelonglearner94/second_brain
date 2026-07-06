@@ -18,24 +18,41 @@
 
 	const supported = browserSupportsWebAuthn();
 
-	// Issue #74: an admin shares an invitation token out-of-band as an
-	// `?invite=<token>` query param. When present, the "Register" affordance
-	// becomes "Register with invitation" and threads the token through the
-	// begin/finish pair. Absent, it still works for the bootstrap exception
-	// (zero users → the first registration creates the admin with no invite).
-	// Read on the client only: the login page is prerendered, and
-	// `page.url.searchParams` is not available during prerender.
-	let inviteToken = $state<string | null>(null);
+	// Issue #74 introduced the `?invite=<token>` deep link; issue #79 adds the
+	// out-of-band path — an invitee who receives a bare token needs a place to
+	// paste it. Both entry paths converge on a single source of truth: the
+	// text input inside the disclosure below. When the query param is present,
+	// onMount pre-fills the input and opens the disclosure so the invitee can
+	// see (and edit) the token they arrived with. Read on the client only:
+	// the login page is prerendered, and `page.url.searchParams` is not
+	// available during prerender.
+	let inviteInput = $state('');
+	let disclosureOpen = $state(false);
+
 	onMount(() => {
-		inviteToken = page.url.searchParams.get('invite');
+		const queryInvite = page.url.searchParams.get('invite');
+		if (queryInvite) {
+			inviteInput = queryInvite;
+			disclosureOpen = true;
+		}
 	});
+
+	// The single value the register flow consumes and the label reads. Null
+	// when empty so registerBegin posts `{ invite: null }` (the bootstrap
+	// exception path — the first registration creates the admin with no token).
+	let effectiveInviteToken = $derived(
+		inviteInput.trim() ? inviteInput.trim() : null
+	);
 
 	async function onRegister() {
 		busy = 'register';
 		error = null;
 		status = null;
 		try {
-			const { user_id } = await registerPasskey(apiClient, inviteToken);
+			const { user_id } = await registerPasskey(
+				apiClient,
+				effectiveInviteToken
+			);
 			// Registration mints a session (the backend sets the cookie), so the
 			// user is authenticated immediately — update session state and go to
 			// the app rather than asking them to sign in again.
@@ -134,6 +151,34 @@
 				{busy === 'login' ? 'Signing in…' : 'Sign in with passkey'}
 			</button>
 
+		<details class="invite-disclosure" bind:open={disclosureOpen}>
+			<summary data-testid="invite-disclosure-toggle">
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					aria-hidden="true"
+				>
+					<path d="M9 18l6-6-6-6" />
+				</svg>
+				Have an invitation token?
+			</summary>
+			<div class="invite-input">
+				<label class="sr-only" for="invite-token">Invitation token</label>
+				<input
+					id="invite-token"
+					class="input"
+					type="text"
+					data-testid="invite-token-input"
+					bind:value={inviteInput}
+					placeholder="Paste the token your admin shared"
+					autocomplete="off"
+					spellcheck={false}
+				/>
+			</div>
+		</details>
+
 		<button
 			type="button"
 			class="btn auth-action"
@@ -152,7 +197,7 @@
 			</svg>
 			{busy === 'register'
 				? 'Registering…'
-				: inviteToken
+				: effectiveInviteToken
 					? 'Register with invitation'
 					: 'Register a passkey'}
 		</button>
@@ -268,6 +313,40 @@
 	.auth-action svg {
 		inline-size: 1.15rem;
 		block-size: 1.15rem;
+	}
+	.invite-disclosure {
+		border: 1px solid var(--border-hairline);
+		border-radius: var(--radius-md);
+		background: var(--bg-sunken);
+		overflow: hidden;
+	}
+	.invite-disclosure > summary {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: 0.55rem 0.8rem;
+		cursor: pointer;
+		font-size: var(--fs-14);
+		color: var(--fg-muted);
+		list-style: none;
+		user-select: none;
+	}
+	.invite-disclosure > summary::-webkit-details-marker {
+		display: none;
+	}
+	.invite-disclosure > summary svg {
+		inline-size: 1rem;
+		block-size: 1rem;
+		transition: transform var(--dur-1) var(--ease);
+	}
+	.invite-disclosure[open] > summary svg {
+		transform: rotate(90deg);
+	}
+	.invite-disclosure > summary:hover {
+		color: var(--fg);
+	}
+	.invite-input {
+		padding: 0 0.8rem 0.7rem;
 	}
 	.status,
 	.error {

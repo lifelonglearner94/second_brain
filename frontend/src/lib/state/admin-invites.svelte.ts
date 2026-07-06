@@ -8,6 +8,10 @@ export type AdminInviteApi = {
 	listInvites(): Promise<InvitationsResponse>;
 };
 
+function browserOrigin(): string {
+	return typeof window !== 'undefined' ? window.location.origin : '';
+}
+
 /**
  * Admin tab state for the invitation minter (backend #73). The store mints a
  * single-use invite and lists all outstanding/consumed invitations. The most
@@ -26,6 +30,10 @@ export class AdminInviteStore {
 	mintError = $state<string | null>(null);
 	lastMinted = $state<Invitation | null>(null);
 	copied = $state(false);
+	// Issue #78: independent feedback for the "Copy invite link" affordance so
+	// copy-token and copy-link can each show their own "Copied" state without
+	// flipping the other's label.
+	linkCopied = $state(false);
 
 	constructor(private api: AdminInviteApi) {}
 
@@ -46,6 +54,7 @@ export class AdminInviteStore {
 		this.minting = true;
 		this.mintError = null;
 		this.copied = false;
+		this.linkCopied = false;
 		try {
 			const invite = await this.api.mintInvite();
 			this.lastMinted = invite;
@@ -62,6 +71,7 @@ export class AdminInviteStore {
 	clearLastMinted(): void {
 		this.lastMinted = null;
 		this.copied = false;
+		this.linkCopied = false;
 	}
 
 	markCopied(): void {
@@ -70,6 +80,28 @@ export class AdminInviteStore {
 
 	clearCopied(): void {
 		this.copied = false;
+	}
+
+	markLinkCopied(): void {
+		this.linkCopied = true;
+	}
+
+	clearLinkCopied(): void {
+		this.linkCopied = false;
+	}
+
+	/**
+	 * Issue #78: build the full registration deep link for an invitation token
+	 * — `<origin>/login?invite=<token>` — so an admin can share a ready-to-
+	 * click URL out-of-band. The PWA is static, so the deployed origin is read
+	 * client-side from `window.location.origin` (correct in dev, preview, and
+	 * production). The token is `encodeURIComponent`-encoded so the deep link
+	 * stays well-formed even if the backend token charset ever includes
+	 * reserved query characters; the login page decodes it back via
+	 * `searchParams.get('invite')`.
+	 */
+	inviteLink(token: string): string {
+		return `${browserOrigin()}/login?invite=${encodeURIComponent(token)}`;
 	}
 
 	pendingCount = $derived(

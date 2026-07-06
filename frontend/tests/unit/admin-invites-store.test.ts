@@ -149,6 +149,65 @@ describe('AdminInviteStore — admin invite mint+list over backend #73', () => {
 		expect(store.copied).toBe(false);
 	});
 
+	describe('issue #78 — copy-invite-link affordance', () => {
+		it('inviteLink(token) builds <origin>/login?invite=<token> from the live browser origin', () => {
+			const store = new AdminInviteStore(apiStub({}));
+			expect(store.inviteLink('tok-abc')).toBe(
+				`${window.location.origin}/login?invite=tok-abc`
+			);
+		});
+
+		it('inviteLink(token) encodeURIComponent-encodes the token so reserved query characters stay well-formed', () => {
+			const store = new AdminInviteStore(apiStub({}));
+			// base64url tokens (`-`/`_`) are URL-safe and pass through unchanged;
+			// a token containing `&`/`=`/`+` (if the charset ever changed) would
+			// otherwise corrupt the deep link.
+			expect(store.inviteLink('a&b=c+')).toBe(
+				`${window.location.origin}/login?invite=${encodeURIComponent('a&b=c+')}`
+			);
+		});
+
+		it('markLinkCopied() toggles linkCopied independently of copied (clicking one does not flip the other)', async () => {
+			const mintInvite = vi
+				.fn<AdminInviteApi['mintInvite']>()
+				.mockResolvedValue(PENDING);
+			const store = new AdminInviteStore(apiStub({ mintInvite }));
+			await store.mint();
+			expect(store.copied).toBe(false);
+			expect(store.linkCopied).toBe(false);
+
+			store.markCopied();
+			expect(store.copied).toBe(true);
+			expect(store.linkCopied).toBe(false);
+
+			store.markLinkCopied();
+			expect(store.linkCopied).toBe(true);
+			expect(store.copied).toBe(true);
+
+			store.clearLinkCopied();
+			expect(store.linkCopied).toBe(false);
+			expect(store.copied).toBe(true);
+		});
+
+		it('mint() and clearLastMinted() reset linkCopied alongside copied', async () => {
+			const mintInvite = vi
+				.fn<AdminInviteApi['mintInvite']>()
+				.mockResolvedValue(PENDING);
+			const store = new AdminInviteStore(apiStub({ mintInvite }));
+			await store.mint();
+			store.markCopied();
+			store.markLinkCopied();
+
+			await store.mint();
+			expect(store.copied).toBe(false);
+			expect(store.linkCopied).toBe(false);
+
+			store.markLinkCopied();
+			store.clearLastMinted();
+			expect(store.linkCopied).toBe(false);
+		});
+	});
+
 	it('pendingCount is the number of pending invitations only', async () => {
 		const listInvites = vi
 			.fn<AdminInviteApi['listInvites']>()

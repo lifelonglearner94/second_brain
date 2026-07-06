@@ -11,14 +11,49 @@
 	}
 
 	async function onCopy(token: string) {
+		await copyToClipboard(token, {
+			onOk: () => adminInvites.markCopied(),
+			onFail: () => adminInvites.clearCopied()
+		});
+	}
+
+	// Issue #78: shared clipboard-write shape for the bare-token and invite-link
+	// copy actions. On success flips a copied flag; on failure (clipboard
+	// unavailable in an insecure context) clears it so the admin can copy
+	// manually from the selectable token text.
+	async function copyToClipboard(
+		text: string,
+		handlers: { onOk: () => void; onFail: () => void }
+	): Promise<void> {
 		try {
-			await navigator.clipboard.writeText(token);
-			adminInvites.markCopied();
+			await navigator.clipboard.writeText(text);
+			handlers.onOk();
 		} catch {
-			// Clipboard may be unavailable (insecure context) — leave the token
-			// selectable so the admin can copy manually.
-			adminInvites.clearCopied();
+			handlers.onFail();
 		}
+	}
+
+	// Issue #78: copy the full registration deep link (<origin>/login?invite=<token>)
+	// so the admin can share a ready-to-click URL rather than just the bare token.
+	// Independent copied-feedback from the bare-token copy action.
+	async function onCopyLink(token: string) {
+		await copyToClipboard(adminInvites.inviteLink(token), {
+			onOk: () => adminInvites.markLinkCopied(),
+			onFail: () => adminInvites.clearLinkCopied()
+		});
+	}
+
+	// Per-row copy-link for the invitations list. Mirrors onCopyLink but flips
+	// the row-local copied state so the "Copied" label shows on the row the
+	// admin actually clicked, not on every pending row.
+	async function onCopyRowLink(invite: {
+		id: number;
+		token: string;
+	}): Promise<void> {
+		await copyToClipboard(adminInvites.inviteLink(invite.token), {
+			onOk: () => (copiedLinkRowId = invite.id),
+			onFail: () => (copiedLinkRowId = null)
+		});
 	}
 
 	function onDismissMinted() {
@@ -40,6 +75,12 @@
 	function shortToken(token: string): string {
 		return token.length > 12 ? `${token.slice(0, 8)}…${token.slice(-4)}` : token;
 	}
+
+	// Issue #78: per-row "Copied" feedback for the copy-link action on pending
+	// rows. The store's `linkCopied` serves the just-minted card (single
+	// surface); the list has many rows, so we track which row's link was most
+	// recently copied locally. Cleared when another row is copied.
+	let copiedLinkRowId = $state<number | null>(null);
 </script>
 
 <main class="page invites-page">
@@ -110,6 +151,17 @@
 						onclick={() => onCopy(adminInvites.lastMinted!.token)}
 					>
 						{adminInvites.copied ? 'Copied' : 'Copy token'}
+					</button>
+					<button
+						type="button"
+						class="btn btn-secondary"
+						data-testid="admin-invites-copy-link"
+						data-invite-link={adminInvites.inviteLink(
+							adminInvites.lastMinted!.token
+						)}
+						onclick={() => onCopyLink(adminInvites.lastMinted!.token)}
+					>
+						{adminInvites.linkCopied ? 'Copied' : 'Copy invite link'}
 					</button>
 					<button
 						type="button"
@@ -196,7 +248,22 @@
 								{/if}
 							{/if}
 						</div>
-					</li>
+					{#if invite.status === 'pending'}
+						<div class="invite-actions">
+							<button
+								type="button"
+								class="btn btn-secondary btn-sm"
+								data-testid="admin-invite-copy-link"
+								data-invite-link={adminInvites.inviteLink(invite.token)}
+								onclick={() => onCopyRowLink(invite)}
+							>
+								{copiedLinkRowId === invite.id
+									? 'Copied'
+									: 'Copy invite link'}
+							</button>
+						</div>
+					{/if}
+				</li>
 				{/each}
 			</ol>
 		{/if}
@@ -298,6 +365,17 @@
 		display: flex;
 		gap: var(--space-2);
 		flex-wrap: wrap;
+	}
+	.invite-actions {
+		display: flex;
+		gap: var(--space-2);
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
+	.btn-sm {
+		min-block-size: 36px;
+		font-size: var(--fs-13);
+		padding: 0 var(--space-3);
 	}
 
 	.list-head {

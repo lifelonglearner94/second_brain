@@ -268,6 +268,29 @@ function ok(res: Response): boolean {
 	return res.status >= 200 && res.status < 300;
 }
 
+// Issue #79: the backend serializes errors as `{ "error": "<message>" }`
+// (backend src/error.rs). Surface that detail in the thrown Error so the UI
+// can show *why* a request failed (e.g. "an invitation token is required to
+// register") rather than just the status code. Non-JSON or empty bodies fall
+// back to the status-only message, keeping the previous behaviour for
+// opaque proxy/gateway responses.
+async function readErrorDetail(res: Response): Promise<string> {
+	try {
+		const text = await res.text();
+		if (!text) return '';
+		const parsed = JSON.parse(text) as { error?: unknown };
+		return typeof parsed?.error === 'string' ? parsed.error : '';
+	} catch {
+		return '';
+	}
+}
+
+function failedError(errorLabel: string, res: Response, detail: string): Error {
+	return new Error(
+		`${errorLabel} failed: ${res.status}${detail ? ` — ${detail}` : ''}`
+	);
+}
+
 export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 	const baseUrl = opts.baseUrl ?? DEFAULT_BASE_URL;
 	const doFetch = opts.fetch ?? globalThis.fetch;
@@ -278,7 +301,7 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 			headers: { accept: 'application/json' }
 		});
 		if (!ok(res)) {
-			throw new Error(`${errorLabel} failed: ${res.status}`);
+			throw failedError(errorLabel, res, await readErrorDetail(res));
 		}
 		return (await res.json()) as T;
 	}
@@ -298,7 +321,7 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 			body: JSON.stringify(body)
 		});
 		if (!ok(res)) {
-			throw new Error(`${errorLabel} failed: ${res.status}`);
+			throw failedError(errorLabel, res, await readErrorDetail(res));
 		}
 		return (await res.json()) as T;
 	}
@@ -318,7 +341,7 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 			body: JSON.stringify(body)
 		});
 		if (!ok(res)) {
-			throw new Error(`${errorLabel} failed: ${res.status}`);
+			throw failedError(errorLabel, res, await readErrorDetail(res));
 		}
 		return (await res.json()) as T;
 	}
@@ -331,7 +354,7 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 			body: null
 		});
 		if (!ok(res)) {
-			throw new Error(`${errorLabel} failed: ${res.status}`);
+			throw failedError(errorLabel, res, await readErrorDetail(res));
 		}
 	}
 

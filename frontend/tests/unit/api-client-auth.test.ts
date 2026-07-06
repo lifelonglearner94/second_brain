@@ -195,4 +195,27 @@ describe('apiClient — passkey auth surface against backend #2', () => {
 		const api = createApiClient({ fetch: fetchMock });
 		await expect(api.getMe()).rejects.toThrow(/401/);
 	});
+
+	it('issue #79: surfaces the backend `error` field on a 400 so the login page can show *why* register was refused', async () => {
+		fetchMock.mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					error: 'bad request: an invitation token is required to register'
+				}),
+				{ status: 400, headers: { 'content-type': 'application/json' } }
+			)
+		);
+		const api = createApiClient({ fetch: fetchMock });
+		await expect(api.registerBegin(null)).rejects.toThrow(
+			/an invitation token is required to register/
+		);
+	});
+
+	it('issue #79: a non-JSON error body falls back to the status-only message (opaque proxy/gateway)', async () => {
+		fetchMock.mockResolvedValue(new Response('unauthorized', { status: 401 }));
+		const api = createApiClient({ fetch: fetchMock });
+		await expect(api.registerBegin(null)).rejects.toThrow(
+			'POST /auth/register/begin failed: 401'
+		);
+	});
 });
