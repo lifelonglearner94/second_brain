@@ -168,6 +168,19 @@ Images build **on GHA runners** (a Rust release build spikes >2 GB RAM and would
 - **Health Push** ([infra ADR-0005][in-0005]) — a zero-RAM host-cron (every 5 min) that pushes to an ntfy.sh webhook when the Brain Replica stops replicating (metrics endpoint unreachable, or rising sync errors) or the Brain File volume nears capacity. The push model exists because silent replication drift is the one failure a pull-based admin tab cannot catch.
 - **`infrastructure/DISASTER_RECOVERY.md`** — the human runbook for catastrophic VPS loss: `bootstrap.sh` → place `.env` → `litestream restore` from R2 into a fresh `sqlite_data` volume → `pull && up -d`. An untested restore is a hope, not a strategy — the procedure must be re-exercised on a throwaway VPS periodically.
 
+### Real-world resource footprint
+
+Measured on the live VPS (2 vCPU, 3.8 GiB RAM) with a 1-user browsing mix hitting the real read endpoints (`/graph`, `/thematic`, `/ontology`, `/merge-suggestions`) over ~3 min, sampled via `docker stats` @ 1s. No files changed, no WebAuthn scripted — a live `session_id` was borrowed read-only from the `sessions` table.
+
+| Service | Idle Mem (cgroup) | Idle CPU | Under load | Per-request |
+|---|---|---|---|---|
+| **Backend** (Rust) | ~3.4 MiB | ~0% | +0.3 MiB, peak 0.13% | 0.6–1.3 ms |
+| **Edge** (Caddy) | ~16.8 MiB | ~0% | unchanged (bypassed in test) | — |
+| **Litestream** | ~31.3 MiB | ~0.08% | +0.3 MiB, peak 1.4% | — |
+| **Host** | 650 MiB used, 3.27 GiB available | — | delta within noise | — |
+
+**Headline:** at current scale (1 braindump, 5 concepts, 4 edges) the three services cost **~51 MiB of container RAM and ~0% CPU** — i.e. essentially their idle footprint. The expensive work is the **Gemini LLM calls** (`/braindumps` extraction, `/retrieve`, `/chat`), and those run on Google's servers — they cost latency + API spend + egress, *not* local RAM/CPU. As the brain grows, `/graph` (full gzipped snapshot) and `/thematic` (Louvain over `petgraph`) become the local cost centers. The `docker stats` (cgroup) vs `VmRSS` gap is real: most of the Rust binary's RSS is shared, evictable code pages; its unique heap is ~3–4 MiB. **Theoretical parallel capacity:** the 2 vCPU / 3.8 GiB box can sustain ~2000 local read requests per second (CPU-bound at ~1 ms each, with ~3 GiB free RAM allowing far more idle connections) — enough for thousands of concurrently-browsing users on reads — but the single-user Brain File architecture and the offloaded Gemini rate limits, not the VPS, are the real ceiling, so the box is nowhere near saturated.
+
 ---
 
 ## Repository layout
