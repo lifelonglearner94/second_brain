@@ -16,7 +16,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -37,8 +37,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -61,7 +61,7 @@ jobs:
     name: compose (topology validation)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # infrastructure/.env is gitignored (runtime secrets, ADR-0004) and is
       # never present in CI. Stub an empty file so `docker compose config`
       # resolves the env_file path without leaking or needing secrets.
@@ -79,7 +79,7 @@ jobs:
     name: zero-trust (no secret baked into any Dockerfile)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # ADR-0004 / ADR-0009 / issue #40: assert no Dockerfile ENV/ARG/COPY bakes
       # a secret literal, so images stay public-safe artifacts. The guard reads
       # .env.example's [SECRET] legend as the authoritative key-name list
@@ -111,19 +111,19 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Resolve SHA image tag
         id: tag
         run: echo "sha=sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build + push backend image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: backend
           push: true
@@ -131,7 +131,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max,scope=backend
       - name: Build + push edge image (PWA Bundle baked in)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infrastructure/edge/Dockerfile
