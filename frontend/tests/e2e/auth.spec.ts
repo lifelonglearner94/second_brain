@@ -115,3 +115,32 @@ test('logout invalidates the session and redirects to /login; a later /app visit
 	await page.goto('/app');
 	await expect(page).toHaveURL(/\/login$/);
 });
+
+test('issue #74: visiting /login?invite=<token> affords "Register with invitation"', async ({
+	page
+}) => {
+	await mockMe(page, 401, { error: 'unauthorized' });
+
+	// The invite token is shared out-of-band as a query param. The registration
+	// screen reads it and rebrands the register affordance so an invitee knows
+	// they are consuming an invitation (not the bootstrap path).
+	await page.goto('/login?invite=invite-token-abc');
+
+	await expect(page.getByTestId('auth-form')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('register-button')).toContainText(
+		'Register with invitation'
+	);
+});
+
+test('issue #74: visiting /login with no invite affords the plain "Register a passkey"', async ({
+	page
+}) => {
+	await mockMe(page, 401, { error: 'unauthorized' });
+
+	await page.goto('/login');
+
+	await expect(page.getByTestId('auth-form')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByTestId('register-button')).toContainText(
+		'Register a passkey'
+	);
+});

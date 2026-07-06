@@ -61,7 +61,7 @@ describe('apiClient — passkey auth surface against backend #2', () => {
 		fetchMock = vi.fn<typeof fetch>();
 	});
 
-	it('POST /auth/register/begin returns the creation challenge + opaque state token', async () => {
+	it('POST /auth/register/begin posts the optional invite token as JSON', async () => {
 		fetchMock.mockResolvedValue(
 			okResponse({
 				challenge: { publicKey: CREATION_OPTIONS },
@@ -69,19 +69,35 @@ describe('apiClient — passkey auth surface against backend #2', () => {
 			})
 		);
 		const api = createApiClient({ fetch: fetchMock });
-		const begin = await api.registerBegin();
+		const begin = await api.registerBegin('invite-token-abc');
 		const [url, init] = fetchMock.mock.calls[0];
 		expect(url).toBe('/api/auth/register/begin');
 		expect(init?.method).toBe('POST');
 		expect(init?.credentials).toBe('include');
+		expect(JSON.parse(init?.body as string)).toEqual({ invite: 'invite-token-abc' });
 		expect(begin).toEqual({
 			challenge: { publicKey: CREATION_OPTIONS },
 			state: 'state-1'
 		});
 	});
 
+	it('POST /auth/register/begin posts { invite: null } when no token is supplied', async () => {
+		fetchMock.mockResolvedValue(
+			okResponse({
+				challenge: { publicKey: CREATION_OPTIONS },
+				state: 'state-1'
+			})
+		);
+		const api = createApiClient({ fetch: fetchMock });
+		await api.registerBegin();
+		const [, init] = fetchMock.mock.calls[0];
+		expect(JSON.parse(init?.body as string)).toEqual({ invite: null });
+	});
+
 	it('POST /auth/register/finish posts the credential + state as JSON', async () => {
-		fetchMock.mockResolvedValue(okResponse({ registered: true }));
+		fetchMock.mockResolvedValue(
+			okResponse({ registered: true, user_id: '00000000-0000-0000-0000-000000000001' })
+		);
 		const api = createApiClient({ fetch: fetchMock });
 		const ok = await api.registerFinish({
 			credential: REGISTRATION_RESPONSE,
@@ -96,7 +112,10 @@ describe('apiClient — passkey auth surface against backend #2', () => {
 			credential: REGISTRATION_RESPONSE,
 			state: 'state-1'
 		});
-		expect(ok).toEqual({ registered: true });
+		expect(ok).toEqual({
+			registered: true,
+			user_id: '00000000-0000-0000-0000-000000000001'
+		});
 	});
 
 	it('POST /auth/login/begin returns the request challenge + opaque state token', async () => {

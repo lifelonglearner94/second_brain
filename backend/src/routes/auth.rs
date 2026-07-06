@@ -4,50 +4,82 @@
 //!
 //! All flows are JSON-in / JSON-out so a non-browser client (the integration
 //! tests use a software passkey) can drive them exactly the way a browser would.
+//!
+//! Issue #74: registration is invite-gated with a bootstrap exception. The
+//! begin handler accepts an optional `{"invite": "<token>"}` body; the finish
+//! handler mints a session (registration logs the new user in immediately) and
+//! sets the cookie. Login resolves the per-user `user_id` from the authenticated
+//! passkey row.
 
 use axum::extract::{Extension, State};
 use axum::response::{IntoResponse, Json, Response};
 use serde::Serialize;
-use webauthn_rs::prelude::AuthenticationResult;
 
 use crate::auth::cookie::{clear_cookie_response, session_cookie_headers};
 use crate::auth::session::{invalidate_session, mint_session, SessionId, SessionInfo};
-use crate::auth::webauthn::{LoginBegin, LoginFinish, RegistrationBegin, RegistrationFinish};
+use crate::auth::webauthn::{
+    LoginBegin, LoginFinish, LoginResult, RegistrationBegin, RegistrationBeginRequest,
+    RegistrationFinish,
+};
 use crate::error::Result;
 use crate::state::AppState;
 
-/// Begin passkey registration. Returns the creation challenge the browser signs
-/// plus an opaque `state` token echoed on finish.
-pub async fn register_begin(State(state): State<AppState>) -> Result<Json<RegistrationBegin>> {
-    let begin = state.auth.register_begin(&state.db).await?;
+/// Begin passkey registration. Issue #74: accepts an optional `{"invite":
+/// "<token>"}` body — required once the bootstrap admin exists, ignored while
+/// the bootstrap exception is open (zero users). Returns the creation
+/// challenge the browser signs plus an opaque `state` token echoed on finish.
+pub async fn register_begin(
+    State(state): State<AppState>,
+    body: Option<Json<RegistrationBeginRequest>>,
+) -> Result<Json<RegistrationBegin>> {
+    let invite = body.and_then(|b| b.0.invite);
+    let begin = state.auth.register_begin(&state.db, invite).await?;
     Ok(Json(begin))
 }
 
 /// Finish passkey registration: pair the client's credential with the stored
-/// state and persist the credential. Single-use — the state token is consumed.
+/// state, consume the invite (or apply the bootstrap exception), create the
+/// `users` row, bind the passkey, and mint a session. The session cookie is
+/// set so the new user is authenticated immediately. Single-use — the state
+/// token is consumed.
 pub async fn register_finish(
     State(state): State<AppState>,
     Json(body): Json<RegistrationFinish>,
-) -> Result<Json<serde_json::Value>> {
-    state.auth.register_finish(&state.db, body).await?;
-    Ok(Json(serde_json::json!({ "registered": true })))
+) -> Result<Response> {
+    let session = state.auth.register_finish(&state.db, body).await?;
+    let id = SessionId::parse(&session.session_id).expect("minted id is well-formed");
+    // The session id rides only in the cookie; the body carries only the
+    // account id (JS-readable) so an XSS can't exfiltrate the bearer.
+    let body = Json(RegisterOk {
+        registered: true,
+        user_id: session.user_id,
+    });
+    Ok((session_cookie_headers(&id), body).into_response())
 }
 
-/// Begin passkey login. Requires at least one registered passkey.
+#[derive(Serialize)]
+struct RegisterOk {
+    registered: bool,
+    user_id: String,
+}
+
+/// Begin passkey login. Requires at least one registered passkey (across all
+/// users — issue #74).
 pub async fn login_begin(State(state): State<AppState>) -> Result<Json<LoginBegin>> {
     let begin = state.auth.login_begin(&state.db).await?;
     Ok(Json(begin))
 }
 
-/// Finish passkey login: verify the assertion, mint an opaque session, set it
-/// as an `httpOnly; Secure; SameSite=Strict`, `__Host-`-prefixed cookie. The
-/// session row (not the cookie) is the source of truth.
+/// Finish passkey login: verify the assertion, resolve the per-user `user_id`
+/// from the authenticated passkey row (issue #74), mint an opaque session, and
+/// set it as an `httpOnly; Secure; SameSite=Strict`, `__Host-`-prefixed cookie.
+/// The session row (not the cookie) is the source of truth.
 pub async fn login_finish(
     State(state): State<AppState>,
     Json(body): Json<LoginFinish>,
 ) -> Result<Response> {
-    let _result: AuthenticationResult = state.auth.login_finish(&state.db, body).await?;
-    let session = mint_session(&state.db, state.auth.user_id()).await?;
+    let result: LoginResult = state.auth.login_finish(&state.db, body).await?;
+    let session = mint_session(&state.db, &result.user_id).await?;
     let id = SessionId::parse(&session.session_id).expect("minted id is well-formed");
     // The session id rides only in the cookie. Echoing it in a JS-readable body
     // would hand it straight to any XSS — the very thing the `httpOnly` cookie

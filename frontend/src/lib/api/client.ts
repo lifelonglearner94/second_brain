@@ -33,7 +33,7 @@ export type RegistrationFinishBody = {
 	state: string;
 };
 
-export type RegistrationFinishOk = { registered: true };
+export type RegistrationFinishOk = { registered: true; user_id: string };
 
 export type LoginBegin = {
 	// The backend returns the WebAuthn-spec `RequestChallengeResponse`,
@@ -237,7 +237,7 @@ export type ChatInferenceProposal = {
 
 export interface ApiClient {
 	getHealth(): Promise<Health>;
-	registerBegin(): Promise<RegistrationBegin>;
+	registerBegin(invite?: string | null): Promise<RegistrationBegin>;
 	registerFinish(body: RegistrationFinishBody): Promise<RegistrationFinishOk>;
 	loginBegin(): Promise<LoginBegin>;
 	loginFinish(body: LoginFinishBody): Promise<LoginOk>;
@@ -339,10 +339,10 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		async getHealth(): Promise<Health> {
 			return getJson<Health>('/health', 'GET /health');
 		},
-		async registerBegin(): Promise<RegistrationBegin> {
+		async registerBegin(invite?: string | null): Promise<RegistrationBegin> {
 			return postJson<RegistrationBegin>(
 				'/auth/register/begin',
-				null,
+				{ invite: invite ?? null },
 				'POST /auth/register/begin'
 			);
 		},

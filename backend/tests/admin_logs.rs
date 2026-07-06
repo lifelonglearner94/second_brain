@@ -128,7 +128,9 @@ async fn admin_logs_rejects_missing_cookie() {
 
 #[tokio::test]
 async fn admin_logs_returns_recent_entries_when_authed() {
-    let db = Db::open_in_memory().unwrap();
+    // `Db::open(":memory:")` (not `open_in_memory`) so the bootstrap exception
+    // is open (zero users) and `register_and_login` can create the admin.
+    let db = Db::open(":memory:").unwrap();
     let state = AppState::for_tests(db);
     // Pre-populate the shared buffer (Arc-backed, so the router's clone sees
     // the same entries) with a couple of structured log lines — the kind of
@@ -162,7 +164,7 @@ async fn admin_logs_returns_recent_entries_when_authed() {
 
 #[tokio::test]
 async fn admin_logs_limit_bounds_the_response() {
-    let db = Db::open_in_memory().unwrap();
+    let db = Db::open(":memory:").unwrap();
     let state = AppState::for_tests(db);
     for i in 0..5 {
         state.log_buffer.push(entry(&format!("e{i}"), "INFO"));

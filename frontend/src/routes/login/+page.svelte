@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
+	import { onMount } from 'svelte';
 	import { apiClient } from '$lib/api';
 	import {
 		registerPasskey,
@@ -16,13 +18,29 @@
 
 	const supported = browserSupportsWebAuthn();
 
+	// Issue #74: an admin shares an invitation token out-of-band as an
+	// `?invite=<token>` query param. When present, the "Register" affordance
+	// becomes "Register with invitation" and threads the token through the
+	// begin/finish pair. Absent, it still works for the bootstrap exception
+	// (zero users → the first registration creates the admin with no invite).
+	// Read on the client only: the login page is prerendered, and
+	// `page.url.searchParams` is not available during prerender.
+	let inviteToken = $state<string | null>(null);
+	onMount(() => {
+		inviteToken = page.url.searchParams.get('invite');
+	});
+
 	async function onRegister() {
 		busy = 'register';
 		error = null;
 		status = null;
 		try {
-			await registerPasskey(apiClient);
-			status = 'Passkey registered — sign in with it below.';
+			const { user_id } = await registerPasskey(apiClient, inviteToken);
+			// Registration mints a session (the backend sets the cookie), so the
+			// user is authenticated immediately — update session state and go to
+			// the app rather than asking them to sign in again.
+			session.setAuthenticated(user_id);
+			await goto('/app');
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -116,24 +134,28 @@
 				{busy === 'login' ? 'Signing in…' : 'Sign in with passkey'}
 			</button>
 
-			<button
-				type="button"
-				class="btn auth-action"
-				data-testid="register-button"
-				onclick={onRegister}
-				disabled={busy !== null}
+		<button
+			type="button"
+			class="btn auth-action"
+			data-testid="register-button"
+			onclick={onRegister}
+			disabled={busy !== null}
+		>
+			<svg
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.8"
+				aria-hidden="true"
 			>
-				<svg
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="1.8"
-					aria-hidden="true"
-				>
-					<path d="M12 5v14M5 12h14" />
-				</svg>
-				{busy === 'register' ? 'Registering…' : 'Register a passkey'}
-			</button>
+				<path d="M12 5v14M5 12h14" />
+			</svg>
+			{busy === 'register'
+				? 'Registering…'
+				: inviteToken
+					? 'Register with invitation'
+					: 'Register a passkey'}
+		</button>
 
 			<button
 				type="button"
