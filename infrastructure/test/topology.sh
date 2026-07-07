@@ -161,7 +161,15 @@ grep -qE '^:80\b' "$CF" || die "Caddyfile must bind :80 (auto-HTTPS off for loca
 grep -qE 'handle_path[[:space:]]+/api/\*' "$CF" || die "Caddyfile must handle_path /api/* (strip prefix)"
 grep -q 'http://backend:8080' "$CF" || die "Caddyfile must reverse_proxy http://backend:8080 (ADR-0006)"
 grep -q 'file_server' "$CF" || die "Caddyfile must serve the PWA Bundle via file_server"
-pass "Caddyfile (local-dev): :80, handle_path /api/* -> http://backend:8080, file_server"
+# try_files must try {path}.html before the bare {path}: adapter-static emits
+# flat <path>.html files (e.g. /srv/login.html), not <path>/index.html. Without
+# the {path}.html term every prerendered leaf route falls through to
+# /index.html and the query string is dropped (e.g. /login?invite=<token>
+# serves the landing page instead of the login page — invitation deep-link
+# breakage, #79).
+grep -q 'try_files {path}.html {path} /index.html' "$CF" \
+  || die "Caddyfile must try_files {path}.html {path} /index.html (flat prerendered files, #79)"
+pass "Caddyfile (local-dev): :80, handle_path /api/* -> http://backend:8080, try_files {path}.html, file_server"
 
 CFP="$REPO_ROOT/infrastructure/edge/Caddyfile.prod"
 [[ -f "$CFP" ]] || die "missing $CFP (production Caddyfile with auto-HTTPS)"
@@ -171,7 +179,9 @@ CFP="$REPO_ROOT/infrastructure/edge/Caddyfile.prod"
 grep -qE 'handle_path[[:space:]]+/api/\*' "$CFP" || die "Caddyfile.prod must handle_path /api/* (strip prefix)"
 grep -q 'http://backend:8080' "$CFP" || die "Caddyfile.prod must reverse_proxy http://backend:8080 (ADR-0006)"
 grep -q 'file_server' "$CFP" || die "Caddyfile.prod must serve the PWA Bundle via file_server"
-pass "Caddyfile.prod (production): hostname, handle_path /api/* -> http://backend:8080, file_server"
+grep -q 'try_files {path}.html {path} /index.html' "$CFP" \
+  || die "Caddyfile.prod must try_files {path}.html {path} /index.html (flat prerendered files, #79)"
+pass "Caddyfile.prod (production): hostname, handle_path /api/* -> http://backend:8080, try_files {path}.html, file_server"
 
 if [[ $LIVE -eq 0 ]]; then
   echo
@@ -199,6 +209,21 @@ wait_http http://localhost:80/ || die "Edge never responded on :80"
 html="$(curl -fsS http://localhost:80/)"
 [[ "$html" == *"<html"* ]] || die "GET / did not return HTML (PWA Bundle)"
 pass "GET / returns the PWA Bundle (Caddy file_server)"
+
+# Regression guard for #79: /login must resolve to the prerendered login page
+# (flat /srv/login.html via try_files {path}.html), NOT fall through to
+# /index.html (the landing page). The login page carries data-testid="auth-form"
+# (and the invite-token disclosure); the landing page carries
+# data-testid="auth-nav" + data-testid="health". Asserting the login marker is
+# present AND the landing markers are absent proves the right flat file was
+# served — and by extension that /login?invite=<token> would keep the query
+# string (Caddy try_files rewrites internally; the URL bar is unchanged).
+login_html="$(curl -fsS http://localhost:80/login)"
+[[ "$login_html" == *'data-testid="auth-form"'* ]] \
+  || die "GET /login did not serve the login page (missing auth-form); got the landing page instead — invitation deep links are broken (#79)"
+[[ "$login_html" != *'data-testid="health"'* ]] \
+  || die "GET /login served the landing page (health marker present); try_files is falling through to /index.html (#79)"
+pass "GET /login serves the prerendered login page (try_files {path}.html, #79 deep-link fix)"
 
 if ! wait_http http://localhost:80/api/health; then
   die "/api/health never returned (backend not up behind the Edge)"
