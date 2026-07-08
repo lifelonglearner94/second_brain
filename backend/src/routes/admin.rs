@@ -2,13 +2,16 @@
 //! log view — the backend reads its own in-memory log ring buffer and surfaces
 //! it here so the phone can show errors (e.g. Gemini generation failures)
 //! without SSH. `/admin/invites*` (issue #73) lets the admin mint single-use
-//! invitations that gate future passkey registration.
+//! invitations that gate future passkey registration. `/admin/system` (#81)
+//! surfaces live host load (CPU/RAM/disk) so the operator reads VPS pressure
+//! from the phone without SSH.
 //!
-//! `/admin/logs` is behind `require_session` — only an authenticated user can
-//! read backend internals. `/admin/invites*` is additionally behind
-//! `require_admin` (issue #73) — only an admin can mint or list invitations.
-//! The buffer is bounded (fixed capacity) and the `?limit` query caps the log
-//! response, so the endpoint is VPS-safe on the 8 GB box.
+//! `/admin/logs` and `/admin/system` are behind `require_session` — only an
+//! authenticated user can read backend internals. `/admin/invites*` is
+//! additionally behind `require_admin` (issue #73) — only an admin can mint or
+//! list invitations. The log buffer is bounded (fixed capacity) and the
+//! `?limit` query caps the log response, so the endpoint is VPS-safe on the
+//! 8 GB box.
 
 use axum::extract::{Extension, Query, State};
 use axum::response::Json;
@@ -38,7 +41,9 @@ pub struct LogsResponse {
 }
 
 /// `GET /admin/logs` — return up to `?limit` (default 200, capped at capacity)
-/// most-recent structured log entries, oldest-first. Auth-gated upstream.
+/// most-recent structured log entries, newest-first. Newest-first so the admin
+/// tab's top-down list shows the freshest state at the top without scrolling
+/// past stale history. Auth-gated upstream.
 pub async fn logs(
     State(state): State<AppState>,
     Query(query): Query<LogsQuery>,
@@ -52,6 +57,166 @@ pub async fn logs(
         count,
         capacity,
     })
+}
+
+/// CPU load, sampled over a short window. `usage_percent` is the mean of the
+/// per-core readings (0–100); `cores` is the logical-core count; `per_core`
+/// carries each core's 0–100 so the admin can spot a pinned core. CPU usage is
+/// a diff between two samples, so the handler refreshes once, waits the
+/// crate's minimum update interval, and refreshes again — a single refresh on
+/// a fresh `System` returns 0 (no baseline).
+#[derive(Serialize)]
+pub struct CpuMetrics {
+    pub usage_percent: f32,
+    pub cores: usize,
+    pub per_core: Vec<f32>,
+}
+
+/// Memory pressure. `*_bytes` are raw so the frontend formats human-friendly
+/// sizes; `usage_percent` is `used / total * 100` (0 when total is 0, e.g. a
+/// container that doesn't expose RAM).
+#[derive(Serialize)]
+pub struct MemoryMetrics {
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub usage_percent: f32,
+}
+
+/// One mounted filesystem. `used_bytes` is `total - available`. The Brain File
+/// (the SQLite database) lives on exactly one of these; `brain_file_mount` on
+/// the response identifies which.
+#[derive(Serialize)]
+pub struct DiskMetrics {
+    pub name: String,
+    pub mount_point: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub usage_percent: f32,
+}
+
+/// `GET /admin/system` — current host load (CPU, RAM, disk) for the admin
+/// panel's system tab (#81). Lets the operator read VPS pressure from the
+/// phone without SSH. Behind `require_session` — same auth guard as
+/// `/admin/logs`. Sampling is stateless (a fresh `sysinfo::System` per
+/// request) so the handler stays self-contained and doesn't widen `AppState`;
+/// the CPU double-refresh costs one `MINIMUM_CPU_UPDATE_INTERVAL` of latency,
+/// an acceptable price for a low-traffic admin read.
+pub async fn system(State(state): State<AppState>) -> Json<SystemResponse> {
+    let db_path = state.config.database_url.clone();
+    let (cpu, memory) = sample_cpu_and_memory().await;
+    let (disks, brain_file_mount) = sample_disks(&db_path);
+    Json(SystemResponse {
+        cpu,
+        memory,
+        disks,
+        brain_file_mount,
+    })
+}
+
+#[derive(Serialize)]
+pub struct SystemResponse {
+    pub cpu: CpuMetrics,
+    pub memory: MemoryMetrics,
+    pub disks: Vec<DiskMetrics>,
+    /// Mount point of the filesystem holding the Brain File (the SQLite db at
+    /// `config.database_url`), so the frontend can highlight the right disk.
+    /// `None` when the db is `:memory:` (tests) or the path can't be resolved
+    /// to a known mount.
+    pub brain_file_mount: Option<String>,
+}
+
+/// Sample CPU and memory from one `sysinfo::System`. CPU usage needs two
+/// refreshes bracketing a wait (it's a diff); memory is instantaneous. Using
+/// one `System` for both halves the allocation vs. two separate samplers.
+async fn sample_cpu_and_memory() -> (CpuMetrics, MemoryMetrics) {
+    let mut sys = sysinfo::System::new();
+    // First refresh seeds the baseline; the second (after the wait) yields the
+    // diff that `cpu_usage()` reports.
+    sys.refresh_cpu_usage();
+    tokio::time::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
+
+    let per_core: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
+    let cores = per_core.len();
+    let usage_percent = if cores > 0 {
+        per_core.iter().sum::<f32>() / cores as f32
+    } else {
+        0.0
+    };
+    let cpu = CpuMetrics {
+        usage_percent,
+        cores,
+        per_core,
+    };
+
+    let total = sys.total_memory();
+    let used = sys.used_memory();
+    let usage_percent = if total > 0 {
+        (used as f64 / total as f64 * 100.0) as f32
+    } else {
+        0.0
+    };
+    let memory = MemoryMetrics {
+        total_bytes: total,
+        used_bytes: used,
+        usage_percent,
+    };
+
+    (cpu, memory)
+}
+
+/// Sample every mounted filesystem and identify the one holding the Brain File.
+/// `Disks` is sampled per request (disk usage is instantaneous — no baseline
+/// needed, unlike CPU), so it doesn't need to live in `AppState`.
+fn sample_disks(db_path: &str) -> (Vec<DiskMetrics>, Option<String>) {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    let metrics: Vec<DiskMetrics> = disks
+        .iter()
+        .map(|d| {
+            let total = d.total_space();
+            let used = total.saturating_sub(d.available_space());
+            let usage_percent = if total > 0 {
+                (used as f64 / total as f64 * 100.0) as f32
+            } else {
+                0.0
+            };
+            DiskMetrics {
+                name: d.name().to_string_lossy().to_string(),
+                mount_point: d.mount_point().to_string_lossy().to_string(),
+                total_bytes: total,
+                used_bytes: used,
+                usage_percent,
+            }
+        })
+        .collect();
+    let brain_file_mount = brain_file_mount_point(&disks, db_path);
+    (metrics, brain_file_mount)
+}
+
+/// The mount point of the filesystem holding the Brain File. Resolves the db
+/// path to an absolute path and picks the disk whose mount point is the longest
+/// prefix of it (longest-prefix handles `/` vs `/home` vs `/data` correctly).
+/// Returns `None` for `:memory:` (no file) or if the path can't be canonicalised.
+fn brain_file_mount_point(disks: &sysinfo::Disks, db_path: &str) -> Option<String> {
+    if db_path.is_empty() || db_path == ":memory:" {
+        return None;
+    }
+    let abs = std::fs::canonicalize(db_path).ok()?;
+    let abs_str = abs.to_string_lossy();
+    disks
+        .iter()
+        .filter_map(|d| {
+            let mp = d.mount_point().to_string_lossy().to_string();
+            if mp.is_empty() {
+                None
+            } else if abs_str.starts_with(&mp) {
+                Some(mp)
+            } else {
+                None
+            }
+        })
+        .max_by_key(|mp| mp.len())
 }
 
 /// One invitation row, as returned by both mint and list. The `token` is the

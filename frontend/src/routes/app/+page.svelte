@@ -120,6 +120,10 @@
 				<a href="/app/admin/invites" data-testid="admin-invites-link">
 					Admin — invitations
 				</a>
+				<span class="sep" aria-hidden="true">·</span>
+				<a href="/app/admin/system" data-testid="admin-system-link">
+					Admin — system
+				</a>
 			</p>
 		{/if}
 	</header>

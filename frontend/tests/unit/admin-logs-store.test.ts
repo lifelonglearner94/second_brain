@@ -212,4 +212,116 @@ describe('AdminLogStore — pull-based log surface over backend #4 GET /admin/lo
 			expect(store.levels).toEqual([]);
 		});
 	});
+
+	// Issue #80: the admin tab must show a full, recent tail newest-first and
+	// the search box must filter it live. The store is a thin filter over the
+	// backend's array — it must not synthesise, reorder, or collapse entries.
+	// The old bug (a handful of stale rows + dead search) lived in the page's
+	// `{#each}` key, which collided on (timestamp+message) because tracing
+	// timestamps are second-resolution and messages repeat; Svelte deduped the
+	// rendered list to a few stale rows regardless of what `filtered` held.
+	// These tests pin the store contract so the page fix (a positional key) is
+	// the only thing standing between the user and the full list.
+	describe('order + duplicate retention (issue #80)', () => {
+		// Newest-first, mirroring the backend's reverse-chronological contract.
+		const NEWEST_FIRST: LogsResponse = {
+			logs: [
+				{
+					timestamp: 1_700_000_020,
+					level: 'INFO',
+					target: 'ingest',
+					message: 'braindump accepted',
+					fields: { id: 'b3' }
+				},
+				{
+					timestamp: 1_700_000_010,
+					level: 'WARN',
+					target: 'gemini_client',
+					message: 'retrying',
+					fields: { attempt: 1 }
+				},
+				{
+					timestamp: 1_700_000_000,
+					level: 'ERROR',
+					target: 'gemini_client',
+					message: 'generation failed',
+					fields: { status: 503 }
+				}
+			],
+			count: 3,
+			capacity: 1_000
+		};
+
+		it('filtered preserves the backend newest-first order (no client-side reorder)', async () => {
+			const getAdminLogs = vi
+				.fn<AdminLogApi['getAdminLogs']>()
+				.mockResolvedValue(NEWEST_FIRST);
+			const store = new AdminLogStore(apiStub(getAdminLogs));
+			await store.refresh();
+			expect(store.filtered.map((l) => l.message)).toEqual([
+				'braindump accepted',
+				'retrying',
+				'generation failed'
+			]);
+		});
+
+		it('filtering preserves the relative order of the matches', async () => {
+			const getAdminLogs = vi
+				.fn<AdminLogApi['getAdminLogs']>()
+				.mockResolvedValue(NEWEST_FIRST);
+			const store = new AdminLogStore(apiStub(getAdminLogs));
+			await store.refresh();
+			// Both gemini_client rows match, newest before older.
+			store.query = 'gemini';
+			expect(store.filtered.map((l) => l.message)).toEqual([
+				'retrying',
+				'generation failed'
+			]);
+		});
+
+		it('retains every entry even when (timestamp, message) repeat — no client-side dedup', async () => {
+			// A burst of identical lines in the same second is exactly the case
+			// the old page key collapsed. The store must keep all of them so a
+			// positional `{#each}` key renders the full burst.
+			const burst: LogsResponse = {
+				logs: [
+					{
+						timestamp: 1_700_000_000,
+						level: 'ERROR',
+						target: 'gemini_client',
+						message: 'generation failed',
+						fields: { status: 503 }
+					},
+					{
+						timestamp: 1_700_000_000,
+						level: 'ERROR',
+						target: 'gemini_client',
+						message: 'generation failed',
+						fields: { status: 503 }
+					},
+					{
+						timestamp: 1_700_000_000,
+						level: 'ERROR',
+						target: 'gemini_client',
+						message: 'generation failed',
+						fields: { status: 503 }
+					}
+				],
+				count: 3,
+				capacity: 1_000
+			};
+			const getAdminLogs = vi
+				.fn<AdminLogApi['getAdminLogs']>()
+				.mockResolvedValue(burst);
+			const store = new AdminLogStore(apiStub(getAdminLogs));
+			await store.refresh();
+			expect(store.filtered).toHaveLength(3);
+			// Searching the repeated message still returns all of them.
+			store.query = 'failed';
+			expect(store.filtered).toHaveLength(3);
+			// Emptying the box restores the full list.
+			store.query = '';
+			expect(store.filtered).toHaveLength(3);
+		});
+	});
 });

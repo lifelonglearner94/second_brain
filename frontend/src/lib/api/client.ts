@@ -113,6 +113,38 @@ export type LogsResponse = {
 	capacity: number;
 };
 
+// Issue #81: host load metrics from GET /admin/system. Raw bytes are surfaced
+// so the frontend formats human-friendly sizes; the backend owns no formatting.
+export type CpuMetrics = {
+	usage_percent: number;
+	cores: number;
+	per_core: number[];
+};
+
+export type MemoryMetrics = {
+	total_bytes: number;
+	used_bytes: number;
+	usage_percent: number;
+};
+
+export type DiskMetrics = {
+	name: string;
+	mount_point: string;
+	total_bytes: number;
+	used_bytes: number;
+	usage_percent: number;
+};
+
+export type SystemResponse = {
+	cpu: CpuMetrics;
+	memory: MemoryMetrics;
+	disks: DiskMetrics[];
+	// Mount point of the filesystem holding the Brain File (SQLite db), so the
+	// page can highlight the right disk. null when the db is in-memory or the
+	// mount can't be resolved.
+	brain_file_mount: string | null;
+};
+
 export type Invitation = {
 	id: number;
 	token: string;
@@ -246,6 +278,7 @@ export interface ApiClient {
 	recover(): Promise<RecoverResponse>;
 	getGraph(): Promise<GlobalTopologySnapshot>;
 	getAdminLogs(limit?: number): Promise<LogsResponse>;
+	getSystem(): Promise<SystemResponse>;
 	mintInvite(): Promise<Invitation>;
 	listInvites(): Promise<InvitationsResponse>;
 	submitBraindump(verbatim: string): Promise<BraindumpDto>;
@@ -412,6 +445,9 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 			const path =
 				limit !== undefined ? `/admin/logs?limit=${limit}` : '/admin/logs';
 			return getJson<LogsResponse>(path, 'GET /admin/logs');
+		},
+		async getSystem(): Promise<SystemResponse> {
+			return getJson<SystemResponse>('/admin/system', 'GET /admin/system');
 		},
 		async mintInvite(): Promise<Invitation> {
 			return postJson<Invitation>(

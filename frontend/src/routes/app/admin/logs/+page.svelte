@@ -127,7 +127,7 @@
 			</div>
 		{:else}
 			<ol class="logs" data-testid="admin-logs-list">
-				{#each adminLogs.filtered as entry (entry.timestamp + entry.message)}
+				{#each adminLogs.filtered as entry, i (i)}
 					<li
 						class="log card"
 						data-testid="admin-log-row"
