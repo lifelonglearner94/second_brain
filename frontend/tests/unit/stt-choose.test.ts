@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { chooseSttSource } from '../../src/lib/capture/stt';
+import { chooseSttSource, describeSttAvailability } from '../../src/lib/capture/stt';
 import type { SttSource } from '../../src/lib/capture/stt';
 
 function fakeSource(label: 'deepgram' | 'web-speech'): SttSource {
@@ -54,5 +54,33 @@ describe('chooseSttSource — Deepgram primary, Web Speech offline fallback, key
 	it('returns null when Web Speech is unavailable and Deepgram is not configured (offline, no fallback)', async () => {
 		const source = await chooseSttSource({ webSpeechAvailable: false });
 		expect(source).toBeNull();
+	});
+});
+
+describe('describeSttAvailability — graceful typing-only fallback when no STT source exists (issue #82)', () => {
+	it('reports voice available with no reason when a Deepgram key is configured', () => {
+		expect(describeSttAvailability({ deepgramApiKey: 'k' })).toEqual({
+			canCaptureVoice: true,
+			reason: null
+		});
+	});
+
+	it('reports voice available when only Web Speech is available (no Deepgram key)', () => {
+		expect(describeSttAvailability({ webSpeechAvailable: true })).toEqual({
+			canCaptureVoice: true,
+			reason: null
+		});
+	});
+
+	it('reports typing-only with a user-facing reason when neither source is available (iOS Safari, no key, no Web Speech)', () => {
+		const avail = describeSttAvailability({});
+		expect(avail.canCaptureVoice).toBe(false);
+		expect(avail.reason).toMatch(/type your thought/i);
+	});
+
+	it('the reason is non-empty so the UI can surface it instead of silently failing', () => {
+		const avail = describeSttAvailability({ webSpeechAvailable: false });
+		expect(typeof avail.reason).toBe('string');
+		expect((avail.reason ?? '').length).toBeGreaterThan(0);
 	});
 });

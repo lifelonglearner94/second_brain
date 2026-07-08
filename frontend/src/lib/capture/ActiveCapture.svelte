@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ActiveCaptureStore } from '$lib/capture/active-capture.svelte';
-	import { buildSttSources } from '$lib/capture/stt';
+	import { buildSttSources, describeSttAvailability } from '$lib/capture/stt';
 	import type { IngestApi, IngestResponse } from '$lib/capture/ingest';
 	import type { PendingCapturesStore } from '$lib/state/pending-captures.svelte';
 
@@ -27,6 +27,10 @@
 		typeof window !== 'undefined' &&
 		(window.SpeechRecognition !== undefined ||
 			window.webkitSpeechRecognition !== undefined);
+
+	const availability = $derived(
+		describeSttAvailability({ deepgramApiKey, webSpeechAvailable })
+	);
 
 	async function onRecord() {
 		if (store.status === 'listening') {
@@ -96,7 +100,7 @@
 	</div>
 
 	<div class="controls">
-		{#if deepgramApiKey || webSpeechAvailable}
+		{#if availability.canCaptureVoice}
 			<button
 				type="button"
 				class="btn record"
@@ -156,6 +160,11 @@
 					? 'Deepgram Nova-3'
 					: 'Web Speech (offline)'}
 			</span>
+		</p>
+	{/if}
+	{#if !availability.canCaptureVoice && availability.reason}
+		<p class="meta" data-testid="active-capture-no-voice">
+			<span class="pill pill-muted">{availability.reason}</span>
 		</p>
 	{/if}
 	{#if store.status === 'queued'}

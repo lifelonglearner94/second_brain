@@ -13,6 +13,30 @@ export type SttSourceOptions = {
 	buildWebSpeech?: () => SttSource;
 };
 
+/**
+ * Whether any STT source is available to power voice capture, and a
+ * user-facing reason when it is not. When no source is available (e.g. iOS
+ * Safari with no Deepgram key and no usable Web Speech), the Active Capture
+ * must stay usable for typing and show this reason rather than silently fail.
+ */
+export type SttAvailability = {
+	canCaptureVoice: boolean;
+	reason: string | null;
+};
+
+export function describeSttAvailability(opts: {
+	deepgramApiKey?: string;
+	webSpeechAvailable?: boolean;
+}): SttAvailability {
+	if (opts.deepgramApiKey || opts.webSpeechAvailable) {
+		return { canCaptureVoice: true, reason: null };
+	}
+	return {
+		canCaptureVoice: false,
+		reason: 'Voice input unavailable on this browser — type your thought below.'
+	};
+}
+
 export async function chooseSttSource(
 	opts: SttSourceOptions
 ): Promise<SttSource | null> {
