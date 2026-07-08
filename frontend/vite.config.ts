@@ -8,7 +8,7 @@ export default defineConfig({
 		conditions: ['browser']
 	},
 	test: {
-		include: ['tests/unit/**/*.test.ts'],
+		include: ['tests/unit/**/*.test.ts', 'src/**/*.test.ts'],
 		environment: 'jsdom',
 		setupFiles: ['tests/unit/setup-svelte.ts'],
 		server: {
