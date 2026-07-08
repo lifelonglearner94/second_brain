@@ -119,6 +119,7 @@ fn app_with_extraction(result: ExtractionResult) -> (axum::Router, Db) {
         auth: second_brain_backend::auth::AuthService::new(webauthn),
         log_buffer: second_brain_backend::logs::LogBuffer::with_default_capacity(),
         refactor_runner: second_brain_backend::ontology::RefactorRunner::new(),
+        ingest_runner: second_brain_backend::braindump::IngestRunner::new_inline(),
         graph_repo,
     };
     (routes::router(state), db)

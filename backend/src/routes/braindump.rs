@@ -1,16 +1,22 @@
 //! Braindump ingest routes (issue #5 / #6, ADR-0007).
 //!
-//! Thin HTTP adapters (issue #42): `submit` and `edit` parse + validate
-//! non-empty, then delegate the full ingest pipeline — clean → persist →
-//! ontology → extract → accrete (identity + provenance + type history +
-//! embeddings, ADR-0001/0002/0003/0010) — to [`crate::braindump::ingest`] /
-//! [`crate::braindump::ingest_edit`], log the outcome, and return the stored
-//! braindump as JSON. The pipeline (the spec) lives in `braindump`, not here,
-//! so it is unit-testable without an HTTP roundtrip. `GET /braindumps/:id`
-//! returns both renderings; `PATCH /braindumps/:id` is error-correction only
-//! (overwrites in place, re-cleans, re-extracts, re-runs accretion with the
-//! stale extraction retracted first — ADR-0007; id and created_at untouched);
-//! `DELETE /braindumps/:id` cascades through the graph.
+//! Issue #84: `submit` is fire-and-forget. It validates non-empty, persists the
+//! verbatim immediately with an empty cleaned rendering (a placeholder), and
+//! returns the braindump row right away — the HTTP request completes in
+//! milliseconds, independent of Gemini availability. The clean → extract →
+//! accrete pipeline runs in a background task ([`IngestRunner`]) that later
+//! updates the cleaned rendering and accretes the graph; the response still
+//! carries the braindump id + created_at so the UI can confirm the submit
+//! landed (graph reconciliation is via Delta Sync on next focus). `edit` stays
+//! synchronous (ADR-0007 error-correction, rare and bounded): clean →
+//! overwrite-in-place → ontology → extract → accrete, with the stale
+//! extraction retracted first.
+//!
+//! `GET /braindumps/:id` returns both renderings; `PATCH /braindumps/:id` is
+//! error-correction only (overwrites in place, re-cleans, re-extracts,
+//! re-runs accretion with the stale extraction retracted first — ADR-0007; id
+//! and created_at untouched); `DELETE /braindumps/:id` cascades through the
+//! graph.
 //!
 //! All sit behind the auth middleware (registered in [`crate::routes`] under
 //! the protected layer). The cleaner, extractor, and embedder are all methods
@@ -36,10 +42,13 @@ pub struct BraindumpRequest {
     pub verbatim: String,
 }
 
-/// `POST /braindumps` — submit a braindump. A thin HTTP adapter (issue #42):
-/// parse + validate non-empty, delegate the full ingest pipeline
-/// (clean → persist → ontology → extract → accrete, ADR-0007) to
-/// [`braindump::ingest`], log the outcome, and return the stored braindump.
+/// `POST /braindumps` — submit a braindump (issue #84: fire-and-forget).
+/// Validate non-empty, persist the verbatim immediately with an empty cleaned
+/// rendering, hand the braindump id to the background ingest runner, and
+/// return the stored row right away. No LLM call is on the request path, so
+/// the response lands in milliseconds regardless of Gemini availability; the
+/// clean → extract → accrete pipeline commits out-of-band and the cleaned
+/// rendering + concepts + edges populate once it completes.
 pub async fn submit(
     State(state): State<AppState>,
     Extension(session): Extension<SessionInfo>,
@@ -49,18 +58,21 @@ pub async fn submit(
     if verbatim.trim().is_empty() {
         return Err(Error::BadRequest("verbatim must be non-empty".into()));
     }
-    let (braindump, outcome) =
-        braindump::ingest(&state.db, &session.user_id, state.llm.as_ref(), &verbatim).await?;
-    tracing::debug!(
+    let braindump = braindump::submit_braindump(&state.db, &session.user_id, &verbatim).await?;
+    tracing::info!(
         braindump_id = braindump.id,
-        created = outcome.concepts_created,
-        accreted = outcome.concepts_accreted,
-        suggestions = outcome.merge_suggestions,
-        edges_created = outcome.edges_created,
-        edges_accreted = outcome.edges_accreted,
-        edges_rejected = outcome.edges_rejected,
-        "ingest: extraction + accretion complete"
+        "braindump submitted: background ingest spawned"
     );
+    state
+        .ingest_runner
+        .spawn(
+            state.db.clone(),
+            state.llm.clone(),
+            state.config.clone(),
+            session.user_id.clone(),
+            braindump.id,
+        )
+        .await;
     Ok(Json(braindump))
 }
 

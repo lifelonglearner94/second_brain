@@ -179,7 +179,7 @@ impl GeminiClient {
         let status = resp.status();
         let text = resp.text().await.map_err(map_reqwest)?;
         if !status.is_success() {
-            return Err(Error::Internal(format!("gemini generate {status}: {text}")));
+            return Err(classify_status(status, &text, "gemini generate"));
         }
         let value: Value = serde_json::from_str(&text)
             .map_err(|e| Error::Internal(format!("gemini generate decode: {e}: {text}")))?;
@@ -210,9 +210,7 @@ impl GeminiClient {
         let status = resp.status();
         let body_text = resp.text().await.map_err(map_reqwest)?;
         if !status.is_success() {
-            return Err(Error::Internal(format!(
-                "gemini embed {status}: {body_text}"
-            )));
+            return Err(classify_status(status, &body_text, "gemini embed"));
         }
         let value: EmbedResponse = serde_json::from_str(&body_text)
             .map_err(|e| Error::Internal(format!("gemini embed decode: {e}: {body_text}")))?;
@@ -220,8 +218,25 @@ impl GeminiClient {
     }
 }
 
+/// Issue #85: map a transport-level reqwest failure to a transient error —
+/// connection resets, DNS, TLS, timeouts are all "try again in 3 minutes," not
+/// "give up." Never terminal a braindump on a transport blip.
 fn map_reqwest(e: reqwest::Error) -> Error {
-    Error::Internal(format!("gemini transport: {e}"))
+    Error::TransientLlm(format!("gemini transport: {e}"))
+}
+
+/// Issue #85: classify a non-2xx Gemini status into retryable vs non-retryable.
+/// 5xx (server error) and 429 (rate-limited / overloaded) are transient — the
+/// provider is briefly unavailable and a retry after the backoff interval is
+/// expected to succeed. Any other 4xx is non-retryable: a 400/401/403 is a
+/// bad-request or auth problem the retry loop cannot fix, so it terminal's the
+/// braindump as `failed` rather than spinning forever.
+fn classify_status(status: reqwest::StatusCode, body: &str, ctx: &str) -> Error {
+    if status.as_u16() == 429 || status.is_server_error() {
+        Error::TransientLlm(format!("{ctx} {status}: {body}"))
+    } else {
+        Error::Internal(format!("{ctx} {status}: {body}"))
+    }
 }
 
 #[derive(Deserialize)]

@@ -38,11 +38,27 @@ pub enum Error {
 
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// Issue #85: a transient (retryable) failure from the LLM/embedding
+    /// provider — Gemini 5xx, overload, rate-limit (429), or a transport
+    /// error. The ingest background task retries these on a fixed interval;
+    /// they never terminal a braindump. Maps to 503 on the (rare) HTTP path.
+    #[error("transient llm error: {0}")]
+    TransientLlm(String),
 }
 
 impl Error {
     pub fn internal(msg: impl Into<String>) -> Self {
         Error::Internal(msg.into())
+    }
+
+    /// Issue #85: whether this error is a transient (retryable) LLM/embedding
+    /// provider failure — Gemini 5xx / overloaded / rate-limited / transport.
+    /// Only transient errors are retried by the ingest background task;
+    /// non-retryable errors (malformed response, logic errors) terminal the
+    /// braindump as `failed`.
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Error::TransientLlm(_))
     }
 }
 
@@ -62,6 +78,7 @@ impl IntoResponse for Error {
             Error::WebAuthn(_) => StatusCode::BAD_REQUEST,
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
             Error::Forbidden => StatusCode::FORBIDDEN,
+            Error::TransientLlm(_) => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let body = Json(json!({ "error": self.to_string() }));

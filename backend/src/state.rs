@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::auth::AuthService;
+use crate::braindump::IngestRunner;
 use crate::config::Config;
 use crate::db::Db;
 use crate::graph_repo::{GraphRepo, SqliteGraphRepo};
@@ -20,6 +21,13 @@ pub struct AppState {
     pub auth: AuthService,
     pub log_buffer: LogBuffer,
     pub refactor_runner: RefactorRunner,
+    /// Issue #84: fire-and-forget ingest. The submit route persists the
+    /// verbatim and hands the braindump id to this runner; the clean →
+    /// extract → accrete pipeline runs out-of-band (mirroring the ontology
+    /// refactor's `RefactorRunner`). Production wires the spawned runner;
+    /// `for_tests` wires the inline runner so existing ingest tests stay
+    /// deterministic without awaiting.
+    pub ingest_runner: IngestRunner,
     /// The graph-repository seam (issue #44): every graph read goes through
     /// this trait so call sites depend on the interface, not the storage
     /// adapter. Production wires `SqliteGraphRepo`; tests may swap in the
@@ -51,6 +59,7 @@ impl AppState {
             auth: AuthService::new(webauthn),
             log_buffer: LogBuffer::with_default_capacity(),
             refactor_runner: RefactorRunner::new(),
+            ingest_runner: IngestRunner::new_inline(),
             graph_repo,
         }
     }
