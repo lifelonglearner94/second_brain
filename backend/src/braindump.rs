@@ -14,10 +14,12 @@
 //! [`crate::graph::ingest_extraction`] (identity + provenance + type history +
 //! embeddings, ADR-0001/0002/0003/0010).
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::graph::{self, IngestOutcome};
 use crate::graph_repo::{GraphRepo, SqliteGraphRepo};
 use crate::llm::Llm;
@@ -139,6 +141,198 @@ async fn accrete(
         extraction,
     )
     .await
+}
+
+// --- Issue #84/#85: async fire-and-forget ingest with background processing ---
+
+/// Persist a new braindump's verbatim immediately and return right away — the
+/// HTTP request completes in milliseconds, independent of Gemini availability
+/// (issue #84). The cleaned rendering is stored empty (`""`) as a placeholder;
+/// the clean → extract → accrete pipeline runs in a background task
+/// ([`IngestRunner`]) that later updates `cleaned` and accretes the graph.
+/// The row is `ingest_status = 'pending'` by the column default so the
+/// startup recovery scan can resume it if the backend restarts mid-processing.
+pub async fn submit_braindump(db: &Db, user_id: &str, verbatim: &str) -> Result<Braindump> {
+    insert_braindump(db, user_id, verbatim, "").await
+}
+
+/// Run one attempt of the clean → extract → accrete pipeline against an
+/// already-persisted braindump (issue #84). This is the background task's
+/// single-attempt unit — the [`IngestRunner`] decides whether to retry on
+/// failure. Loads the braindump, cleans the verbatim via the LLM seam,
+/// overwrites the cleaned rendering in place (verbatim + created_at
+/// untouched), then runs extraction + atomic accretion. Idempotent over a
+/// completed braindump: a row already `complete` is a no-op (the edit path
+/// re-extracts via [`ingest_edit`], not here).
+pub async fn process_ingest_once(
+    db: &Db,
+    user_id: &str,
+    llm: &dyn Llm,
+    braindump_id: i64,
+) -> Result<IngestOutcome> {
+    let braindump = get_braindump(db, user_id, braindump_id)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("braindump {braindump_id} not found")))?;
+    // Idempotent guard: a braindump the background task already finished is
+    // not re-processed (a restart recovery scan may pick it up again).
+    if let Some(state) = crate::db::get_ingest_state(db, user_id, braindump_id).await? {
+        if state.status == "complete" {
+            return Ok(IngestOutcome::default());
+        }
+    }
+    let cleaned = llm.clean(&braindump.verbatim).await?;
+    let updated = overwrite_verbatim(db, user_id, braindump_id, &braindump.verbatim, &cleaned)
+        .await?
+        .ok_or_else(|| Error::internal("braindump vanished mid-ingest"))?;
+    accrete(db, user_id, llm, &updated).await
+}
+
+/// The background ingest task (issue #84). Attempts [`process_ingest_once`];
+/// on success, marks the braindump `complete` and logs the accretion outcome
+/// (concepts/edges created, etc.) through the existing tracing facility (the
+/// admin log buffer picks it up via `LogBufferLayer`). On failure, logs the
+/// error and leaves the braindump `pending` so the startup recovery scan
+/// resumes it on the next restart — a restart mid-processing does not strand
+/// the braindump. (The automatic in-flight retry loop for transient failures
+/// is issue #85.)
+async fn run_ingest_loop(db: &Db, llm: &dyn Llm, user_id: &str, braindump_id: i64) {
+    let attempts = match crate::db::get_ingest_state(db, user_id, braindump_id).await {
+        Ok(Some(s)) => s.attempts + 1,
+        Ok(None) => {
+            tracing::warn!(braindump_id, "ingest: braindump vanished, aborting");
+            return;
+        }
+        Err(e) => {
+            tracing::error!(braindump_id, error = %e, "ingest: status read failed, aborting");
+            return;
+        }
+    };
+    match process_ingest_once(db, user_id, llm, braindump_id).await {
+        Ok(outcome) => {
+            let _ =
+                crate::db::set_ingest_status(db, user_id, braindump_id, "complete", attempts).await;
+            tracing::info!(
+                braindump_id,
+                attempt = attempts,
+                created = outcome.concepts_created,
+                accreted = outcome.concepts_accreted,
+                suggestions = outcome.merge_suggestions,
+                edges_created = outcome.edges_created,
+                edges_accreted = outcome.edges_accreted,
+                edges_rejected = outcome.edges_rejected,
+                "ingest: clean → extract → accrete complete"
+            );
+        }
+        Err(e) => {
+            // Issue #84: a failed attempt leaves the braindump `pending` so the
+            // startup recovery scan resumes it on the next restart.
+            tracing::error!(
+                braindump_id,
+                attempt = attempts,
+                error = %e,
+                "ingest attempt failed; braindump left pending for recovery scan"
+            );
+        }
+    }
+}
+
+/// A handle to the in-flight ingest tasks spawned by the submit route, so
+/// tests can await them deterministically without sleeping. Mirrors the
+/// ontology refactor's [`RefactorRunner`](crate::ontology::RefactorRunner)
+/// pattern (issue #84 follows #9's background-spawn shape): production fires
+/// and forgets via `tokio::spawn`; the `JoinHandle` is tracked on the runner
+/// so tests can drain it.
+///
+/// `inline` mode (test-only): the loop runs to completion inside `spawn`
+/// before it returns, so a test's submit handler returns only once the
+/// pipeline has committed — existing ingest tests stay deterministic without
+/// each calling [`await_pending_ingests`]. `AppState::for_tests` wires inline
+/// mode; production wires the spawned mode. The pipeline function
+/// ([`process_ingest_once`]) is identical in both.
+///
+/// Uses `std::sync::Mutex` (not `tokio::sync::Mutex`) because the lock is only
+/// held briefly to push a `JoinHandle` and never across an `.await`.
+#[derive(Clone)]
+pub struct IngestRunner {
+    inner: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    inline: bool,
+}
+
+impl Default for IngestRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IngestRunner {
+    /// Production runner: `spawn` fires-and-forgets via `tokio::spawn`.
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(std::sync::Mutex::new(Vec::new())),
+            inline: false,
+        }
+    }
+
+    /// Test runner: `spawn` runs the loop inline (awaited) so the submit
+    /// handler returns only after the pipeline commits — deterministic without
+    /// `await_pending_ingests`. No `JoinHandle` is tracked (the work is done).
+    pub fn new_inline() -> Self {
+        Self {
+            inner: Arc::new(std::sync::Mutex::new(Vec::new())),
+            inline: true,
+        }
+    }
+
+    /// Spawn the background ingest for one braindump. The submit route calls
+    /// this and returns immediately (production); inline mode awaits the loop
+    /// so tests are deterministic. `user_id` scopes the accretion to the
+    /// calling user's graph (issue #72).
+    pub async fn spawn(&self, db: Db, llm: Arc<dyn Llm>, user_id: String, braindump_id: i64) {
+        if self.inline {
+            run_ingest_loop(&db, llm.as_ref(), &user_id, braindump_id).await;
+        } else {
+            let handle = tokio::spawn(async move {
+                run_ingest_loop(&db, llm.as_ref(), &user_id, braindump_id).await;
+            });
+            if let Ok(mut guard) = self.inner.lock() {
+                guard.push(handle);
+            }
+        }
+    }
+
+    /// Await every in-flight ingest (test-only seam — production never waits
+    /// on the background job). Drains the tracked `JoinHandle`s.
+    pub async fn await_all(&self) {
+        let handles = {
+            let mut guard = self.inner.lock().expect("ingest runner mutex poisoned");
+            std::mem::take(&mut *guard)
+        };
+        for h in handles {
+            let _ = h.await;
+        }
+    }
+}
+
+/// Test seam: await every in-flight ingest spawned by the submit route on this
+/// state. Production code never calls this — the ingest runs out-of-band.
+pub async fn await_pending_ingests(state: &crate::state::AppState) {
+    state.ingest_runner.await_all().await;
+}
+
+/// The startup recovery scan (issue #84): pick up every braindump left
+/// `pending` (mid-processing) and re-spawn its background ingest so a restart
+/// does not strand it. Returns the count resumed. Production calls this from
+/// `main` before serving; tests call it to drive the recovery scan
+/// synchronously against an inline runner.
+pub async fn recover_pending(db: &Db, llm: &Arc<dyn Llm>, runner: &IngestRunner) -> Result<usize> {
+    let pending = crate::db::list_pending_ingests(db).await?;
+    let count = pending.len();
+    for (user_id, braindump_id) in pending {
+        runner
+            .spawn(db.clone(), llm.clone(), user_id, braindump_id)
+            .await;
+    }
+    Ok(count)
 }
 
 #[cfg(test)]

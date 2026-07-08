@@ -127,7 +127,14 @@ fn app_with_recording_llm(db: Db) -> (axum::Router, Arc<AtomicUsize>) {
 }
 
 #[tokio::test]
-async fn submit_stores_verbatim_cleaned_and_timestamp() {
+async fn submit_persists_verbatim_immediately_with_placeholder_cleaned() {
+    // Issue #84: submit is fire-and-forget. The verbatim is persisted
+    // immediately and the response returns right away with an empty
+    // (placeholder) cleaned rendering — the LLM cleaning runs in the
+    // background. The response still carries id + created_at so the UI can
+    // confirm the submit landed; the cleaned rendering lands once the
+    // background task commits (here it runs inline via the test runner, so a
+    // subsequent GET sees it).
     let db = Db::open_in_memory().unwrap();
     let cookie = session_cookie(&db).await;
     let app = routes::router(AppState::for_tests(db));
@@ -136,8 +143,26 @@ async fn submit_stores_verbatim_cleaned_and_timestamp() {
     let id = body["id"].as_i64().expect("id present");
     assert!(id > 0, "id is a positive surrogate: {body}");
     assert_eq!(body["verbatim"].as_str().unwrap(), VERBATIM);
-    assert_eq!(body["cleaned"].as_str().unwrap(), CLEANED);
+    assert_eq!(
+        body["cleaned"].as_str().unwrap(),
+        "",
+        "submit response carries a placeholder cleaned rendering (background task not on the request path)"
+    );
     assert!(body["created_at"].as_i64().unwrap() > 0, "timestamp set");
+
+    // The background ingest ran (inline in tests); a GET now returns the
+    // LLM-cleaned rendering populated out-of-band.
+    let (status, body) = do_request(
+        &app,
+        "GET",
+        &format!("/braindumps/{id}"),
+        None,
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "read: {body}");
+    assert_eq!(body["verbatim"].as_str().unwrap(), VERBATIM);
+    assert_eq!(body["cleaned"].as_str().unwrap(), CLEANED);
 }
 
 #[tokio::test]

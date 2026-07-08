@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use rusqlite::auto_extension::RawAutoExtension;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::{Error, Result};
 
@@ -237,17 +237,47 @@ fn migrate(conn: &Connection) -> Result<()> {
     // overwritable only for error-correction), cleaned (LLM-produced rendering
     // shown by default), and created_at (the original submit instant — edits
     // overwrite in place but never bump the timestamp).
+    //
+    // Issue #84/#85 — async fire-and-forget ingest. `ingest_status` tracks
+    // where a braindump sits in the clean → extract → accrete pipeline
+    // (`pending` while the background task has not finished, `complete` once
+    // it has, `failed` on a non-retryable error). `ingest_attempts` counts
+    // processing attempts (transient failures retry on a fixed interval);
+    // `last_attempt_at` records the most recent attempt for the retry
+    // scheduler. A fresh submit is `pending` with zero attempts — the
+    // verbatim is persisted immediately and the HTTP request returns before
+    // the pipeline runs (ADR-0007; the pipeline runs out-of-band).
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS braindumps (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id     TEXT NOT NULL REFERENCES users(id),
-            verbatim    TEXT NOT NULL,
-            cleaned     TEXT NOT NULL,
-            created_at  INTEGER NOT NULL
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         TEXT NOT NULL REFERENCES users(id),
+            verbatim        TEXT NOT NULL,
+            cleaned         TEXT NOT NULL,
+            created_at      INTEGER NOT NULL,
+            ingest_status   TEXT NOT NULL DEFAULT 'pending',
+            ingest_attempts INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at INTEGER
         );",
     )?;
     add_column_if_missing(conn, "braindumps", "user_id", "TEXT")?;
     backfill_user_id(conn, "braindumps")?;
+    // Issue #84/#85 — forward-only: existing braindumps (fully ingested under
+    // the old synchronous path) are marked `complete` so the startup recovery
+    // scan does not re-process them; a fresh DB seeds the column at `pending`.
+    add_column_if_missing(
+        conn,
+        "braindumps",
+        "ingest_status",
+        "TEXT NOT NULL DEFAULT 'pending'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "braindumps",
+        "ingest_attempts",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(conn, "braindumps", "last_attempt_at", "INTEGER")?;
+    backfill_ingest_status_complete(conn)?;
 
     // Issue #3 + #72 — the governed edge-type vocabulary (ontology), now
     // per-user. Fresh DBs create the table with `user_id` and a
@@ -433,6 +463,19 @@ fn backfill_user_id(conn: &Connection, table: &str) -> Result<()> {
     conn.execute(
         &format!("UPDATE {table} SET user_id = ?1 WHERE user_id IS NULL"),
         params![BOOTSTRAP_ADMIN_USER_ID],
+    )?;
+    Ok(())
+}
+
+/// Mark every existing braindump `ingest_status = 'complete'` where the column
+/// is NULL (issue #84/#85 forward-only migration). Existing braindumps were
+/// fully ingested under the old synchronous path, so the startup recovery scan
+/// must not re-process them. Idempotent — rows already carrying a status are
+/// untouched. Runs only when the `ingest_status` column was just added.
+fn backfill_ingest_status_complete(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "UPDATE braindumps SET ingest_status = 'complete' WHERE ingest_status IS NULL",
+        [],
     )?;
     Ok(())
 }
@@ -668,6 +711,94 @@ pub(crate) fn ensure_vec_tables(conn: &Connection, dim: usize) -> Result<()> {
     );
     conn.execute_batch(&ddl)?;
     Ok(())
+}
+
+// --- Issue #84/#85: ingest-status bookkeeping for async fire-and-forget ---
+//
+// These are pipeline-tracking queries (not graph read-model queries), so they
+// live here as free functions against `Db::with_conn` — the same shape as
+// `seed_ontology_for_user`. The graph read/write surface stays behind the
+// [`GraphRepo`](crate::graph_repo::GraphRepo) trait; ingest status is a
+// braindump-row column owned by the ingest pipeline.
+
+/// The pipeline state of a braindump's background ingest (issue #84/#85).
+/// `pending` = the clean → extract → accrete task has not finished (initial
+/// submit, or awaiting retry after a transient failure); `complete` = the
+/// pipeline finished and the cleaned rendering + concepts + edges landed;
+/// `failed` = a non-retryable error terminal'd the braindump.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngestState {
+    pub status: String,
+    pub attempts: i64,
+    pub last_attempt_at: Option<i64>,
+}
+
+/// Look up a braindump's ingest state. `None` if no row matches.
+pub async fn get_ingest_state(db: &Db, user_id: &str, id: i64) -> Result<Option<IngestState>> {
+    let user_id = user_id.to_string();
+    db.with_conn(move |conn| {
+        let row = conn
+            .query_row(
+                "SELECT ingest_status, ingest_attempts, last_attempt_at
+                 FROM braindumps WHERE user_id = ?1 AND id = ?2",
+                params![user_id, id],
+                |r| {
+                    Ok(IngestState {
+                        status: r.get::<_, String>(0)?,
+                        attempts: r.get::<_, i64>(1)?,
+                        last_attempt_at: r.get::<_, Option<i64>>(2)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    })
+    .await
+}
+
+/// Set a braindump's `ingest_status`, bump `ingest_attempts`, and stamp
+/// `last_attempt_at` to now. Called by the background ingest task: `complete`
+/// on success, `failed` on a non-retryable error. A transient failure leaves
+/// the braindump `pending` (the retry loop re-attempts) — the caller passes
+/// `pending` + the prior attempt count so the row records the attempt without
+/// terminaling.
+pub async fn set_ingest_status(
+    db: &Db,
+    user_id: &str,
+    id: i64,
+    status: &str,
+    attempts: i64,
+) -> Result<()> {
+    let user_id = user_id.to_string();
+    let status = status.to_string();
+    db.with_conn(move |conn| {
+        conn.execute(
+            "UPDATE braindumps
+             SET ingest_status = ?1, ingest_attempts = ?2, last_attempt_at = ?3
+             WHERE user_id = ?4 AND id = ?5",
+            params![status, attempts, now_seconds(), user_id, id],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+/// Every `(user_id, braindump_id)` still `pending` ingest, across all users.
+/// The startup recovery scan (issue #84) drains this so a restart mid-
+/// processing does not strand a braindump; the retry scheduler (issue #85)
+/// re-runs against the same set.
+pub async fn list_pending_ingests(db: &Db) -> Result<Vec<(String, i64)>> {
+    db.with_conn(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT user_id, id FROM braindumps
+             WHERE ingest_status = 'pending' ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    })
+    .await
 }
 
 #[cfg(test)]
