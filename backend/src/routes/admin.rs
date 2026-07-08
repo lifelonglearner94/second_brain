@@ -38,7 +38,9 @@ pub struct LogsResponse {
 }
 
 /// `GET /admin/logs` — return up to `?limit` (default 200, capped at capacity)
-/// most-recent structured log entries, oldest-first. Auth-gated upstream.
+/// most-recent structured log entries, newest-first. Newest-first so the admin
+/// tab's top-down list shows the freshest state at the top without scrolling
+/// past stale history. Auth-gated upstream.
 pub async fn logs(
     State(state): State<AppState>,
     Query(query): Query<LogsQuery>,

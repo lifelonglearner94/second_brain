@@ -61,11 +61,15 @@ impl LogBuffer {
         buf.push_back(entry);
     }
 
-    /// Up to `limit` most-recent entries, oldest-first (chronological order).
+    /// Up to `limit` most-recent entries, newest-first (reverse-chronological
+    /// order). The admin tab is a live tail viewed top-down: the freshest entry
+    /// must sit at the top of the list so the operator sees current state
+    /// without scrolling past stale history. Iterating from the back of the
+    /// deque and taking `limit` yields exactly the newest `min(limit, len)`
+    /// entries in newest-first order.
     pub fn recent(&self, limit: usize) -> Vec<LogEntry> {
         let buf = self.inner.lock().expect("log buffer mutex poisoned");
-        let start = buf.len().saturating_sub(limit);
-        buf.iter().skip(start).cloned().collect()
+        buf.iter().rev().take(limit).cloned().collect()
     }
 
     pub fn len(&self) -> usize {
@@ -205,8 +209,13 @@ mod tests {
         // Only the last `capacity` entries survive; the oldest are evicted.
         let recent = buf.recent(usize::MAX);
         assert_eq!(recent.len(), 3, "bounded to capacity: {recent:?}");
-        assert_eq!(recent[0].message, "e2", "oldest evicted first");
-        assert_eq!(recent[2].message, "e4", "newest is last (chronological)");
+        // Newest-first: the freshest surviving entry is first, the oldest
+        // surviving entry is last.
+        assert_eq!(recent[0].message, "e4", "newest is first (reverse-chrono)");
+        assert_eq!(
+            recent[2].message, "e2",
+            "oldest evicted, oldest survivor last"
+        );
     }
 
     #[test]
@@ -217,8 +226,9 @@ mod tests {
         }
         let recent = buf.recent(2);
         assert_eq!(recent.len(), 2);
-        assert_eq!(recent[0].message, "e2");
-        assert_eq!(recent[1].message, "e3");
+        // Newest-first: the two freshest entries, newest before older.
+        assert_eq!(recent[0].message, "e3");
+        assert_eq!(recent[1].message, "e2");
     }
 
     #[test]

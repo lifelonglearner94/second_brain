@@ -155,11 +155,14 @@ async fn admin_logs_returns_recent_entries_when_authed() {
         "capacity surfaced for the admin tab"
     );
     let logs = body["logs"].as_array().expect("logs is an array");
-    assert_eq!(logs[0]["message"], "generation failed");
-    assert_eq!(logs[0]["level"], "ERROR");
+    // Newest-first (reverse-chronological): the freshest push ("retrying") is
+    // first, the older push ("generation failed") is second. The admin tab's
+    // top-down list shows current state at the top, not stale history.
+    assert_eq!(logs[0]["message"], "retrying");
+    assert_eq!(logs[0]["level"], "WARN");
     assert_eq!(logs[0]["fields"]["status"], 503);
-    assert_eq!(logs[1]["message"], "retrying");
-    assert_eq!(logs[1]["level"], "WARN");
+    assert_eq!(logs[1]["message"], "generation failed");
+    assert_eq!(logs[1]["level"], "ERROR");
 }
 
 #[tokio::test]
@@ -182,7 +185,54 @@ async fn admin_logs_limit_bounds_the_response() {
     assert_eq!(status, StatusCode::OK, "?limit fetch: {body}");
     assert_eq!(body["count"], 2, "limit caps the returned count");
     let logs = body["logs"].as_array().unwrap();
-    // Newest two only, oldest-first (chronological).
-    assert_eq!(logs[0]["message"], "e3");
-    assert_eq!(logs[1]["message"], "e4");
+    // Newest two only, newest-first (reverse-chronological).
+    assert_eq!(logs[0]["message"], "e4");
+    assert_eq!(logs[1]["message"], "e3");
+}
+
+/// Regression for issue #80: the admin tab must show a full, recent tail of
+/// the ring buffer — newest-first and complete up to the default cap — not a
+/// handful of stale entries. Pushing more than the default limit (200) and
+/// fetching with no `?limit` must return exactly the default limit, with the
+/// freshest entry at index 0 and the (limit-th) newest at the tail. This is
+/// the backend half of the end-to-end fix; the frontend half stops colliding
+/// `{#each}` keys from collapsing the rendered list.
+#[tokio::test]
+async fn admin_logs_returns_full_newest_first_tail_up_to_default_cap() {
+    let db = Db::open(":memory:").unwrap();
+    let state = AppState::for_tests(db);
+    // Push more than the default limit so the cap is exercised. Distinct
+    // messages let the assertions pin ordering precisely.
+    for i in 0..250 {
+        state.log_buffer.push(entry(&format!("e{i}"), "INFO"));
+    }
+    let app = routes::router(state);
+    let cookie = register_and_login(&app).await;
+
+    let (status, body, _) = do_request(
+        &app,
+        "GET",
+        "/admin/logs",
+        Some((Value::Null, Some(cookie))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "default fetch: {body}");
+    assert_eq!(body["count"], 200, "default limit caps the returned count");
+    assert_eq!(
+        body["capacity"], 1_000,
+        "capacity still surfaced alongside the capped tail"
+    );
+    let logs = body["logs"].as_array().expect("logs is an array");
+    assert_eq!(
+        logs.len(),
+        200,
+        "the full default tail is returned, not a handful"
+    );
+    // Newest-first: e249 (the last push) is at the top; e50 is the oldest in
+    // the capped window of 200 (250 pushed, newest 200 = e50..e249).
+    assert_eq!(logs[0]["message"], "e249", "freshest entry is first");
+    assert_eq!(
+        logs[199]["message"], "e50",
+        "oldest entry in the capped window is last"
+    );
 }
