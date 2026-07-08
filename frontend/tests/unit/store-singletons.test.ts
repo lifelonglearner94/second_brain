@@ -17,6 +17,10 @@ import {
 	housekeeping
 } from '../../src/lib/state/housekeeping.svelte';
 import { GraphStore, graphStore } from '../../src/lib/state/graph.svelte';
+import {
+	AdminSystemStore,
+	adminSystem
+} from '../../src/lib/state/admin-system.svelte';
 
 describe('store singletons — one shared instance exported from each store module (the spatial-graph pattern)', () => {
 	it('adminLogs is the shared AdminLogStore singleton exported by the store module', () => {
@@ -43,6 +47,10 @@ describe('store singletons — one shared instance exported from each store modu
 		expect(graphStore).toBeInstanceOf(GraphStore);
 	});
 
+	it('adminSystem is the shared AdminSystemStore singleton exported by the store module', () => {
+		expect(adminSystem).toBeInstanceOf(AdminSystemStore);
+	});
+
 	it('each singleton is the same instance across re-imports (module-cached, not a fresh one per import)', async () => {
 		const reloaded = await Promise.all([
 			import('../../src/lib/state/admin-logs.svelte'),
@@ -50,7 +58,8 @@ describe('store singletons — one shared instance exported from each store modu
 			import('../../src/lib/state/pending-captures.svelte'),
 			import('../../src/lib/state/endorsement-queue.svelte'),
 			import('../../src/lib/state/housekeeping.svelte'),
-			import('../../src/lib/state/graph.svelte')
+			import('../../src/lib/state/graph.svelte'),
+			import('../../src/lib/state/admin-system.svelte')
 		]);
 		expect(reloaded[0].adminLogs).toBe(adminLogs);
 		expect(reloaded[1].session).toBe(session);
@@ -58,5 +67,6 @@ describe('store singletons — one shared instance exported from each store modu
 		expect(reloaded[3].endorsementQueue).toBe(endorsementQueue);
 		expect(reloaded[4].housekeeping).toBe(housekeeping);
 		expect(reloaded[5].graphStore).toBe(graphStore);
+		expect(reloaded[6].adminSystem).toBe(adminSystem);
 	});
 });

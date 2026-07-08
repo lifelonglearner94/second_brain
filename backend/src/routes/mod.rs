@@ -55,7 +55,8 @@ pub fn router(state: AppState) -> Router {
     // type + current Louvain partition IDs, ADR-0003/0008) the frontend fetches
     // wholesale on app load (issue #27); `/graph/delta` is the incremental read
     // surface for pull-on-focus reconciliation (issue #28); `/admin/logs`
-    // surfaces backend logs to the hidden admin tab; `/ontology/propose*` is
+    // surfaces backend logs to the hidden admin tab; `/admin/system` surfaces
+    // live host load (CPU/RAM/disk) to the admin system tab (#81); `/ontology/propose*` is
     // the governance queue (ADR-0003) — propose/approve/reject edge types and
     // trigger the async refactor.
     let protected_routes: Router<AppState> = Router::new()
@@ -90,6 +91,7 @@ pub fn router(state: AppState) -> Router {
         .route("/graph", get(snapshot::topology_snapshot))
         .route("/graph/delta", get(delta::graph_delta))
         .route("/admin/logs", get(admin::logs))
+        .route("/admin/system", get(admin::system))
         .route("/ontology", get(ontology::ontology))
         .route("/ontology/propose", post(ontology::propose))
         .route("/ontology/proposals", get(ontology::proposals))

@@ -34,6 +34,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 petgraph = "0.8"
 rusqlite = { version = "0.40", features = ["bundled"] }
 sqlite-vec = "0.1"
+# Host metrics (CPU/RAM/disk) for the admin system-load endpoint (#81).
+# Cross-platform so the operator reads load from the phone without SSH.
+sysinfo = "0.39"
 webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
 webauthn-rs-proto = "0.5"
 
