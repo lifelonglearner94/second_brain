@@ -18,6 +18,11 @@ pub struct Config {
     pub webauthn_rp_origin: String,
     /// Human-friendly relying-party name shown to the user by authenticators.
     pub webauthn_rp_name: String,
+    /// Issue #85: seconds between ingest retry attempts after a transient
+    /// (Gemini 5xx / rate-limited / transport) failure. ~3 minutes keeps the
+    /// retry off the hot path while an overloaded provider recovers; the
+    /// startup recovery scan ignores the interval and attempts immediately.
+    pub ingest_retry_interval_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +55,10 @@ impl Config {
             webauthn_rp_name: env::var("WEBAUTHN_RP_NAME")
                 .unwrap_or_else(|_| "Second Brain".to_string()),
             log_format,
+            ingest_retry_interval_secs: env::var("INGEST_RETRY_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(180),
         }
     }
 
@@ -63,6 +72,10 @@ impl Config {
             webauthn_rp_id: "localhost".to_string(),
             webauthn_rp_origin: "http://localhost:8080".to_string(),
             webauthn_rp_name: "Second Brain (test)".to_string(),
+            // Zero so the inline-test runner (and any retry test using the
+            // default) never blocks on a sleep — the FakeLlm seam succeeds on
+            // the first attempt, so the loop exits immediately.
+            ingest_retry_interval_secs: 0,
         }
     }
 }

@@ -68,6 +68,7 @@ pub async fn submit(
         .spawn(
             state.db.clone(),
             state.llm.clone(),
+            state.config.clone(),
             session.user_id.clone(),
             braindump.id,
         )

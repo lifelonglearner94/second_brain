@@ -187,51 +187,95 @@ pub async fn process_ingest_once(
     accrete(db, user_id, llm, &updated).await
 }
 
-/// The background ingest task (issue #84). Attempts [`process_ingest_once`];
-/// on success, marks the braindump `complete` and logs the accretion outcome
-/// (concepts/edges created, etc.) through the existing tracing facility (the
-/// admin log buffer picks it up via `LogBufferLayer`). On failure, logs the
-/// error and leaves the braindump `pending` so the startup recovery scan
-/// resumes it on the next restart — a restart mid-processing does not strand
-/// the braindump. (The automatic in-flight retry loop for transient failures
-/// is issue #85.)
-async fn run_ingest_loop(db: &Db, llm: &dyn Llm, user_id: &str, braindump_id: i64) {
-    let attempts = match crate::db::get_ingest_state(db, user_id, braindump_id).await {
-        Ok(Some(s)) => s.attempts + 1,
-        Ok(None) => {
-            tracing::warn!(braindump_id, "ingest: braindump vanished, aborting");
-            return;
-        }
-        Err(e) => {
-            tracing::error!(braindump_id, error = %e, "ingest: status read failed, aborting");
-            return;
-        }
-    };
-    match process_ingest_once(db, user_id, llm, braindump_id).await {
-        Ok(outcome) => {
-            let _ =
-                crate::db::set_ingest_status(db, user_id, braindump_id, "complete", attempts).await;
-            tracing::info!(
-                braindump_id,
-                attempt = attempts,
-                created = outcome.concepts_created,
-                accreted = outcome.concepts_accreted,
-                suggestions = outcome.merge_suggestions,
-                edges_created = outcome.edges_created,
-                edges_accreted = outcome.edges_accreted,
-                edges_rejected = outcome.edges_rejected,
-                "ingest: clean → extract → accrete complete"
-            );
-        }
-        Err(e) => {
-            // Issue #84: a failed attempt leaves the braindump `pending` so the
-            // startup recovery scan resumes it on the next restart.
-            tracing::error!(
-                braindump_id,
-                attempt = attempts,
-                error = %e,
-                "ingest attempt failed; braindump left pending for recovery scan"
-            );
+/// The background ingest retry loop (issue #84/#85). Attempts
+/// [`process_ingest_once`]; on success, marks the braindump `complete` and
+/// logs the accretion outcome (concepts/edges created, etc.) through the
+/// existing tracing facility (the admin log buffer picks it up via
+/// `LogBufferLayer`). On a transient failure (Gemini 5xx / rate-limited /
+/// transport — [`Error::is_transient`]), the braindump stays `pending`, the
+/// attempt is logged, and the loop backs off for `config.ingest_retry_interval`
+/// before retrying — so a transiently-failed braindump eventually enters the
+/// graph without user interaction. On a non-retryable failure (malformed
+/// response, logic error), the braindump is terminal'd as `failed` and the
+/// loop exits (it surfaces in the admin logs; it is not retried forever). One
+/// loop == one braindump, so retry scheduling never piles up concurrent
+/// attempts for the same braindump.
+async fn run_ingest_loop(
+    db: &Db,
+    llm: &dyn Llm,
+    config: &crate::config::Config,
+    user_id: &str,
+    braindump_id: i64,
+) {
+    loop {
+        let attempts = match crate::db::get_ingest_state(db, user_id, braindump_id).await {
+            Ok(Some(s)) => s.attempts + 1,
+            Ok(None) => {
+                tracing::warn!(braindump_id, "ingest: braindump vanished, aborting");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(braindump_id, error = %e, "ingest: status read failed, aborting");
+                return;
+            }
+        };
+        match process_ingest_once(db, user_id, llm, braindump_id).await {
+            Ok(outcome) => {
+                let _ =
+                    crate::db::set_ingest_status(db, user_id, braindump_id, "complete", attempts)
+                        .await;
+                tracing::info!(
+                    braindump_id,
+                    attempt = attempts,
+                    created = outcome.concepts_created,
+                    accreted = outcome.concepts_accreted,
+                    suggestions = outcome.merge_suggestions,
+                    edges_created = outcome.edges_created,
+                    edges_accreted = outcome.edges_accreted,
+                    edges_rejected = outcome.edges_rejected,
+                    "ingest: clean → extract → accrete complete"
+                );
+                return;
+            }
+            Err(e) => {
+                let transient = e.is_transient();
+                tracing::warn!(
+                    braindump_id,
+                    attempt = attempts,
+                    error = %e,
+                    transient,
+                    "ingest attempt failed"
+                );
+                if transient {
+                    // Stay `pending` so the recovery scan + retry loop resume
+                    // it; record the attempt + last_attempt_at.
+                    let _ = crate::db::set_ingest_status(
+                        db,
+                        user_id,
+                        braindump_id,
+                        "pending",
+                        attempts,
+                    )
+                    .await;
+                    let interval =
+                        std::time::Duration::from_secs(config.ingest_retry_interval_secs);
+                    if !interval.is_zero() {
+                        tokio::time::sleep(interval).await;
+                    }
+                    continue;
+                }
+                // Non-retryable: terminal the braindump so it is not retried
+                // indefinitely; surface in the admin logs.
+                let _ = crate::db::set_ingest_status(db, user_id, braindump_id, "failed", attempts)
+                    .await;
+                tracing::error!(
+                    braindump_id,
+                    attempt = attempts,
+                    error = %e,
+                    "ingest: non-retryable failure, braindump marked failed"
+                );
+                return;
+            }
         }
     }
 }
@@ -287,12 +331,19 @@ impl IngestRunner {
     /// this and returns immediately (production); inline mode awaits the loop
     /// so tests are deterministic. `user_id` scopes the accretion to the
     /// calling user's graph (issue #72).
-    pub async fn spawn(&self, db: Db, llm: Arc<dyn Llm>, user_id: String, braindump_id: i64) {
+    pub async fn spawn(
+        &self,
+        db: Db,
+        llm: Arc<dyn Llm>,
+        config: Arc<crate::config::Config>,
+        user_id: String,
+        braindump_id: i64,
+    ) {
         if self.inline {
-            run_ingest_loop(&db, llm.as_ref(), &user_id, braindump_id).await;
+            run_ingest_loop(&db, llm.as_ref(), &config, &user_id, braindump_id).await;
         } else {
             let handle = tokio::spawn(async move {
-                run_ingest_loop(&db, llm.as_ref(), &user_id, braindump_id).await;
+                run_ingest_loop(&db, llm.as_ref(), &config, &user_id, braindump_id).await;
             });
             if let Ok(mut guard) = self.inner.lock() {
                 guard.push(handle);
@@ -320,16 +371,27 @@ pub async fn await_pending_ingests(state: &crate::state::AppState) {
 }
 
 /// The startup recovery scan (issue #84): pick up every braindump left
-/// `pending` (mid-processing) and re-spawn its background ingest so a restart
-/// does not strand it. Returns the count resumed. Production calls this from
-/// `main` before serving; tests call it to drive the recovery scan
-/// synchronously against an inline runner.
-pub async fn recover_pending(db: &Db, llm: &Arc<dyn Llm>, runner: &IngestRunner) -> Result<usize> {
+/// `pending` (mid-processing, or awaiting retry after a transient failure) and
+/// re-spawn its background ingest so a restart does not strand it. Returns the
+/// count resumed. Production calls this from `main` before serving; tests call
+/// it to drive the recovery scan synchronously against an inline runner.
+pub async fn recover_pending(
+    db: &Db,
+    llm: &Arc<dyn Llm>,
+    config: &Arc<crate::config::Config>,
+    runner: &IngestRunner,
+) -> Result<usize> {
     let pending = crate::db::list_pending_ingests(db).await?;
     let count = pending.len();
     for (user_id, braindump_id) in pending {
         runner
-            .spawn(db.clone(), llm.clone(), user_id, braindump_id)
+            .spawn(
+                db.clone(),
+                llm.clone(),
+                config.clone(),
+                user_id,
+                braindump_id,
+            )
             .await;
     }
     Ok(count)

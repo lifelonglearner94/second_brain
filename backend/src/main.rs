@@ -76,10 +76,11 @@ async fn main() -> anyhow::Result<()> {
     let graph_repo: Arc<dyn GraphRepo> = Arc::new(SqliteGraphRepo::new(db.clone()));
     let ingest_runner = braindump::IngestRunner::new();
     // Issue #84: startup recovery scan. Any braindump left `pending`
-    // (mid-processing) is re-spawned so a restart does not strand it. Runs
-    // before serving so the resumed pipelines are in flight by the time
-    // requests arrive; the spawned tasks commit out-of-band.
-    let resumed = braindump::recover_pending(&db, &llm, &ingest_runner)
+    // (mid-processing, or awaiting retry after a transient Gemini failure —
+    // issue #85) is re-spawned so a restart does not strand it. Runs before
+    // serving so the resumed pipelines are in flight by the time requests
+    // arrive; the spawned tasks commit out-of-band.
+    let resumed = braindump::recover_pending(&db, &llm, &Arc::new(config.clone()), &ingest_runner)
         .await
         .unwrap_or_else(|e| {
             tracing::error!(error = %e, "ingest recovery scan failed");
