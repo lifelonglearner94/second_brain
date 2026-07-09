@@ -14,6 +14,7 @@ pub mod delta;
 pub mod embedding;
 pub mod error;
 pub mod extractor;
+pub mod fallback;
 pub mod gemini;
 pub mod graph;
 pub mod graph_repo;

@@ -25,6 +25,10 @@ use crate::llm::Llm;
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_TEXT_MODEL: &str = "gemini-2.0-flash";
+/// Issue #86: default fallback text model — a lighter tier that stays within
+/// the free quota when the primary trips 429s. Configurable via
+/// `GEMINI_TEXT_MODEL_FALLBACK`.
+const DEFAULT_FALLBACK_TEXT_MODEL: &str = "gemini-3.1-flash-lite";
 const DEFAULT_EMBED_MODEL: &str = "text-embedding-004";
 
 /// Output dimensionality for a Gemini embedding model. Used to size the
@@ -113,6 +117,11 @@ pub struct GeminiClient {
 }
 
 impl GeminiClient {
+    /// The configured text model id (for startup logging). Issue #86.
+    pub fn text_model_name(&self) -> &str {
+        &self.text_model
+    }
+
     /// Build from env. `Ok(None)` if `GEMINI_API_KEY` is unset (dev/CI
     /// fallback to the fake clients). `Err` if the key is set but
     /// `GEMINI_EMBED_MODEL` is not in [`embed_dim_for`]'s table — a wrong
@@ -149,6 +158,25 @@ impl GeminiClient {
             reasoning,
             http,
         }))
+    }
+
+    /// Issue #86: build a fallback client sharing the primary's credentials,
+    /// embed config, and HTTP connection pool but with a different text model.
+    /// Clears `reasoning` — the fallback is a degraded path on a lighter model
+    /// whose thinking-budget calibration is unknown, so no `thinkingConfig` is
+    /// sent to it. The default fallback model is [`DEFAULT_FALLBACK_TEXT_MODEL`]
+    /// (`gemini-3.1-flash-lite`), overridable via `GEMINI_TEXT_MODEL_FALLBACK`.
+    pub fn fallback(&self) -> Self {
+        let text_model = std::env::var("GEMINI_TEXT_MODEL_FALLBACK")
+            .unwrap_or_else(|_| DEFAULT_FALLBACK_TEXT_MODEL.to_string());
+        Self {
+            api_key: self.api_key.clone(),
+            text_model,
+            embed_model: self.embed_model.clone(),
+            embed_dim: self.embed_dim,
+            reasoning: None,
+            http: self.http.clone(),
+        }
     }
 
     async fn generate(&self, system: &str, user: &str, mut config: Value) -> Result<String> {

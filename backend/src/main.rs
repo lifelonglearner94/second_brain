@@ -8,6 +8,7 @@ use second_brain_backend::{
     auth, braindump,
     config::{Config, LogFormat},
     db::{self, Db, BOOTSTRAP_ADMIN_USER_ID},
+    fallback::FallbackLlm,
     gemini::GeminiClient,
     graph_repo::{GraphRepo, SqliteGraphRepo},
     llm::{FakeLlm, Llm},
@@ -33,14 +34,27 @@ async fn main() -> anyhow::Result<()> {
 
     // Wire the real Gemini seam when an API key is present; otherwise fall
     // back to the fake so a dev/CI box without a key still runs (the ingest
-    // pipeline is exercised end-to-end with stub extraction/embedding). One
-    // GeminiClient implements the single LLM seam (clean, generate_pinned,
-    // synthesize, extract, embed) — issue #39 collapsed the former three
-    // traits into one, so one client (not three clones) is wired here.
+    // pipeline is exercised end-to-end with stub extraction/embedding). The
+    // single LLM seam (clean, generate_pinned, synthesize, extract, embed) —
+    // issue #39 collapsed the former three traits into one.
+    //
+    // Issue #86: the primary GeminiClient is wrapped in a circuit-breaker
+    // `FallbackLlm` so that, after 5 consecutive transient (429/5xx/transport)
+    // text-generation failures, subsequent text calls route to a fallback
+    // model (default `gemini-3.1-flash-lite`) until a cooldown expires and a
+    // half-open probe of the primary succeeds. Embeddings bypass the circuit
+    // (identity-calibrated, ADR-0001). The fallback client shares the
+    // primary's credentials/embed config/HTTP pool with only the text model
+    // swapped. ADR-0003's pinned-model determinism is an accepted, logged
+    // exception on the free tier — see the ADR's free-tier-fallback addendum.
     let llm: Arc<dyn Llm> = match GeminiClient::from_env()? {
-        Some(gemini) => {
-            tracing::info!("gemini seam wired (real Gemini LLM + extractor + embeddings)");
-            Arc::new(gemini)
+        Some(primary) => {
+            let fallback = primary.fallback();
+            tracing::info!(
+                fallback_model = %fallback.text_model_name(),
+                "gemini seam wired (primary + fallback circuit breaker)"
+            );
+            Arc::new(FallbackLlm::from_env(Arc::new(primary), Arc::new(fallback)))
         }
         None => {
             tracing::warn!(
