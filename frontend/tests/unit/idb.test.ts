@@ -37,7 +37,7 @@ beforeEach(async () => {
 	});
 });
 
-describe('idb — Global Topology Snapshot cache home', () => {
+describe('idb - Global Topology Snapshot cache home', () => {
 	it('round-trips a single cached snapshot (read cache, ADR-0005)', async () => {
 		const idb = createIdb(fakeIndexedDB);
 		await idb.saveTopologySnapshot(SNAPSHOT);
@@ -70,7 +70,7 @@ describe('idb — Global Topology Snapshot cache home', () => {
 	});
 });
 
-describe('idb — Pending Captures home (write-intent, the named exception)', () => {
+describe('idb - Pending Captures home (write-intent, the named exception)', () => {
 	it('appends a pending capture and lists captures in insertion order', async () => {
 		const idb = createIdb(fakeIndexedDB);
 		const first: PendingCapture = {

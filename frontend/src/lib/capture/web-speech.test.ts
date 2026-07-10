@@ -28,7 +28,7 @@ function transcribe(events: WebSpeechEventView[]): string {
 	return out.join(' ');
 }
 
-describe('consumeFinalResults — Web Speech final-result dedup (issue #83)', () => {
+describe('consumeFinalResults - Web Speech final-result dedup (issue #83)', () => {
 	it('emits each final result exactly once in a normal stream', () => {
 		const text = transcribe([
 			event(0, [{ isFinal: true, transcript: 'ja' }]),
@@ -110,7 +110,7 @@ describe('consumeFinalResults — Web Speech final-result dedup (issue #83)', ()
 		for (const c of r.chunks) out.push(c);
 		expect(out).toEqual(['und']);
 
-		// index 0 now becomes final — must be emitted exactly once
+		// index 0 now becomes final - must be emitted exactly once
 		r = consumeFinalResults(
 			event(0, [
 				{ isFinal: true, transcript: 'ja' },

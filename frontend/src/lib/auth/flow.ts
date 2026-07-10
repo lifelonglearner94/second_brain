@@ -31,7 +31,7 @@ export type RecoverApi = {
  * exception. Pass an admin-issued `invite` token; when the bootstrap exception
  * is open (zero users) the backend ignores the token, otherwise it is required
  * and must be valid + unconsumed. Registration mints a session (the backend
- * sets the cookie), so on success the caller is authenticated — the resolved
+ * sets the cookie), so on success the caller is authenticated - the resolved
  * `user_id` is returned so the caller can update session state and navigate.
  */
 export async function registerPasskey(

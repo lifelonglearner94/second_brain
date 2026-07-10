@@ -31,7 +31,7 @@ const SNAPSHOT: GlobalTopologySnapshot = {
 	]
 };
 
-describe('buildSpatialViewGraph — the canonical graphology Spatial View-Graph', () => {
+describe('buildSpatialViewGraph - the canonical graphology Spatial View-Graph', () => {
 	it('returns a graphology MultiDirectedGraph with one node per concept', () => {
 		const graph = buildSpatialViewGraph(SNAPSHOT);
 		expect(graph).toBeInstanceOf(MultiDirectedGraph);

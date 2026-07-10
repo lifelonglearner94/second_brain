@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { APP_TABS, isTabActive } from '../../src/lib/state/app-tabs';
 
-describe('isTabActive — route-based tab highlight (issue #56)', () => {
+describe('isTabActive - route-based tab highlight (issue #56)', () => {
 	it('marks /app active only on the Capture route, not on deeper /app/* routes', () => {
 		expect(isTabActive('/app', '/app')).toBe(true);
 		expect(isTabActive('/app', '/app/graph')).toBe(false);

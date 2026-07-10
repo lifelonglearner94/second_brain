@@ -2,7 +2,7 @@
 //!
 //! Issue #84: `submit` is fire-and-forget. It validates non-empty, persists the
 //! verbatim immediately with an empty cleaned rendering (a placeholder), and
-//! returns the braindump row right away — the HTTP request completes in
+//! returns the braindump row right away - the HTTP request completes in
 //! milliseconds, independent of Gemini availability. The clean → extract →
 //! accrete pipeline runs in a background task ([`IngestRunner`]) that later
 //! updates the cleaned rendering and accretes the graph; the response still
@@ -14,7 +14,7 @@
 //!
 //! `GET /braindumps/:id` returns both renderings; `PATCH /braindumps/:id` is
 //! error-correction only (overwrites in place, re-cleans, re-extracts,
-//! re-runs accretion with the stale extraction retracted first — ADR-0007; id
+//! re-runs accretion with the stale extraction retracted first - ADR-0007; id
 //! and created_at untouched); `DELETE /braindumps/:id` cascades through the
 //! graph.
 //!
@@ -35,14 +35,14 @@ use crate::graph;
 use crate::state::AppState;
 
 /// Body for `POST /braindumps` and `PATCH /braindumps/:id`: the user-confirmed
-/// verbatim text. Empty verbatim is rejected — a braindump with no text is a
+/// verbatim text. Empty verbatim is rejected - a braindump with no text is a
 /// capture artefact, not a thought-snapshot.
 #[derive(Debug, Deserialize)]
 pub struct BraindumpRequest {
     pub verbatim: String,
 }
 
-/// `POST /braindumps` — submit a braindump (issue #84: fire-and-forget).
+/// `POST /braindumps` - submit a braindump (issue #84: fire-and-forget).
 /// Validate non-empty, persist the verbatim immediately with an empty cleaned
 /// rendering, hand the braindump id to the background ingest runner, and
 /// return the stored row right away. No LLM call is on the request path, so
@@ -76,7 +76,7 @@ pub async fn submit(
     Ok(Json(braindump))
 }
 
-/// `GET /braindumps/:id` — return both the verbatim and the cleaned rendering.
+/// `GET /braindumps/:id` - return both the verbatim and the cleaned rendering.
 pub async fn read(
     State(state): State<AppState>,
     Extension(session): Extension<SessionInfo>,
@@ -88,7 +88,7 @@ pub async fn read(
     Ok(Json(braindump))
 }
 
-/// `PATCH /braindumps/:id` — error-correction only (ADR-0007). A thin HTTP
+/// `PATCH /braindumps/:id` - error-correction only (ADR-0007). A thin HTTP
 /// adapter (issue #42): parse + validate non-empty, delegate the full
 /// re-ingest pipeline (clean → overwrite-in-place → ontology → extract →
 /// accrete, with the stale extraction retracted first) to
@@ -130,7 +130,7 @@ pub async fn edit(
     Ok(Json(braindump))
 }
 
-/// `DELETE /braindumps/:id` — remove a braindump and cascade through the graph
+/// `DELETE /braindumps/:id` - remove a braindump and cascade through the graph
 /// (ADR-0002 / ADR-0007 / ADR-0010). The braindump's id drops from every
 /// concept's extraction provenance and every edge's `asserted_by`; a concept
 /// vanishes when its last extracting braindump is removed, an edge vanishes

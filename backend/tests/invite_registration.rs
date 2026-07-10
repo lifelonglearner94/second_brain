@@ -31,7 +31,7 @@ use webauthn_rs_proto::{CreationChallengeResponse, RequestChallengeResponse};
 
 const ORIGIN: &str = "http://localhost:8080";
 
-/// A truly fresh in-memory DB with ZERO users — the bootstrap-exception
+/// A truly fresh in-memory DB with ZERO users - the bootstrap-exception
 /// precondition. `Db::open_in_memory` seeds the admin under `test-support` for
 /// the convenience of the domain tests; the bootstrap path here must start
 /// empty.
@@ -221,7 +221,7 @@ async fn submit_braindump(app: &axum::Router, cookie: &http::HeaderValue, verbat
     value
 }
 
-/// GET /graph (topology snapshot) — decompress gzip and parse JSON.
+/// GET /graph (topology snapshot) - decompress gzip and parse JSON.
 async fn get_graph(app: &axum::Router, cookie: &http::HeaderValue) -> Value {
     let request = Request::builder()
         .uri("/graph")
@@ -411,7 +411,7 @@ async fn invite_chain_bootstrap_admin_mints_invitee_registers_logins_submits_adm
     );
 
     // --- 7. Reusing the consumed invite for a second registration is refused
-    //     (410 at begin — the invite is already consumed). ---
+    //     (410 at begin - the invite is already consumed). ---
     let (status, body, _h) = do_request(
         &app,
         "POST",

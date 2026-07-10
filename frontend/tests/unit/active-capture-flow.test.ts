@@ -39,7 +39,7 @@ const SNAPSHOT: GlobalTopologySnapshot = {
 	partitions: [{ concept_id: 'c1', partition_id: 0 }]
 };
 
-describe('Active Capture vertical slice — STT → buffer → explicit submit → optimistic merge (ADR-0002/0007)', () => {
+describe('Active Capture vertical slice - STT → buffer → explicit submit → optimistic merge (ADR-0002/0007)', () => {
 	it('streams Deepgram chunks into the buffer, submits on explicit submit, and merges the ingested concepts/edges into the Spatial View-Graph', async () => {
 		const store = new ActiveCaptureStore();
 		const ingested: IngestResponse = {
@@ -125,7 +125,7 @@ describe('Active Capture vertical slice — STT → buffer → explicit submit �
 		expect(store.status).toBe('queued');
 	});
 
-	it('does not ingest until the user explicitly submits — chunk arrival alone never POSTs', async () => {
+	it('does not ingest until the user explicitly submits - chunk arrival alone never POSTs', async () => {
 		const store = new ActiveCaptureStore();
 		const calls: string[] = [];
 		const ingest: IngestApi = {

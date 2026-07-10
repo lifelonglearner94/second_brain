@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     // Wire the real Gemini seam when an API key is present; otherwise fall
     // back to the fake so a dev/CI box without a key still runs (the ingest
     // pipeline is exercised end-to-end with stub extraction/embedding). The
-    // single LLM seam (clean, generate_pinned, synthesize, extract, embed) —
+    // single LLM seam (clean, generate_pinned, synthesize, extract, embed) -
     // issue #39 collapsed the former three traits into one.
     //
     // Issue #86: the primary GeminiClient is wrapped in a circuit-breaker
@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     // (identity-calibrated, ADR-0001). The fallback client shares the
     // primary's credentials/embed config/HTTP pool with only the text model
     // swapped. ADR-0003's pinned-model determinism is an accepted, logged
-    // exception on the free tier — see the ADR's free-tier-fallback addendum.
+    // exception on the free tier - see the ADR's free-tier-fallback addendum.
     let llm: Arc<dyn Llm> = match GeminiClient::from_env()? {
         Some(primary) => {
             let fallback = primary.fallback();
@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
         }
         None => {
             tracing::warn!(
-                "GEMINI_API_KEY unset — falling back to fake LLM. \
+                "GEMINI_API_KEY unset - falling back to fake LLM. \
                  Set it to run real extraction."
             );
             Arc::new(FakeLlm { dim: 1024 })
@@ -71,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     db.ensure_vec_tables(llm.dim())?;
 
     // Seed type-embeddings for any ontology types missing one (the day-zero
-    // vocabulary has no embeddings until the first run — ADR-0003 dedup needs
+    // vocabulary has no embeddings until the first run - ADR-0003 dedup needs
     // them to auto-merge duplicate proposals). Issue #72: the ontology is
     // per-user; the seed runs for the bootstrap admin at startup. Each new
     // user's vocabulary is seeded on first activity via
@@ -90,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
     let graph_repo: Arc<dyn GraphRepo> = Arc::new(SqliteGraphRepo::new(db.clone()));
     let ingest_runner = braindump::IngestRunner::new();
     // Issue #84: startup recovery scan. Any braindump left `pending`
-    // (mid-processing, or awaiting retry after a transient Gemini failure —
+    // (mid-processing, or awaiting retry after a transient Gemini failure -
     // issue #85) is re-spawned so a restart does not strand it. Runs before
     // serving so the resumed pipelines are in flight by the time requests
     // arrive; the spawned tasks commit out-of-band.

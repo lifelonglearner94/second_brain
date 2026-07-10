@@ -86,7 +86,7 @@ afterEach(() => {
 	cleanup();
 });
 
-describe('PendingCaptures — review-and-confirm surface (ADR-0005/0007)', () => {
+describe('PendingCaptures - review-and-confirm surface (ADR-0005/0007)', () => {
 	it('surfaces every queued capture for review on reconnect', () => {
 		const store = storeWith(CAPTURE_A, CAPTURE_B);
 		render(PendingCaptures, {
@@ -118,7 +118,7 @@ describe('PendingCaptures — review-and-confirm surface (ADR-0005/0007)', () =>
 		expect(textarea.value).toBe('offline thought one');
 	});
 
-	it('never auto-submits — ingest is not called until the user clicks Submit', async () => {
+	it('never auto-submits - ingest is not called until the user clicks Submit', async () => {
 		const store = storeWith(CAPTURE_A);
 		const ingest = fakeIngest(INGESTED);
 		render(PendingCaptures, { props: { store, ingest, oningest: vi.fn() } });

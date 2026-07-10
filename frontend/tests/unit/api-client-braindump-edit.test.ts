@@ -15,7 +15,7 @@ const BRAINDUMP: Braindump = {
 	created_at: 1_700_000_000
 };
 
-describe('apiClient.editBraindump — PATCH /braindumps/:id (backend #5, ADR-0007 error-correction)', () => {
+describe('apiClient.editBraindump - PATCH /braindumps/:id (backend #5, ADR-0007 error-correction)', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {
@@ -36,7 +36,7 @@ describe('apiClient.editBraindump — PATCH /braindumps/:id (backend #5, ADR-000
 		});
 	});
 
-	it('parses the returned Braindump — id and created_at stable, cleaned freshly re-derived by the backend', async () => {
+	it('parses the returned Braindump - id and created_at stable, cleaned freshly re-derived by the backend', async () => {
 		const edited: Braindump = {
 			id: 42,
 			verbatim: 'Maria is leaving, which tanks the timeline.',

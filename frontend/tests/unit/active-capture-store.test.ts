@@ -63,8 +63,8 @@ const INGESTED: IngestResponse = {
 	cursor: 1_800
 };
 
-describe('ActiveCaptureStore — the ephemeral, mutable text buffer (Active Capture, ADR-0007)', () => {
-	it('starts idle with an empty buffer — nothing is a braindump until explicit submit', () => {
+describe('ActiveCaptureStore - the ephemeral, mutable text buffer (Active Capture, ADR-0007)', () => {
+	it('starts idle with an empty buffer - nothing is a braindump until explicit submit', () => {
 		const store = new ActiveCaptureStore();
 		expect(store.text).toBe('');
 		expect(store.status).toBe('idle');
@@ -85,7 +85,7 @@ describe('ActiveCaptureStore — the ephemeral, mutable text buffer (Active Capt
 		expect(store.text).toBe('hello world');
 	});
 
-	it('STT and keyboard share one buffer — a chunk appended after a keyboard edit carries on the same text', () => {
+	it('STT and keyboard share one buffer - a chunk appended after a keyboard edit carries on the same text', () => {
 		const store = new ActiveCaptureStore();
 		store.setText('caffeine');
 		store.appendSttChunk(' disrupts sleep');
@@ -100,7 +100,7 @@ describe('ActiveCaptureStore — the ephemeral, mutable text buffer (Active Capt
 	});
 });
 
-describe('ActiveCaptureStore.startStt — streaming STT source feeds the buffer through the seam', () => {
+describe('ActiveCaptureStore.startStt - streaming STT source feeds the buffer through the seam', () => {
 	it('starts a Deepgram source, flips to listening, and feeds chunks into the buffer', async () => {
 		const store = new ActiveCaptureStore();
 		const source = fakeSource('deepgram', { emits: ['hallo', ' welt'] });
@@ -129,7 +129,7 @@ describe('ActiveCaptureStore.startStt — streaming STT source feeds the buffer 
 	});
 });
 
-describe('ActiveCaptureStore.startCaptureWithFallback — Deepgram primary, Web Speech offline fallback', () => {
+describe('ActiveCaptureStore.startCaptureWithFallback - Deepgram primary, Web Speech offline fallback', () => {
 	it('uses the Deepgram source when it connects and reports its label', async () => {
 		const store = new ActiveCaptureStore();
 		const deepgram = fakeSource('deepgram', { emits: ['online'] });
@@ -173,7 +173,7 @@ describe('ActiveCaptureStore.startCaptureWithFallback — Deepgram primary, Web 
 	});
 });
 
-describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing is a braindump until submit)', () => {
+describe('ActiveCaptureStore.submit - explicit-submit gate (ADR-0007: nothing is a braindump until submit)', () => {
 	it('POSTs the verbatim only on explicit submit, not while STT chunks are arriving', async () => {
 		const store = new ActiveCaptureStore();
 		const ingest = fakeIngest(INGESTED);
@@ -217,7 +217,7 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 		}
 	});
 
-	it('refuses to submit an empty buffer (no empty braindumps — backend #5 rejects empty verbatim)', async () => {
+	it('refuses to submit an empty buffer (no empty braindumps - backend #5 rejects empty verbatim)', async () => {
 		const store = new ActiveCaptureStore();
 		const ingest = fakeIngest(INGESTED);
 		await expect(store.submit(ingest, true, pendingStore())).rejects.toThrow(
@@ -262,7 +262,7 @@ describe('ActiveCaptureStore.submit — explicit-submit gate (ADR-0007: nothing 
 	});
 });
 
-describe('ActiveCaptureStore.submit(ingest, online, pending) — the queue-vs-submit decision (ADR-0005/0007)', () => {
+describe('ActiveCaptureStore.submit(ingest, online, pending) - the queue-vs-submit decision (ADR-0005/0007)', () => {
 	it('enqueues a Pending Capture instead of ingesting when the browser is offline', async () => {
 		const idb = fakeIdb();
 		const pending = new PendingCapturesStore(idb);
@@ -337,7 +337,7 @@ describe('ActiveCaptureStore.submit(ingest, online, pending) — the queue-vs-su
 		expect(idb.enqueuePendingCapture).not.toHaveBeenCalled();
 	});
 
-	it('enqueues when offline with no STT label (pure keyboard input offline) — ADR-0005', async () => {
+	it('enqueues when offline with no STT label (pure keyboard input offline) - ADR-0005', async () => {
 		const idb = fakeIdb();
 		const pending = new PendingCapturesStore(idb);
 		const store = new ActiveCaptureStore();

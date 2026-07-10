@@ -19,7 +19,7 @@ afterEach(() => {
 	window.dispatchEvent(new Event('online'));
 });
 
-describe('OnlineStore — shared browser connectivity state for the offline read-only mode (ADR-0005, issue #21)', () => {
+describe('OnlineStore - shared browser connectivity state for the offline read-only mode (ADR-0005, issue #21)', () => {
 	it('defaults to navigator.onLine at construction time (true in jsdom)', () => {
 		setOnLine(true);
 		const store = new OnlineStore();
@@ -38,7 +38,7 @@ describe('OnlineStore — shared browser connectivity state for the offline read
 		expect(store.online).toBe(true);
 	});
 
-	describe('init() — window online/offline listeners', () => {
+	describe('init() - window online/offline listeners', () => {
 		beforeEach(() => {
 			setOnLine(true);
 		});

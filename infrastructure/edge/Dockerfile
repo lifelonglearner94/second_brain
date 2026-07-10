@@ -4,7 +4,7 @@
 #
 # Zero-Trust Image (ADR-0004): no secret of any kind ever touches a COPY or
 # ENV directive. Publish this image to the public internet and the only thing
-# leaked is compiled code + static assets — zero credentials.
+# leaked is compiled code + static assets - zero credentials.
 
 # --- PWA Bundle stage --------------------------------------------------------
 # Build the SvelteKit adapter-static output (frontend/build/) at image-build
@@ -20,11 +20,11 @@ RUN npm run build
 
 # --- Edge stage --------------------------------------------------------------
 FROM caddy:2-alpine AS edge
-# The Caddyfile is configuration, not state — bake it in so the Edge remains a
+# The Caddyfile is configuration, not state - bake it in so the Edge remains a
 # disposable image rebuilt per deploy. The CADDYFILE build arg selects which
 # Caddyfile to bake in: the default (Caddyfile) binds :80 with no TLS for local
 # dev; CI passes CADDYFILE=Caddyfile.prod to get auto-HTTPS on the real domain.
-# Zero-Trust (ADR-0004): neither Caddyfile contains a secret — the domain is
+# Zero-Trust (ADR-0004): neither Caddyfile contains a secret - the domain is
 # public config, not a credential.
 ARG CADDYFILE=Caddyfile
 COPY infrastructure/edge/${CADDYFILE} /etc/caddy/Caddyfile

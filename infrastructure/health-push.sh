@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Health Push (ADR-0005, issue #33) — push-based survival check.
+# Health Push (ADR-0005, issue #33) - push-based survival check.
 #
 # A host cron (NOT a container) fires this script at a sensible interval. It
 # checks the two failure classes a pull model cannot catch:
-#   1. Brain Replica lag  — Litestream replication stopped or erroring (silent
+#   1. Brain Replica lag  - Litestream replication stopped or erroring (silent
 #      drift: the user only discovers a stale Brain Replica by opening the admin tab,
 #      by which point the ADR-0002 trust contract is already broken).
-#   2. Brain File volume  — sqlite_data nearing capacity (about to fill).
+#   2. Brain File volume  - sqlite_data nearing capacity (about to fill).
 # On a breach it pushes to the ntfy.sh webhook so the alert finds the user, not
 # the reverse. Zero-RAM, zero-containers between invocations: cron spawns the
-# script, it exits. The script ships no secrets — NTFY_WEBHOOK_URL is read from
+# script, it exits. The script ships no secrets - NTFY_WEBHOOK_URL is read from
 # infrastructure/.env (ADR-0004); nothing is baked in.
 #
 # Lag detection (Litestream v0.5.x exposes no lag-seconds gauge, so lag is
@@ -25,7 +25,7 @@
 # up burst doesn't fire a false alert.
 #
 # Self-test:  bash infrastructure/health-push.sh --self-test
-#   (mocks metrics/volume/ntfy — no docker, no curl, no real webhook needed)
+#   (mocks metrics/volume/ntfy - no docker, no curl, no real webhook needed)
 set -euo pipefail
 
 # --- config (env-overridable; prod reads NTFY_WEBHOOK_URL from .env) ----------
@@ -64,7 +64,7 @@ fetch_metrics() {
 }
 
 # Max litestream_sync_error_count across db labels (metrics on stdin). Prometheus
-# metrics carry labels: `litestream_sync_error_count{db="..."} <v>` — the char
+# metrics carry labels: `litestream_sync_error_count{db="..."} <v>` - the char
 # after the name is `{`, not whitespace, so match either form and read $2.
 parse_sync_error_count() {
   awk '/^litestream_sync_error_count[{[:space:]]/ {v=$2+0; if (v>m) m=v} END{print m+0}'
@@ -87,14 +87,14 @@ push_ntfy() {
   # cron redirects stdout+stderr to /dev/null, so a failed push would be silent.
   # Surface it to syslog so the operator can find it: journalctl -t second-brain-health-push
   if [[ -z "${NTFY_WEBHOOK_URL:-}" ]]; then
-    echo "health-push: NTFY_WEBHOOK_URL unset — cannot push alert: $body" >&2
-    logger -t second-brain-health-push "NTFY_WEBHOOK_URL unset — alert NOT pushed: $body" 2>/dev/null || true
+    echo "health-push: NTFY_WEBHOOK_URL unset - cannot push alert: $body" >&2
+    logger -t second-brain-health-push "NTFY_WEBHOOK_URL unset - alert NOT pushed: $body" 2>/dev/null || true
     return 1
   fi
   if ! curl -fsS --max-time 10 \
       -H "Title: $title" -H "Tags: warning" -H "Priority: high" \
       -d "$body" "$NTFY_WEBHOOK_URL"; then
-    logger -t second-brain-health-push "ntfy push failed — alert NOT delivered: $body" 2>/dev/null || true
+    logger -t second-brain-health-push "ntfy push failed - alert NOT delivered: $body" 2>/dev/null || true
     return 1
   fi
 }
@@ -141,7 +141,7 @@ run_check() {
       LAST_SYNC_ERR="$cur_err"
     elif [[ "$cur_err" -gt "$LAST_SYNC_ERR" ]]; then
       if (( now - LAST_ALERT_ERR >= ALERT_COOLDOWN_SECS )); then
-        messages+=("Litestream sync errors increased: $LAST_SYNC_ERR -> $cur_err — replication failing (silent drift)")
+        messages+=("Litestream sync errors increased: $LAST_SYNC_ERR -> $cur_err - replication failing (silent drift)")
         LAST_ALERT_ERR="$now"
       fi
       LAST_SYNC_ERR="$cur_err"
@@ -153,7 +153,7 @@ run_check() {
     # stopped => lag = infinity. This is the primary survival signal.
     WAS_DOWN=1
     if (( now - LAST_ALERT_DOWN >= ALERT_COOLDOWN_SECS )); then
-      messages+=("Litestream replication DOWN — metrics endpoint $LITESTREAM_METRICS_URL unreachable; the Brain Replica is NOT being updated")
+      messages+=("Litestream replication DOWN - metrics endpoint $LITESTREAM_METRICS_URL unreachable; the Brain Replica is NOT being updated")
       LAST_ALERT_DOWN="$now"
     fi
   fi
@@ -162,7 +162,7 @@ run_check() {
   pct="$(volume_usage_pct 2>/dev/null || true)"
   if [[ "$pct" =~ ^[0-9]+$ ]] && (( pct > VOLUME_CAP_PCT )); then
     if (( now - LAST_ALERT_VOL >= ALERT_COOLDOWN_SECS )); then
-      messages+=("Brain File volume $SQLITE_VOLUME at ${pct}% (threshold ${VOLUME_CAP_PCT}%) — about to fill")
+      messages+=("Brain File volume $SQLITE_VOLUME at ${pct}% (threshold ${VOLUME_CAP_PCT}%) - about to fill")
       LAST_ALERT_VOL="$now"
     fi
   fi
@@ -234,7 +234,7 @@ self_test() {
   fi
 
   # No-secret-in-script guard (ADR-0004): the script must not bake a literal
-  # ntfy topic URL or auth token — only the $NTFY_WEBHOOK_URL variable. Patterns
+  # ntfy topic URL or auth token - only the $NTFY_WEBHOOK_URL variable. Patterns
   # match a real leaked value (ntfy.sh/<topic> or auth=<token>); the script's
   # own comments say "ntfy.sh webhook" (no slash-topic) so they do not match,
   # and the backslashed pattern below does not match itself either.

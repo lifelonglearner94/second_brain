@@ -1,5 +1,5 @@
 # Keep the Backend build context lean (ADR-0004 Zero-Trust Image). The
-# Dockerfile only COPYs Cargo.toml/Cargo.lock, src/, and tests/ — exclude
+# Dockerfile only COPYs Cargo.toml/Cargo.lock, src/, and tests/ - exclude
 # everything else, especially the local target/ cache.
 target
 *.db

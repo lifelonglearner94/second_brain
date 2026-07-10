@@ -2,7 +2,7 @@
 # Zero-Trust Image guard (ADR-0004, issue #30).
 #
 # Asserts that no Dockerfile in the repo bakes a secret literal into an ENV,
-# ARG, or COPY directive — so images stay public-safe artifacts: if a GHCR
+# ARG, or COPY directive - so images stay public-safe artifacts: if a GHCR
 # image leaked to the public internet, only compiled code would be exposed.
 #
 #   bash infrastructure/test/zero-trust.sh            # scan every Dockerfile in the repo
@@ -10,9 +10,9 @@
 #   bash infrastructure/test/zero-trust.sh --self-test # RED fixture must fail + real Dockerfiles pass
 #
 # Exit 0 = zero-trust (no secret literals found); exit 1 = a directive bakes a
-# secret. GHA-blind: this guard never reads infrastructure/.env — it only
+# secret. GHA-blind: this guard never reads infrastructure/.env - it only
 # scans Dockerfiles and reads .env.example (which carries no values, only the
-# [SECRET]/[config] legend — ADR-0009's single source of truth for key names).
+# [SECRET]/[config] legend - ADR-0009's single source of truth for key names).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,17 +20,17 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 GUARD="$SCRIPT_DIR/zero-trust.sh"
 cd "$REPO_ROOT"
 
-# --self-test: plant a throwaway Dockerfile of secret literals (RED — the guard
+# --self-test: plant a throwaway Dockerfile of secret literals (RED - the guard
 # must FAIL, including the URL-form NTFY_WEBHOOK_URL [SECRET] whose value
 # contains ':' and '/', which the old word-segment heuristic missed), then scan
-# the real repo Dockerfiles (GREEN — must PASS). Replaces the old
+# the real repo Dockerfiles (GREEN - must PASS). Replaces the old
 # zero-trust-test.sh pass-through (issue #40). GHA-blind: never reads .env.
 if [[ "${1:-}" == "--self-test" ]]; then
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT
   cat > "$TMP/Dockerfile" <<'EOF'
 FROM alpine:3
-# Planted secret literals — every directive below must be flagged by the guard.
+# Planted secret literals - every directive below must be flagged by the guard.
 ARG GEMINI_API_KEY=AIzaSyFAKESECRET1234567890abcdef
 ENV AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 ENV NTFY_WEBHOOK_URL=https://ntfy.example.com/topic?auth=BEARERTOKEN1234567890
@@ -88,7 +88,7 @@ import os, re, sys
 
 # ADR-0009: infrastructure/.env.example is the single source of truth for the
 # runtime-secret key list. Any key whose legend marker is [SECRET] is
-# secret-named — fail closed on it regardless of value shape, so URL-form
+# secret-named - fail closed on it regardless of value shape, so URL-form
 # secrets like NTFY_WEBHOOK_URL (value contains ':' and '/') can't slip through
 # the value heuristic. The word-segment set below is a fallback for keys not
 # present in .env.example (fail closed on the legend, heuristic for the rest).
@@ -96,7 +96,7 @@ def secret_keys_from_env_example(path):
     try:
         fh = open(path, "r", encoding="utf-8")
     except OSError:
-        return None  # .env.example missing — contract broken; caller fails closed.
+        return None  # .env.example missing - contract broken; caller fails closed.
     keys = set()
     with fh:
         for line in fh:
@@ -109,7 +109,7 @@ def secret_keys_from_env_example(path):
 
 SECRET_ENV_KEYS = secret_keys_from_env_example(os.environ.get("ENV_EXAMPLE_PATH", ""))
 if SECRET_ENV_KEYS is None:
-    print(f"FAIL - {os.environ.get('ENV_EXAMPLE_PATH')} not found — .env.example is "
+    print(f"FAIL - {os.environ.get('ENV_EXAMPLE_PATH')} not found - .env.example is "
           f"the single source of truth for the secret key list (ADR-0009); "
           f"refusing to scan blind.", file=sys.stderr)
     sys.exit(1)

@@ -101,7 +101,7 @@ const SNAPSHOT: GlobalTopologySnapshot = {
 	]
 };
 
-describe('renderSpatialViewGraph2D — sigma.js v3 2D WebGL fallback over the same graphology model', () => {
+describe('renderSpatialViewGraph2D - sigma.js v3 2D WebGL fallback over the same graphology model', () => {
 	it('constructs sigma with the SAME graphology instance (renderer swap does not duplicate the data model)', async () => {
 		const container = document.createElement('div');
 		const graph = makeGraph();

@@ -45,7 +45,7 @@
 		</header>
 
 		<p class="lede">
-			Voice capture, a 3D knowledge graph, and grounded chat — a single canvas
+			Voice capture, a 3D knowledge graph, and grounded chat - a single canvas
 			for the thoughts you don't want to lose.
 		</p>
 

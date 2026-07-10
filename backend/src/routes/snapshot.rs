@@ -1,8 +1,8 @@
-//! `GET /graph` — the Global Topology Snapshot endpoint (issue #27, ADR-0008).
+//! `GET /graph` - the Global Topology Snapshot endpoint (issue #27, ADR-0008).
 //!
-//! Returns the full renderable graph topology in one payload — all concepts,
+//! Returns the full renderable graph topology in one payload - all concepts,
 //! all typed edges with their projected current type (ADR-0003), and the
-//! current Louvain partition IDs (ADR-0008) — as a gzipped JSON body. The
+//! current Louvain partition IDs (ADR-0008) - as a gzipped JSON body. The
 //! frontend fetches this wholesale on app load and caches it in IndexedDB for
 //! offline rendering; the backend owns all graph computation, including the
 //! partition IDs (the frontend never runs Louvain). This is the full read;
@@ -26,7 +26,7 @@ use crate::error::{Error, Result};
 use crate::snapshot;
 use crate::state::AppState;
 
-/// `GET /graph` — return the Global Topology Snapshot as a gzipped JSON body.
+/// `GET /graph` - return the Global Topology Snapshot as a gzipped JSON body.
 pub async fn topology_snapshot(
     State(state): State<AppState>,
     Extension(session): Extension<SessionInfo>,

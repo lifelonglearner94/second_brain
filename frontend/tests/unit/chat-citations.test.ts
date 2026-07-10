@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseAnswerCitations } from '../../src/lib/chat/citations';
 
-describe('parseAnswerCitations — inline [bd:<id>] chips, [edge:...] hidden (ADR-0004/0005)', () => {
+describe('parseAnswerCitations - inline [bd:<id>] chips, [edge:...] hidden (ADR-0004/0005)', () => {
 	it('leaves plain prose with no citations as a single text segment', () => {
 		const segs = parseAnswerCitations('Nothing to cite here.');
 		expect(segs).toEqual([{ kind: 'text', text: 'Nothing to cite here.' }]);
@@ -28,9 +28,9 @@ describe('parseAnswerCitations — inline [bd:<id>] chips, [edge:...] hidden (AD
 		]);
 	});
 
-	it('hides the [edge:...] traversal-path markers — only cited braindumps surface', () => {
+	it('hides the [edge:...] traversal-path markers - only cited braindumps surface', () => {
 		const segs = parseAnswerCitations(
-			'Q3 is at risk [bd:42] [edge:Maria —endangers→ Q3 launch].'
+			'Q3 is at risk [bd:42] [edge:Maria -endangers→ Q3 launch].'
 		);
 		const rendered = segs
 			.map((s) => (s.kind === 'citation' ? `[${s.index}]` : s.text))

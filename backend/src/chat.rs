@@ -1,21 +1,21 @@
 //! The chat read surface (issue #10, ADR-0005).
 //!
-//! Grounded synthesis over retrieved braindumps — never free retelling. The
+//! Grounded synthesis over retrieved braindumps - never free retelling. The
 //! query runs the retrieval read path (ADR-0004); the retrieved braindumps +
 //! traversed edge paths become the context for synthesis under a system prompt
 //! that enforces three rules:
 //!
-//! 1. **Mandatory citations** — every claim cites the braindump ids and edge
+//! 1. **Mandatory citations** - every claim cites the braindump ids and edge
 //!    refs it rests on, so the user can trace any sentence to its source.
-//! 2. **Graph-constrained inference** — chat may infer multi-hop connections
+//! 2. **Graph-constrained inference** - chat may infer multi-hop connections
 //!    the user overlooked, but only along edges that actually exist. The graph
 //!    doesn't just retrieve; it constrains what chat can claim.
-//! 3. **Silence when unsupported** — when the graph doesn't support an answer,
+//! 3. **Silence when unsupported** - when the graph doesn't support an answer,
 //!    chat says "you haven't told me about that" rather than confabulating.
 //!
 //! Silence is enforced structurally as well as in the prompt: when retrieval
 //! returns no braindumps, the endpoint returns the silence response without
-//! calling the LLM. The honesty contract is not entrusted to the model — a
+//! calling the LLM. The honesty contract is not entrusted to the model - a
 //! second brain that retells without citing is one hallucinated memory away
 //! from worse than no brain, because it feels authoritative.
 
@@ -33,7 +33,7 @@ pub const SILENCE_MESSAGE: &str = "you haven't told me about that";
 
 /// The cluster-citation marker the LLM is told never to emit. Mirrors the
 /// `[bd:<id>]` and `[edge:...]` citation forms so a cluster citation is
-/// unambiguous — and so the structural guard can reject it without false
+/// unambiguous - and so the structural guard can reject it without false
 /// positives on prose that merely mentions a "Group N" label.
 const CLUSTER_CITATION_MARKER: &str = "[cluster:";
 
@@ -48,7 +48,7 @@ Rules:\n\
 the provided context. Do not draw on outside knowledge.\n\
 2. Cite your sources. Every claim must reference the braindump id it rests on \
 (in the form [bd:<id>]) and, where a connection is involved, the edge ref it \
-traverses (in the form [edge:<source> —<type>→ <target>]). No claim without a \
+traverses (in the form [edge:<source> -<type>→ <target>]). No claim without a \
 citation.\n\
 3. Graph-constrained inference. You may infer multi-hop connections the user \
 overlooked, but ONLY along edges that appear in the provided context. Never \
@@ -57,18 +57,18 @@ invent an edge that is not listed below.\n\
 answer to the query, respond with exactly: \"you haven't told me about that\" \
 and nothing else.\n\
 5. Clusters are a magnifying glass, never a source. The Macrostructure context \
-below shows the current thematic partition — ephemeral \"Group N for this \
+below shows the current thematic partition - ephemeral \"Group N for this \
 session\" labels that exist only for this call. You may use it to notice \
 thematic structure you could not derive from the raw edges alone. NEVER cite a \
-cluster as a source — there is no [cluster:...] citation and there never will \
+cluster as a source - there is no [cluster:...] citation and there never will \
 be. Every claim still cites the underlying braindumps and edges (the stable \
 truth), never the ephemeral projection.\n\
-Respond with the synthesis prose only — no preamble, no meta-commentary.";
+Respond with the synthesis prose only - no preamble, no meta-commentary.";
 
 /// The chat response. Carries the synthesized answer plus the citations (the
 /// retrieved braindumps + edge paths) the answer rests on, so the frontend can
 /// render them as drill-downable sources (ADR-0005). `silent` is `true` exactly
-/// when the graph could not support an answer — the answer is then
+/// when the graph could not support an answer - the answer is then
 /// [`SILENCE_MESSAGE`] and `citations`/`paths` are empty.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatResponse {
@@ -86,7 +86,7 @@ pub struct ChatResponse {
 /// for the partition.
 ///
 /// When retrieval yields no braindumps, returns the silence response without
-/// invoking the LLM or computing the partition — the honesty contract is
+/// invoking the LLM or computing the partition - the honesty contract is
 /// structural, not prompt-only. Otherwise, builds the grounded-synthesis prompt
 /// from the retrieved braindumps + edge paths + the macrostructure partition,
 /// calls [`Llm::synthesize`], and returns the answer with the retrieved
@@ -95,8 +95,8 @@ pub struct ChatResponse {
 /// Two structural backstops on the LLM output: if the model echoes the silence
 /// phrasing (braindumps were retrieved but don't address the query) the
 /// response is silent with no citations; and if the model cites a cluster
-/// (`[cluster:...]`) — violating ADR-0008's "clusters are a magnifying glass,
-/// never a source" — the response is silent with no citations, so the frontend
+/// (`[cluster:...]`) - violating ADR-0008's "clusters are a magnifying glass,
+/// never a source" - the response is silent with no citations, so the frontend
 /// never shows sources for an answer resting on an ephemeral projection.
 pub async fn chat(db: &Db, llm: &dyn Llm, user_id: &str, query: &str) -> Result<ChatResponse> {
     let retrieved = retrieval::retrieve(db, user_id, llm, query).await?;
@@ -138,13 +138,13 @@ fn silence(mode: crate::retrieval::RetrievalMode) -> ChatResponse {
 /// the current thematic partition. Pure (no I/O) so it is hermetically
 /// testable. The preamble states the citation / graph-constrained-inference /
 /// silence / no-cluster-cite rules; the appended context lists the
-/// macrostructure partition (ADR-0008 — global view), each braindump
-/// (id + verbatim — local evidence), and each traversed edge
-/// (source —type→ target — local structure).
+/// macrostructure partition (ADR-0008 - global view), each braindump
+/// (id + verbatim - local evidence), and each traversed edge
+/// (source -type→ target - local structure).
 fn build_synthesis_prompt(retrieved: &RetrievalResult, partition: &Partition) -> String {
     let mut s = String::from(SYNTHESIS_SYSTEM_PREAMBLE);
     s.push_str(
-        "\n\nMacrostructure context (current thematic partition — ephemeral, non-citable):\n",
+        "\n\nMacrostructure context (current thematic partition - ephemeral, non-citable):\n",
     );
     if partition.clusters.is_empty() {
         s.push_str("(none)\n");
@@ -167,7 +167,7 @@ fn build_synthesis_prompt(retrieved: &RetrievalResult, partition: &Partition) ->
     } else {
         for e in &retrieved.paths {
             s.push_str(&format!(
-                "{} —{}→ {}\n",
+                "{} -{}→ {}\n",
                 e.source_concept_label, e.edge_type, e.target_concept_label
             ));
         }
@@ -262,7 +262,7 @@ mod tests {
         // The citation/graph-constraint rules are load-bearing only if the
         // prompt actually carries the braindump ids + edge refs the LLM must
         // cite. If the prompt dropped them, "mandatory citations" would be
-        // unenforceable — the model would have nothing to point at.
+        // unenforceable - the model would have nothing to point at.
         let retrieved = RetrievalResult {
             braindumps: vec![braindump(42, "maria leaving tanks the timeline")],
             paths: vec![edge("Maria", "endangers", "Q3 launch")],
@@ -279,7 +279,7 @@ mod tests {
             "braindump text present for grounding: {prompt}"
         );
         assert!(
-            prompt.contains("Maria —endangers→ Q3 launch"),
+            prompt.contains("Maria -endangers→ Q3 launch"),
             "edge ref citable in the prompt: {prompt}"
         );
     }
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn synthesis_prompt_layers_the_partition_as_macrostructure_context() {
         // ADR-0008: the current partition is layered into chat as
-        // macrostructure context — a magnifying glass the LLM uses to see
+        // macrostructure context - a magnifying glass the LLM uses to see
         // thematic structure it could not derive from raw edges in-budget.
         let retrieved = RetrievalResult {
             braindumps: vec![braindump(42, "maria leaving tanks the timeline")],
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn synthesis_prompt_forbids_citing_clusters_and_requires_braindump_edge_citations() {
         // ADR-0008: clusters are a magnifying glass, never a source. The prompt
-        // must reject cluster citations and require braindumps/edges — this is
+        // must reject cluster citations and require braindumps/edges - this is
         // the "citation-from-cluster case rejected" at the prompt-enforcement
         // level, complemented by the structural guard tested below.
         let prompt = build_synthesis_prompt(&empty_retrieved(), &sample_partition());
@@ -375,7 +375,7 @@ mod tests {
     fn cluster_citation_guard_detects_the_cluster_marker_only() {
         // The structural backstop: an answer that cites a cluster (mirroring the
         // [bd:]/[edge:] citation form with [cluster:]) is a trust violation.
-        // Mentioning a group label in prose is allowed — only the citation
+        // Mentioning a group label in prose is allowed - only the citation
         // marker is rejected.
         assert!(
             contains_cluster_citation(
@@ -386,7 +386,7 @@ mod tests {
         assert!(
             !contains_cluster_citation(
                 "Q3 is at risk because Maria is leaving [bd:1] \
-                 [edge:Maria —endangers→ Q3 launch]"
+                 [edge:Maria -endangers→ Q3 launch]"
             ),
             "a grounded answer with no cluster citation is left alone"
         );

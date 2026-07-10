@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Structural (and optional live) tests for the Brain Replica — the Litestream
+# Structural (and optional live) tests for the Brain Replica - the Litestream
 # sidecar that tails the Brain File WAL to Cloudflare R2 (ADR-0002, issue #32).
 #
 #   bash infrastructure/test/replica.sh           # structural (fast, no build)
@@ -7,11 +7,11 @@
 #
 # Structural tests assert the litestream Compose service + litestream.yml shape
 # and a config-file Zero-Trust rule: litestream.yml must reference NO secret
-# (R2 creds are auto-read from env, ADR-0004) — complementing zero-trust.sh,
+# (R2 creds are auto-read from env, ADR-0004) - complementing zero-trust.sh,
 # which scans Dockerfiles only. Live tests boot MinIO (a local R2 stand-in),
 # submit a braindump, wait for sync, stop the backend, `litestream restore` into
-# a fresh volume, and confirm the braindump survived — the #32 DR dry run.
-# Uses Python stdlib (json/yaml via compose config) + grep — no third-party deps.
+# a fresh volume, and confirm the braindump survived - the #32 DR dry run.
+# Uses Python stdlib (json/yaml via compose config) + grep - no third-party deps.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -48,13 +48,13 @@ grep -qE '^[[:space:]]*sync-interval:[[:space:]]*1s' "$CFG" \
 pass "litestream.yml: /data/second_brain.db -> s3 R2, addr :9090, sync 1s"
 
 # Zero-Trust (ADR-0004): the committed config must NOT reference the secret keys
-# in an active field or ${VAR} expansion — Litestream auto-reads
+# in an active field or ${VAR} expansion - Litestream auto-reads
 # LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY from env. We match a
 # `access-key-id:` / `secret-access-key:` field (active OR commented-out literal
-# — a commented secret is still a leak) or a ${SECRET_VAR} expansion. Naming the
+# - a commented secret is still a leak) or a ${SECRET_VAR} expansion. Naming the
 # env var in a doc comment is allowed (no ${} and no field colon).
 if grep -iEn 'access-key-id:|secret-access-key:|\$\{(LITESTREAM_ACCESS_KEY_ID|LITESTREAM_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)\}' "$CFG"; then
-  die "litestream.yml references a secret key — Zero-Trust violation (ADR-0004): creds must be env-auto-read, never in the committed config"
+  die "litestream.yml references a secret key - Zero-Trust violation (ADR-0004): creds must be env-auto-read, never in the committed config"
 fi
 pass "litestream.yml is Zero-Trust: no secret reference (creds env-auto-read, ADR-0004)"
 
@@ -73,7 +73,7 @@ assert str(ls.get("image","")).startswith("litestream/litestream:"), \
 assert ls.get("command") == ["replicate"], f"litestream command must be [replicate]; got {ls.get('command')}"
 # Read-write Brain File volume: Litestream v0.5.x appends only to its own
 # _litestream_* tracking tables in the source DB to record WAL position (it
-# never mutates braindump/concept/edge rows), so /data must be rw — a read-only
+# never mutates braindump/concept/edge rows), so /data must be rw - a read-only
 # mount crash-loops with `attempt to write a readonly database (8)` once real R2
 # credentials are present.
 rw = [v for v in ls.get("volumes", []) if isinstance(v, dict) and v.get("target") == "/data"]
@@ -83,7 +83,7 @@ assert rw and rw[0].get("read_only") is not True and rw[0].get("source") == "sql
 ports = ls.get("ports", [])
 assert any(p.get("target") == 9090 and p.get("host_ip") == "127.0.0.1" for p in ports), \
     f"litestream :9090 must bind 127.0.0.1 only; got {ports}"
-# No secret in the image's environment — checked against the RAW yaml below (not
+# No secret in the image's environment - checked against the RAW yaml below (not
 # the resolved `docker compose config`, which folds env_file keys into
 # `environment` and would false-positive on any dev machine whose .env carries
 # the real LITESTREAM_* keys). A literal `environment:` block on the litestream
@@ -93,7 +93,7 @@ print("ok   - compose litestream: upstream pinned image, sqlite_data rw, :9090 l
 PY
 pass "Brain Replica structural shape (ADR-0002 / #32)"
 
-# No literal `environment:` block on the litestream service (ADR-0004) — checked
+# No literal `environment:` block on the litestream service (ADR-0004) - checked
 # against the RAW docker-compose.yml so a real .env on the dev machine (whose
 # LITESTREAM_* keys `docker compose config` would merge into `environment`) does
 # not false-positive. env_file is the only allowed secret channel. awk exits 0
@@ -105,9 +105,9 @@ if awk '
   in_ls && /^[[:space:]]+environment:/          { found=1 }
   END { exit found ? 0 : 1 }
 ' "$REPO_ROOT/docker-compose.yml"; then
-  die "litestream must NOT declare an environment: block — use env_file only (ADR-0004); a literal LITESTREAM_* there would be a baked secret"
+  die "litestream must NOT declare an environment: block - use env_file only (ADR-0004); a literal LITESTREAM_* there would be a baked secret"
 else
-  pass "litestream: no literal environment: block (env_file only, ADR-0004) — raw-yaml check, no .env false-positive"
+  pass "litestream: no literal environment: block (env_file only, ADR-0004) - raw-yaml check, no .env false-positive"
 fi
 
 if [[ $LIVE -eq 0 ]]; then
@@ -138,7 +138,7 @@ docker volume create "$VOL" >/dev/null 2>&1 || true
 docker network create "$PROJECT" >/dev/null 2>&1 || true
 docker rm -f sb-minio sb-ls >/dev/null 2>&1 || true
 
-# MinIO as a throwaway R2 stand-in. Credentials are fixed defaults — local test
+# MinIO as a throwaway R2 stand-in. Credentials are fixed defaults - local test
 # network only, never production.
 docker run -d --name sb-minio --network "$PROJECT" -p 19090:9000 \
   -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
@@ -154,7 +154,7 @@ docker run --rm --network "$PROJECT" minio/mc:latest \
   mb "local/$MINIO_BUCKET" >/dev/null 2>&1 || true
 
 # litestream config pointed at MinIO (endpoint is NOT a s3:// URL query param, so
-# a config file is required for S3-compatible targets — same shape as the
+# a config file is required for S3-compatible targets - same shape as the
 # committed infrastructure/litestream.yml, just MinIO instead of R2).
 LSCONF="$TMPDIR_LIVE/litestream.yml"
 cat > "$LSCONF" <<EOF
@@ -188,7 +188,7 @@ docker stop sb-ls >/dev/null
 # Confirm replica objects landed in the bucket.
 docker run --rm --network "$PROJECT" minio/mc:latest \
   find "local/$MINIO_BUCKET" --recursive >/dev/null 2>&1 \
-  || die "no replica objects in MinIO bucket — replication did not land"
+  || die "no replica objects in MinIO bucket - replication did not land"
 
 # 3. Destroy the local Brain File, then restore it from the replica (the exact
 #    command shape from DISASTER_RECOVERY.md step 3, #34).
@@ -207,9 +207,8 @@ OUT="$(docker run --rm -v "$VOL":/data alpine:3 sh -c \
 if [[ "$OUT" == *"$MARK"* ]]; then
   pass "replicate -> restore round-trip: marker row survived (R2 stand-in via MinIO)"
 else
-  die "restored Brain File is missing the marker row — replica round-trip failed (got: $OUT)"
+  die "restored Brain File is missing the marker row - replica round-trip failed (got: $OUT)"
 fi
 
 echo
 echo "replica live round-trip passed"
-

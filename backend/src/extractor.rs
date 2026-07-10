@@ -3,7 +3,7 @@
 //! The extractor pulls concepts and edges out of a braindump's verbatim text.
 //! The real implementation (`crate::gemini::GeminiClient`) calls Gemini at
 //! Temperature=0 with structured output (`responseSchema`) and draws every edge
-//! type from the governed ontology — the LLM never invents a type. Identity
+//! type from the governed ontology - the LLM never invents a type. Identity
 //! resolution, accretion, provenance, and type-history are NOT the extractor's
 //! job; they live in [`crate::graph`] and run in one atomic transaction
 //! (ADR-0001). Extraction is one method on the single [`crate::llm::Llm`]

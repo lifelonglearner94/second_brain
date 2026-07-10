@@ -42,7 +42,7 @@ beforeEach(async () => {
 	});
 });
 
-describe('loadSpatialViewGraph — network-first with IDB Frozen Graph fallback (ADR-0005)', () => {
+describe('loadSpatialViewGraph - network-first with IDB Frozen Graph fallback (ADR-0005)', () => {
 	let idb: IdbStore;
 
 	beforeEach(() => {

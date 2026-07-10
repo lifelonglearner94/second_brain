@@ -1,5 +1,5 @@
 //! Integration tests for issue #28: the delta-sync endpoint
-//! `GET /graph/delta?since=<ts>` — additions + deletions + retags for the
+//! `GET /graph/delta?since=<ts>` - additions + deletions + retags for the
 //! frontend's pull-on-focus reconciliation.
 //!
 //! Concepts/edges are created via the real submit→extract→accrete path; auth is
@@ -203,7 +203,7 @@ async fn backdate_graph(db: &Db, ts: i64) {
     .unwrap();
 }
 
-/// Append a retag entry (seq_index = max+1) to an edge's type history —
+/// Append a retag entry (seq_index = max+1) to an edge's type history -
 /// simulates the async refactor (ADR-0003) without standing up governance.
 async fn append_retag(db: &Db, edge_id: i64, type_slug: &str) {
     let type_slug = type_slug.to_string();
@@ -376,17 +376,17 @@ async fn delta_demo_returns_all_three_change_types() {
     let llm = Arc::new(SequencedLlm {
         calls: Mutex::new(0),
         results: vec![
-            // bd1: Maria —[helps]→ Q3 launch (will be retagged, survives).
+            // bd1: Maria -[helps]→ Q3 launch (will be retagged, survives).
             ExtractionResult {
                 concepts: concepts(&["Maria", "Q3 launch"]),
                 edges: vec![edge("Maria", "helps", "Q3 launch")],
             },
-            // bd2: Beta —[endangers]→ Risk (will be deleted via bd2 deletion).
+            // bd2: Beta -[endangers]→ Risk (will be deleted via bd2 deletion).
             ExtractionResult {
                 concepts: concepts(&["Beta", "Risk"]),
                 edges: vec![edge("Beta", "endangers", "Risk")],
             },
-            // bd3: Calm —[causes]→ Focus (fresh addition, survives).
+            // bd3: Calm -[causes]→ Focus (fresh addition, survives).
             ExtractionResult {
                 concepts: concepts(&["Calm", "Focus"]),
                 edges: vec![edge("Calm", "causes", "Focus")],
@@ -496,7 +496,7 @@ async fn delta_demo_returns_all_three_change_types() {
         "Maria is not an addition (created before cursor)"
     );
 
-    // bd1 was not deleted — confirm it still exists so the retag is meaningful.
+    // bd1 was not deleted - confirm it still exists so the retag is meaningful.
     assert!(graph::get_concept(
         &db,
         BOOTSTRAP_ADMIN_USER_ID,
@@ -514,7 +514,7 @@ async fn delta_demo_returns_all_three_change_types() {
 
 #[tokio::test]
 async fn delta_with_no_since_defaults_to_first_sync() {
-    // Omitting ?since defaults to 0 — a first sync returning everything as
+    // Omitting ?since defaults to 0 - a first sync returning everything as
     // additions.
     let db = Db::open_in_memory().unwrap();
     let llm = Arc::new(ScriptedLlm {

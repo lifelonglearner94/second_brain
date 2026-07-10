@@ -26,7 +26,7 @@ pub enum Error {
     Conflict(String),
 
     /// Issue #74: an invitation was already consumed (or is being reused). 410
-    /// Gone — the resource existed but is no longer available for this purpose.
+    /// Gone - the resource existed but is no longer available for this purpose.
     #[error("gone: {0}")]
     Gone(String),
 
@@ -40,7 +40,7 @@ pub enum Error {
     Internal(String),
 
     /// Issue #85: a transient (retryable) failure from the LLM/embedding
-    /// provider — Gemini 5xx, overload, rate-limit (429), or a transport
+    /// provider - Gemini 5xx, overload, rate-limit (429), or a transport
     /// error. The ingest background task retries these on a fixed interval;
     /// they never terminal a braindump. Maps to 503 on the (rare) HTTP path.
     #[error("transient llm error: {0}")]
@@ -53,7 +53,7 @@ impl Error {
     }
 
     /// Issue #85: whether this error is a transient (retryable) LLM/embedding
-    /// provider failure — Gemini 5xx / overloaded / rate-limited / transport.
+    /// provider failure - Gemini 5xx / overloaded / rate-limited / transport.
     /// Only transient errors are retried by the ingest background task;
     /// non-retryable errors (malformed response, logic errors) terminal the
     /// braindump as `failed`.

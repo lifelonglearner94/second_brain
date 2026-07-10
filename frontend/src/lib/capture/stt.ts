@@ -33,7 +33,7 @@ export function describeSttAvailability(opts: {
 	}
 	return {
 		canCaptureVoice: false,
-		reason: 'Voice input unavailable on this browser — type your thought below.'
+		reason: 'Voice input unavailable on this browser - type your thought below.'
 	};
 }
 

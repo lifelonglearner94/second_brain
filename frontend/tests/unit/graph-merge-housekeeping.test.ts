@@ -49,7 +49,7 @@ const CONCEPT_SUGGESTION: ConceptMergeSuggestion = {
 	created_at: 1_700_000_000
 };
 
-describe('applyConceptMerge — action-driven local-merge of a confirmed concept pair into the Spatial View-Graph (ADR-0002)', () => {
+describe('applyConceptMerge - action-driven local-merge of a confirmed concept pair into the Spatial View-Graph (ADR-0002)', () => {
 	it('drops the folded (new) concept and keeps the existing one as the survivor', () => {
 		const merged = applyConceptMerge(SNAPSHOT, CONCEPT_SUGGESTION);
 		expect(merged.concepts.map((c) => c.id).sort()).toEqual(['1', '3']);
@@ -106,7 +106,7 @@ const TYPE_APPROVAL: OntologyTypeProposal = {
 	near_match_similarity: 0.88
 };
 
-describe('applyTypeMerge — optimistic edge retag when an ontology type merge is confirmed (backend #3 refactor mirrored locally)', () => {
+describe('applyTypeMerge - optimistic edge retag when an ontology type merge is confirmed (backend #3 refactor mirrored locally)', () => {
 	it('retags edges whose current_type is the merge_of slug to the new approved slug', () => {
 		const merged = applyTypeMerge(SNAPSHOT, TYPE_APPROVAL);
 		const retagged = merged.edges.find((e) => e.id === 'e1');
@@ -130,7 +130,7 @@ describe('applyTypeMerge — optimistic edge retag when an ontology type merge i
 		);
 	});
 
-	it('is a no-op on the snapshot when the approved proposal has no merge_of (pure new type — no edges to retag)', () => {
+	it('is a no-op on the snapshot when the approved proposal has no merge_of (pure new type - no edges to retag)', () => {
 		const pureNew: OntologyTypeProposal = { ...TYPE_APPROVAL, merge_of: null };
 		const merged = applyTypeMerge(SNAPSHOT, pureNew);
 		expect(merged).toEqual(SNAPSHOT);

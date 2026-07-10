@@ -4,7 +4,7 @@
 //!
 //! The existing ingest tests (`braindump.rs`, `extraction.rs`) exercise the
 //! inline test runner (deterministic, no `tokio::spawn`); these tests exercise
-//! the *spawned* path — `IngestRunner::new()` fires-and-forgets via
+//! the *spawned* path - `IngestRunner::new()` fires-and-forgets via
 //! `tokio::spawn`, and `await_pending_ingests` drains the `JoinHandle`s so the
 //! test can assert the post-background state deterministically.
 
@@ -73,7 +73,7 @@ async fn read_cleaned(app: &axum::Router, cookie: &http::HeaderValue, id: i64) -
 
 /// Build app state with the *spawned* ingest runner (production shape) so the
 /// route fire-and-forgets and the test drains via `await_pending_ingests`.
-/// Returns (app, state) — state is held so the test can await its runner.
+/// Returns (app, state) - state is held so the test can await its runner.
 fn app_with_spawn_runner(db: Db, llm: Arc<dyn Llm>) -> (axum::Router, AppState) {
     let mut state = AppState::for_tests(db);
     state.llm = llm;
@@ -207,7 +207,7 @@ impl Llm for NonRetryableLlm {
         Ok("NonRetryableLlm::synthesize (unused)".to_string())
     }
     async fn extract(&self, _: &str, _: &[String]) -> Result<ExtractionResult> {
-        // Malformed Gemini response — a logic/parsing error, not a transient
+        // Malformed Gemini response - a logic/parsing error, not a transient
         // provider failure. Must NOT be retried.
         Err(Error::Internal(
             "gemini extract: response was not JSON".into(),
@@ -241,7 +241,7 @@ async fn submit_returns_immediately_with_placeholder_then_background_completes()
 
     let body = submit(&app, &cookie, "  maria endangers the q3 launch  ").await;
     let id = body["id"].as_i64().unwrap();
-    // The response returns right away with a placeholder cleaned rendering —
+    // The response returns right away with a placeholder cleaned rendering -
     // no LLM call on the request path (issue #84).
     assert_eq!(
         body["cleaned"].as_str().unwrap(),
@@ -312,7 +312,7 @@ async fn startup_recovery_scan_resumes_pending_braindump() {
     let llm: Arc<dyn Llm> = Arc::new(ScriptedLlm {
         result: maria_endangers_q3(),
     });
-    // Persist verbatim directly (no route, no spawn) — the row is pending.
+    // Persist verbatim directly (no route, no spawn) - the row is pending.
     let bd = second_brain_backend::braindump::submit_braindump(
         &db,
         BOOTSTRAP_ADMIN_USER_ID,
@@ -583,7 +583,7 @@ async fn non_retryable_failure_terminals_braindump_as_failed() {
 async fn retry_backs_off_on_the_configured_interval() {
     // The retry loop sleeps `ingest_retry_interval` between attempts. With one
     // transient failure then success, the elapsed time must reflect the
-    // backoff — proving the loop does not busy-spin. A short (1s) interval
+    // backoff - proving the loop does not busy-spin. A short (1s) interval
     // keeps the test fast while remaining measurable.
     let db = Db::open_in_memory().unwrap();
     let cookie = session_cookie(&db).await;

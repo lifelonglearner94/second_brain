@@ -7,7 +7,7 @@
 //! submit→extract→accrete path with a sequenced extractor so each braindump
 //! feeds only one cluster. The LLM seam is a scripted stand-in that records the
 //! system prompt it received, so the macrostructure-context integration is
-//! asserted against the actual prompt sent to the model — hermetic, no Gemini.
+//! asserted against the actual prompt sent to the model - hermetic, no Gemini.
 
 use std::sync::{Arc, Mutex};
 
@@ -30,7 +30,7 @@ use tower::ServiceExt;
 /// The scripted LLM for the chat-macrostructure tests (issue #39 collapsed the
 /// former separate `SequencedExtractor` + `RecordingLlm` into one struct):
 /// `extract` returns a canned result per call in sequence (so two braindumps
-/// feed two disjoint clusters — bd1 → Maria/Q3, bd2 → Alpha/Beta), and
+/// feed two disjoint clusters - bd1 → Maria/Q3, bd2 → Alpha/Beta), and
 /// `synthesize` records each system prompt and returns a canned answer (so
 /// tests can assert the macrostructure context reached the model).
 struct ScriptedLlm {
@@ -190,7 +190,7 @@ async fn chat_prompt_layers_the_partition_as_macrostructure_context() {
         db.clone(),
         String::from(
             "Q3 is at risk because Maria is leaving [bd:1] \
-             [edge:Maria —endangers→ Q3 launch]",
+             [edge:Maria -endangers→ Q3 launch]",
         ),
         prompts.clone(),
     );
@@ -231,7 +231,7 @@ async fn chat_prompt_layers_the_partition_as_macrostructure_context() {
 async fn chat_rejects_an_answer_that_cites_a_cluster() {
     // ADR-0008 + the structural backstop: an answer that cites a cluster
     // (`[cluster:...]`) rests on an ephemeral projection, not the stable truth.
-    // The endpoint must reject it — returning silence with no citations — so the
+    // The endpoint must reject it - returning silence with no citations - so the
     // frontend never shows sources for an ungrounded answer. This is the
     // "citation-from-cluster case rejected".
     let db = Db::open_in_memory().unwrap();
@@ -282,7 +282,7 @@ async fn chat_with_macrostructure_still_cites_braindumps_and_edges() {
         db.clone(),
         String::from(
             "Q3 is at risk because Maria is leaving, which endangers the launch \
-             [bd:1] [edge:Maria —endangers→ Q3 launch]",
+             [bd:1] [edge:Maria -endangers→ Q3 launch]",
         ),
         prompts.clone(),
     );
@@ -345,7 +345,7 @@ async fn retrieval_does_not_use_cluster_membership() {
     );
     assert!(
         body.get("clusters").is_none() && body.get("cluster").is_none(),
-        "retrieval carries no cluster field — clusters are not a retrieval concept"
+        "retrieval carries no cluster field - clusters are not a retrieval concept"
     );
     let braindumps = body["braindumps"].as_array().expect("braindumps array");
     let maria = braindumps

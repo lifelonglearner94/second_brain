@@ -21,12 +21,12 @@ the-second-brain-knowledge.duckdns.org {
 	# PWA Bundle (ADR-0001): baked into the image at /srv, served by
 	# file_server. adapter-static materializes each prerendered route as a
 	# FLAT <path>.html file at the bundle root (e.g. /login -> /srv/login.html,
-	# /app/admin/invites -> /srv/app/admin/invites.html) — NOT as
+	# /app/admin/invites -> /srv/app/admin/invites.html) - NOT as
 	# <path>/index.html. try_files must therefore try {path}.html BEFORE the
 	# bare {path}, or every prerendered leaf route (login, app, app/*) misses
-	# and falls through to /index.html — serving the landing page at the wrong
+	# and falls through to /index.html - serving the landing page at the wrong
 	# URL and silently dropping the query string (e.g. /login?invite=<token>
-	# lost, breaking invitation deep links — #79). Order: {path}.html (flat
+	# lost, breaking invitation deep links - #79). Order: {path}.html (flat
 	# prerendered file) -> {path} (root "/" via directory index) -> /index.html
 	# (SPA fallback for purely client-side routes).
 	handle {

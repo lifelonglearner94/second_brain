@@ -12,7 +12,7 @@ function okResponse(body: unknown): Response {
 	});
 }
 
-describe('apiClient.submitBraindump — POST /braindumps (backend #5, ADR-0007)', () => {
+describe('apiClient.submitBraindump - POST /braindumps (backend #5, ADR-0007)', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {
@@ -57,7 +57,7 @@ describe('apiClient.submitBraindump — POST /braindumps (backend #5, ADR-0007)'
 	});
 });
 
-describe('apiClient.getGraphDelta — GET /graph/delta (backend #28, ADR-0002 pull-on-focus)', () => {
+describe('apiClient.getGraphDelta - GET /graph/delta (backend #28, ADR-0002 pull-on-focus)', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	const DELTA: GraphDelta = {

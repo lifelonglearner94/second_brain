@@ -29,7 +29,7 @@ const LOGS_BODY: LogsResponse = {
 	capacity: 1_000
 };
 
-describe('apiClient — admin logs surface against backend #4', () => {
+describe('apiClient - admin logs surface against backend #4', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {

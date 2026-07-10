@@ -1,14 +1,14 @@
 //! Ontology routes (issues #3, #9, ADR-0003).
 //!
-//! `GET /ontology` — the governed edge-type vocabulary, read-only. The LLM
+//! `GET /ontology` - the governed edge-type vocabulary, read-only. The LLM
 //! draws from this and never invents beyond it.
 //!
-//! `POST /ontology/propose` — propose a new edge type; embedding-deduped
+//! `POST /ontology/propose` - propose a new edge type; embedding-deduped
 //! (>99.5% auto-merge, else queued).
-//! `GET /ontology/proposals` — list the proposal queue.
-//! `POST /ontology/proposals/{id}/approve` — approve a pending proposal: adds
+//! `GET /ontology/proposals` - list the proposal queue.
+//! `POST /ontology/proposals/{id}/approve` - approve a pending proposal: adds
 //! the type to the ontology and spawns the async refactor (if `merge_of`).
-//! `POST /ontology/proposals/{id}/reject` — reject a pending proposal.
+//! `POST /ontology/proposals/{id}/reject` - reject a pending proposal.
 
 use axum::extract::{Extension, Path, State};
 use axum::response::Json;
@@ -50,7 +50,7 @@ pub async fn ontology(
 }
 
 /// Body for `POST /ontology/propose`. `merge_of` is the slug of the existing
-/// type this proposal merges into the new one — on approve, the refactor
+/// type this proposal merges into the new one - on approve, the refactor
 /// retags edges of that type. `None` for a pure new type (no refactor).
 #[derive(Debug, Deserialize)]
 pub struct ProposeRequest {

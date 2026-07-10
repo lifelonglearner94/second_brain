@@ -49,7 +49,7 @@ const THEMATIC: ChatInferenceProposal = {
 	}
 };
 
-describe('apiClient — chat-inference proposal queue (backend #11/#13, ADR-0006)', () => {
+describe('apiClient - chat-inference proposal queue (backend #11/#13, ADR-0006)', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {
@@ -106,7 +106,7 @@ describe('apiClient — chat-inference proposal queue (backend #11/#13, ADR-0006
 	});
 });
 
-describe('apiClient.endorseInferenceProposal — POST /chat/inferences/{id}/endorse', () => {
+describe('apiClient.endorseInferenceProposal - POST /chat/inferences/{id}/endorse', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	const ENDORSED: ChatInferenceProposal = {

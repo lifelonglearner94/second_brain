@@ -33,7 +33,7 @@ beforeEach(async () => {
 	});
 });
 
-describe('offline-open story — frozen-graph render, staleness indicator, capture routed to Pending (ADR-0005, issue #21)', () => {
+describe('offline-open story - frozen-graph render, staleness indicator, capture routed to Pending (ADR-0005, issue #21)', () => {
 	let idb: IdbStore;
 
 	beforeEach(() => {
@@ -64,7 +64,7 @@ describe('offline-open story — frozen-graph render, staleness indicator, captu
 		expect(frozen.label?.toLowerCase()).toContain('offline');
 	});
 
-	it('never renders a blank screen on connectivity failure with no cache — the load throws a user-meaningful error and frozenGraphStatus maps it to a non-blank label', async () => {
+	it('never renders a blank screen on connectivity failure with no cache - the load throws a user-meaningful error and frozenGraphStatus maps it to a non-blank label', async () => {
 		const throwingApi = {
 			getGraph: vi.fn(async (): Promise<GlobalTopologySnapshot> => {
 				throw new Error('down');
@@ -86,7 +86,7 @@ describe('offline-open story — frozen-graph render, staleness indicator, captu
 		expect(frozen.label).toContain('Could not load the graph');
 	});
 
-	it('does not flag staleness when the backend is reachable and online — captures ingest immediately', async () => {
+	it('does not flag staleness when the backend is reachable and online - captures ingest immediately', async () => {
 		const freshApi = {
 			getGraph: vi.fn(async (): Promise<GlobalTopologySnapshot> => RAW)
 		};

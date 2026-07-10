@@ -97,7 +97,7 @@ function graphWithSnapshot(): GraphStore {
 	return graph;
 }
 
-describe('HousekeepingStore — the low-epistemic-weight HITL surface (ADR-0004)', () => {
+describe('HousekeepingStore - the low-epistemic-weight HITL surface (ADR-0004)', () => {
 	let api: HousekeepingApi;
 
 	beforeEach(() => {
@@ -111,7 +111,7 @@ describe('HousekeepingStore — the low-epistemic-weight HITL surface (ADR-0004)
 		expect(store.snapshot).toBeNull();
 	});
 
-	describe('load — list concept- and type-merge suggestions from the backend Merge Suggestion API', () => {
+	describe('load - list concept- and type-merge suggestions from the backend Merge Suggestion API', () => {
 		it('loads concept suggestions, type proposals, and ontology context, reading the graph from the shared GraphStore (no Global Topology Snapshot re-fetch)', async () => {
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
@@ -160,7 +160,7 @@ describe('HousekeepingStore — the low-epistemic-weight HITL surface (ADR-0004)
 			expect(type.similarity).toBe(0.88);
 		});
 
-		it('carries NO inference evidence — only similarity scores (no evidence/path/snapshot field on items)', async () => {
+		it('carries NO inference evidence - only similarity scores (no evidence/path/snapshot field on items)', async () => {
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
 			for (const item of store.items) {
@@ -209,7 +209,7 @@ describe('HousekeepingStore — the low-epistemic-weight HITL surface (ADR-0004)
 		});
 	});
 
-	describe('confirmMerge — POST to the backend then optimistically merge the result into the shared GraphStore', () => {
+	describe('confirmMerge - POST to the backend then optimistically merge the result into the shared GraphStore', () => {
 		it('POSTs the concept-merge approve and folds the new concept into the survivor in the shared Spatial View-Graph', async () => {
 			const graph = graphWithSnapshot();
 			const store = new HousekeepingStore(api, graph);
@@ -286,7 +286,7 @@ describe('HousekeepingStore — the low-epistemic-weight HITL surface (ADR-0004)
 		});
 	});
 
-	describe('bifurcation — separate from the Endorsement Queue (ADR-0004)', () => {
+	describe('bifurcation - separate from the Endorsement Queue (ADR-0004)', () => {
 		it('does not call any chat-inference / endorsement endpoint (that is the Endorsement Queue, #25)', async () => {
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();

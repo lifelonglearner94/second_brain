@@ -53,8 +53,8 @@ impl Db {
     }
 
     /// Convenience for tests and ephemeral instances. Issue #74: under the
-    /// `test-support` feature (active for every `cargo test` target — unit and
-    /// integration — via the dev-dependency self-link), this also stands the
+    /// `test-support` feature (active for every `cargo test` target - unit and
+    /// integration - via the dev-dependency self-link), this also stands the
     /// bootstrap admin up (the `users` row with `is_admin = 1` plus its
     /// day-zero ontology) the way the bootstrap `register_finish` would, so
     /// the many tests that mint admin sessions or submit admin braindumps
@@ -90,11 +90,11 @@ impl Db {
     ///
     /// This is the internal connection-access mechanism for the
     /// [`SqliteGraphRepo`](crate::graph_repo::SqliteGraphRepo) adapter, the
-    /// auth modules, and the health check — NOT for domain modules, which go
+    /// auth modules, and the health check - NOT for domain modules, which go
     /// through the [`GraphRepo`](crate::graph_repo::GraphRepo) trait.
     ///
     /// The closure owns everything it needs (it must be `'static`); borrow
-    /// nothing from the caller — clone owned data into the closure instead.
+    /// nothing from the caller - clone owned data into the closure instead.
     pub(crate) async fn with_conn<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&Connection) -> Result<T> + Send + 'static,
@@ -133,7 +133,7 @@ pub fn now_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-/// The stable id of the bootstrap admin — the single account the deploy-time
+/// The stable id of the bootstrap admin - the single account the deploy-time
 /// singleton lock (issue #2) mints on first passkey registration. Issue #72
 /// migrates this from a hardcoded constant in `auth::webauthn` into a real row
 /// on the `users` table, so every graph row can carry a non-null `user_id` FK
@@ -178,15 +178,15 @@ fn vec_table_has_user_id(conn: &Connection, table: &str) -> bool {
 }
 
 /// Idempotent schema migrations. Each slice appends its `CREATE TABLE IF NOT
-/// EXISTS` block; forward-only additive — no destructive ALTERs that lose data.
+/// EXISTS` block; forward-only additive - no destructive ALTERs that lose data.
 /// Issue #72 threads a non-null `user_id` FK through every graph table so the
 /// knowledge graph is multi-user-capable: each user gets their own Braindumps,
 /// Concepts, Edges, Provenance, and inference proposals, isolated from every
 /// other user. The existing single-user account (the [`BOOTSTRAP_ADMIN_USER_ID`]
-/// constant) is migrated into a real admin row on the `users` table — the
-/// bootstrap admin — so no existing data is orphaned.
+/// constant) is migrated into a real admin row on the `users` table - the
+/// bootstrap admin - so no existing data is orphaned.
 fn migrate(conn: &Connection) -> Result<()> {
-    // Issue #72 / #74 — the `users` table. Issue #72 seeded the bootstrap
+    // Issue #72 / #74 - the `users` table. Issue #72 seeded the bootstrap
     // admin row here idempotently; issue #74 removes that seed so a fresh
     // deploy starts with zero users and the bootstrap exception (first
     // `register_finish` with no invitation, `SELECT COUNT(*) FROM users == 0`)
@@ -204,9 +204,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         );",
     )?;
 
-    // Issue #2 — passkey auth + opaque sessions. The `user_id` columns now
+    // Issue #2 - passkey auth + opaque sessions. The `user_id` columns now
     // reference `users(id)` (fresh DBs get the FK; existing DBs keep the TEXT
-    // column — forward-only).
+    // column - forward-only).
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS passkeys (
             cred_id      BLOB PRIMARY KEY,
@@ -225,26 +225,26 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);",
     )?;
 
-    // Issue #72 — scope every graph table by `user_id`. The `users` table and
+    // Issue #72 - scope every graph table by `user_id`. The `users` table and
     // bootstrap admin row already exist (above), so the backfill
     // `UPDATE … SET user_id = BOOTSTRAP_ADMIN_USER_ID WHERE user_id IS NULL`
     // assigns the existing single-user data to the admin. Fresh DBs create
     // the column non-null directly; existing DBs get a nullable column that is
     // backfilled immediately (a later slice may enforce non-null).
     //
-    // Issue #5 — braindump ingest skeleton (ADR-0007). A braindump is an
+    // Issue #5 - braindump ingest skeleton (ADR-0007). A braindump is an
     // immutable thought-snapshot: verbatim (user-confirmed text at submit,
     // overwritable only for error-correction), cleaned (LLM-produced rendering
-    // shown by default), and created_at (the original submit instant — edits
+    // shown by default), and created_at (the original submit instant - edits
     // overwrite in place but never bump the timestamp).
     //
-    // Issue #84/#85 — async fire-and-forget ingest. `ingest_status` tracks
+    // Issue #84/#85 - async fire-and-forget ingest. `ingest_status` tracks
     // where a braindump sits in the clean → extract → accrete pipeline
     // (`pending` while the background task has not finished, `complete` once
     // it has, `failed` on a non-retryable error). `ingest_attempts` counts
     // processing attempts (transient failures retry on a fixed interval);
     // `last_attempt_at` records the most recent attempt for the retry
-    // scheduler. A fresh submit is `pending` with zero attempts — the
+    // scheduler. A fresh submit is `pending` with zero attempts - the
     // verbatim is persisted immediately and the HTTP request returns before
     // the pipeline runs (ADR-0007; the pipeline runs out-of-band).
     conn.execute_batch(
@@ -261,7 +261,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     )?;
     add_column_if_missing(conn, "braindumps", "user_id", "TEXT")?;
     backfill_user_id(conn, "braindumps")?;
-    // Issue #84/#85 — forward-only: existing braindumps (fully ingested under
+    // Issue #84/#85 - forward-only: existing braindumps (fully ingested under
     // the old synchronous path) are marked `complete` so the startup recovery
     // scan does not re-process them; a fresh DB seeds the column at `pending`.
     add_column_if_missing(
@@ -279,7 +279,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "braindumps", "last_attempt_at", "INTEGER")?;
     backfill_ingest_status_complete(conn)?;
 
-    // Issue #3 + #72 — the governed edge-type vocabulary (ontology), now
+    // Issue #3 + #72 - the governed edge-type vocabulary (ontology), now
     // per-user. Fresh DBs create the table with `user_id` and a
     // `(user_id, slug)` unique constraint (replacing the old `slug`-only
     // UNIQUE). Existing DBs are migrated: a new table is created, data is
@@ -289,7 +289,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     // bootstrap admin so existing data is consistent.
     migrate_ontology_to_per_user(conn)?;
 
-    // Issue #6 + #72 — concept identity, edge accretion, provenance, type
+    // Issue #6 + #72 - concept identity, edge accretion, provenance, type
     // history (ADR-0001 / ADR-0002 / ADR-0003 / ADR-0010), now scoped by
     // `user_id`.
     conn.execute_batch(
@@ -348,7 +348,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         backfill_user_id(conn, table)?;
     }
 
-    // Issue #9 + #72 — ontology governance (ADR-0003), now per-user. The
+    // Issue #9 + #72 - ontology governance (ADR-0003), now per-user. The
     // `type_proposals` queue is scoped by `user_id` so each user evolves their
     // own vocabulary.
     conn.execute_batch(
@@ -369,7 +369,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "type_proposals", "user_id", "TEXT")?;
     backfill_user_id(conn, "type_proposals")?;
 
-    // Issue #28 + #72 — delta sync tombstones, now scoped by `user_id`.
+    // Issue #28 + #72 - delta sync tombstones, now scoped by `user_id`.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS graph_tombstones (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -385,7 +385,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "graph_tombstones", "user_id", "TEXT")?;
     backfill_user_id(conn, "graph_tombstones")?;
 
-    // Issue #13 + #72 — thematic-inference snapshots, now scoped by `user_id`.
+    // Issue #13 + #72 - thematic-inference snapshots, now scoped by `user_id`.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS thematic_snapshots (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -398,7 +398,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "thematic_snapshots", "user_id", "TEXT")?;
     backfill_user_id(conn, "thematic_snapshots")?;
 
-    // Issue #11 + #72 — chat write-back (ADR-0006), now scoped by `user_id`.
+    // Issue #11 + #72 - chat write-back (ADR-0006), now scoped by `user_id`.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS chat_inference_proposals (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -430,7 +430,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "chat_inference_proposals", "user_id", "TEXT")?;
     backfill_user_id(conn, "chat_inference_proposals")?;
 
-    // Issue #73 — single-use invitations. An invitation is a one-time bearer
+    // Issue #73 - single-use invitations. An invitation is a one-time bearer
     // token the admin mints and shares out-of-band; a future registration flow
     // (issue #74) consumes it. `created_by_user_id` is the minting admin;
     // `consumed_by_user_id` is the invitee who burned it (NULL while pending).
@@ -457,7 +457,7 @@ fn migrate(conn: &Connection) -> Result<()> {
 
 /// Backfill `user_id` on `table` with the bootstrap admin's id where it is
 /// NULL. Forward-only: assigns the existing single-user data to the admin so
-/// no row is orphaned. Idempotent — rows already carrying a `user_id` are
+/// no row is orphaned. Idempotent - rows already carrying a `user_id` are
 /// untouched.
 fn backfill_user_id(conn: &Connection, table: &str) -> Result<()> {
     conn.execute(
@@ -470,7 +470,7 @@ fn backfill_user_id(conn: &Connection, table: &str) -> Result<()> {
 /// Mark every existing braindump `ingest_status = 'complete'` where the column
 /// is NULL (issue #84/#85 forward-only migration). Existing braindumps were
 /// fully ingested under the old synchronous path, so the startup recovery scan
-/// must not re-process them. Idempotent — rows already carrying a status are
+/// must not re-process them. Idempotent - rows already carrying a status are
 /// untouched. Runs only when the `ingest_status` column was just added.
 fn backfill_ingest_status_complete(conn: &Connection) -> Result<()> {
     conn.execute(
@@ -497,7 +497,7 @@ fn admin_row_exists(conn: &Connection, id: &str) -> bool {
 /// Test-only sync core: insert the bootstrap admin row (id
 /// `BOOTSTRAP_ADMIN_USER_ID`, `is_admin = 1`) and seed its day-zero ontology,
 /// mirroring what the bootstrap `register_finish` does on a fresh deploy.
-/// Idempotent — safe to call multiple times. Used by [`Db::open_in_memory`]
+/// Idempotent - safe to call multiple times. Used by [`Db::open_in_memory`]
 /// under `test-support` and by [`seed_bootstrap_admin_for_tests`].
 #[cfg(any(test, feature = "test-support"))]
 fn seed_bootstrap_admin_conn(conn: &Connection) -> Result<()> {
@@ -516,7 +516,7 @@ fn seed_bootstrap_admin_conn(conn: &Connection) -> Result<()> {
 /// migration's automatic admin seed so the bootstrap exception can fire on
 /// fresh DBs; integration tests that exercise the admin account (minting
 /// sessions, submitting braindumps as the admin) without going through the
-/// WebAuthn registration dance call this to stand the admin up. Idempotent —
+/// WebAuthn registration dance call this to stand the admin up. Idempotent -
 /// safe to call multiple times. Available under `cfg(test)` and the
 /// `test-support` feature. (Most tests get this for free via
 /// [`Db::open_in_memory`], which seeds under `test-support`; this helper is
@@ -552,7 +552,7 @@ fn migrate_ontology_to_per_user(conn: &Connection) -> Result<()> {
     if table_exists == 0 {
         // Fresh DB: create the table with the per-user schema. The bootstrap
         // admin's vocabulary is seeded by `register_finish` (issue #74) once
-        // the admin row exists — seeding here would FK-violate on a fresh DB
+        // the admin row exists - seeding here would FK-violate on a fresh DB
         // with no users.
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS ontology (
@@ -658,7 +658,7 @@ pub async fn seed_ontology_for_user(db: &Db, user_id: &str) -> Result<()> {
 
 /// Create the embedding vec0 virtual tables at the given dimensionality.
 /// Idempotent. Issue #72: the collections are partitioned by `user_id` so KNN
-/// is scoped per-user by construction — a Retrieval KNN seed for one user
+/// is scoped per-user by construction - a Retrieval KNN seed for one user
 /// never returns another user's concepts/braindumps (ADR-0004). If pre-issue-72
 /// vec0 collections exist (without the `user_id` partition key), they are
 /// dropped and recreated with the partition key; the bootstrap admin's
@@ -666,14 +666,14 @@ pub async fn seed_ontology_for_user(db: &Db, user_id: &str) -> Result<()> {
 /// embedding seed (same shape as `seed_type_embeddings`).
 ///
 /// A model swap (different dim) requires a migration that drops and recreates
-/// these tables — out of scope for this slice.
+/// these tables - out of scope for this slice.
 pub(crate) fn ensure_vec_tables(conn: &Connection, dim: usize) -> Result<()> {
     assert!(dim > 0, "embedding dimension must be positive");
 
     // If pre-issue-72 vec0 collections exist (no `user_id` partition key),
     // drop them so the `CREATE … IF NOT EXISTS` below recreates them with the
     // partition key. The embeddings are re-derived at startup (issue #72
-    // backfill); no source data is lost — the braindumps/concepts/ontology
+    // backfill); no source data is lost - the braindumps/concepts/ontology
     // rows persist, only the derived vectors are recomputed.
     for table in [
         "concept_embeddings",
@@ -716,7 +716,7 @@ pub(crate) fn ensure_vec_tables(conn: &Connection, dim: usize) -> Result<()> {
 // --- Issue #84/#85: ingest-status bookkeeping for async fire-and-forget ---
 //
 // These are pipeline-tracking queries (not graph read-model queries), so they
-// live here as free functions against `Db::with_conn` — the same shape as
+// live here as free functions against `Db::with_conn` - the same shape as
 // `seed_ontology_for_user`. The graph read/write surface stays behind the
 // [`GraphRepo`](crate::graph_repo::GraphRepo) trait; ingest status is a
 // braindump-row column owned by the ingest pipeline.
@@ -759,7 +759,7 @@ pub async fn get_ingest_state(db: &Db, user_id: &str, id: i64) -> Result<Option<
 /// Set a braindump's `ingest_status`, bump `ingest_attempts`, and stamp
 /// `last_attempt_at` to now. Called by the background ingest task: `complete`
 /// on success, `failed` on a non-retryable error. A transient failure leaves
-/// the braindump `pending` (the retry loop re-attempts) — the caller passes
+/// the braindump `pending` (the retry loop re-attempts) - the caller passes
 /// `pending` + the prior attempt count so the row records the attempt without
 /// terminaling.
 pub async fn set_ingest_status(
@@ -858,7 +858,7 @@ mod tests {
     }
 
     /// Issue #74: `seed_bootstrap_admin_for_tests` stands the admin up the way
-    /// the bootstrap registration does — inserts the `users` row with
+    /// the bootstrap registration does - inserts the `users` row with
     /// `is_admin = 1` and seeds the day-zero ontology. Idempotent. Uses
     /// `Db::open(":memory:")` (zero users) so the helper is the thing under
     /// test, not `open_in_memory`'s test-support seed.

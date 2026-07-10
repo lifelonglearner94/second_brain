@@ -6,7 +6,7 @@
 //! are created via the real submit→extract→accrete path; auth is bypassed by
 //! minting a session row directly (as in `delta_sync.rs`). The extractor is a
 //! scripted stand-in so the accretion pipeline runs on deterministic
-//! concepts/edges — no Gemini call.
+//! concepts/edges - no Gemini call.
 
 use std::sync::Arc;
 

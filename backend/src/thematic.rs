@@ -1,10 +1,10 @@
-//! The Thematic Read Model (issue #12, ADR-0008) — the third read surface
+//! The Thematic Read Model (issue #12, ADR-0008) - the third read surface
 //! alongside Retrieval (ADR-0004) and Chat (ADR-0005/0006).
 //!
 //! A backend-owned projection of the knowledge graph's topology into clusters,
 //! computed by Louvain community detection. The frontend renders this
 //! projection; it never computes it (ADR-0008). Clusters are **ephemeral**: no
-//! stable identity, no provenance, no persistence across sessions — they reflect
+//! stable identity, no provenance, no persistence across sessions - they reflect
 //! the graph's "now" and are re-computed on every read. Within one partition,
 //! clusters carry throwaway session labels ("Group N for this session") so the
 //! LLM can reference them in chat reasoning; the labels die with the partition.
@@ -12,7 +12,7 @@
 //! Louvain is a topology computation, not a rendering concern: it runs over the
 //! undirected, weight-accumulated concept graph (each typed edge contributes
 //! unit weight; multiple typed edges between the same pair accumulate). The
-//! algorithm is non-deterministic by design (ADR-0008) — node visit order is
+//! algorithm is non-deterministic by design (ADR-0008) - node visit order is
 //! shuffled with a fresh RNG on every read, so partitions may differ across
 //! sessions. Tests inject a seeded RNG for reproducibility.
 
@@ -40,7 +40,7 @@ pub struct Cluster {
 
 /// The current partition: the clusters Louvain found plus the concept count at
 /// computation time (so the frontend can see the projection's coverage).
-/// Non-deterministic across sessions by design (ADR-0008) — re-computed on every
+/// Non-deterministic across sessions by design (ADR-0008) - re-computed on every
 /// read, never persisted.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Partition {
@@ -49,7 +49,7 @@ pub struct Partition {
 }
 
 /// Compute the current partition: load the graph topology, run Louvain, assign
-/// ephemeral session labels. Non-deterministic across reads (ADR-0008) — a
+/// ephemeral session labels. Non-deterministic across reads (ADR-0008) - a
 /// fresh `StdRng` seeded from the OS entropy seeds the node-visit shuffle every
 /// call (`StdRng` is `Send`+`Sync`, so the future is `Send` for axum; the
 /// `thread_rng` helper is `!Send` because it holds an `Rc`). Pure read: nothing
@@ -60,7 +60,7 @@ pub async fn partition(db: &Db, user_id: &str) -> Result<Partition> {
     partition_with(db, user_id, &mut rng).await
 }
 
-/// Compute the partition with an injected RNG — the test seam that makes the
+/// Compute the partition with an injected RNG - the test seam that makes the
 /// non-deterministic algorithm reproducible (ADR-0008's non-determinism is a
 /// production property; tests need determinism). Issue #72: scoped to
 /// `user_id`.
@@ -146,7 +146,7 @@ impl WeightedGraph {
 /// (undirected, weight-accumulated). Each typed edge contributes unit weight;
 /// multiple typed edges between the same concept pair (ADR-0002 contradictory
 /// or reinforcing edges) accumulate into a stronger link. Self-edges
-/// (`source == target`) are skipped — they carry no community signal. Edges
+/// (`source == target`) are skipped - they carry no community signal. Edges
 /// whose endpoints are not live concepts are skipped defensively.
 ///
 /// Delegates the reads to [`GraphRepo::all_concepts`] +
@@ -532,7 +532,7 @@ mod tests {
     async fn load_topology_accumulates_weight_across_multiple_typed_edges_between_a_pair() {
         // ADR-0002: two typed edges between the same pair (endangers + helps)
         // accrete as separate rows; Louvain sees them as one undirected link of
-        // weight 2 — the multi-assertion density signal.
+        // weight 2 - the multi-assertion density signal.
         let db = test_db();
         ingest(
             &db,
@@ -563,7 +563,7 @@ mod tests {
     #[tokio::test]
     async fn load_topology_skips_self_edges() {
         // A self-edge (source == target) carries no community signal and is
-        // skipped — it must not inflate a node's degree or appear as a link.
+        // skipped - it must not inflate a node's degree or appear as a link.
         let db = test_db();
         ingest(
             &db,
@@ -668,7 +668,7 @@ mod tests {
 
     #[tokio::test]
     async fn partition_is_a_pure_read_no_persistence_across_calls() {
-        // ADR-0008: clusters are ephemeral — computing a partition must not
+        // ADR-0008: clusters are ephemeral - computing a partition must not
         // persist anything. Assert no clusters table exists and the graph is
         // unchanged after repeated reads.
         let db = test_db();
@@ -700,7 +700,7 @@ mod tests {
         assert_eq!(count_edges(&db).await, edges_before, "no new edges");
         assert!(
             !clusters_table_exists(&db).await,
-            "no clusters table — clusters are never persisted (ADR-0008)"
+            "no clusters table - clusters are never persisted (ADR-0008)"
         );
     }
 

@@ -10,7 +10,7 @@
 # and a proxied /api/health. `docker compose config` resolves env_file into
 # the backend `environment`, so env_file is asserted against the raw YAML by
 # grep (never against resolved values) and no secret is ever printed. Uses
-# only Python stdlib (json) + grep — no third-party deps, so it runs in CI.
+# only Python stdlib (json) + grep - no third-party deps, so it runs in CI.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -42,7 +42,7 @@ assert set(svc) == {"edge", "backend", "litestream"}, \
     f"expected edge+backend+litestream, got {set(svc)}"
 be, edge, litestream = svc["backend"], svc["edge"], svc["litestream"]
 
-# ADR-0006: Backend internal-only — no published host ports, expose 8080.
+# ADR-0006: Backend internal-only - no published host ports, expose 8080.
 assert not be.get("ports"), f"backend must NOT publish ports (ADR-0006); got {be.get('ports')}"
 assert any("8080" in str(e) for e in be.get("expose", [])), \
     f"backend must expose 8080; got {be.get('expose')}"
@@ -57,7 +57,7 @@ assert "sqlite_data" in cfg.get("volumes", {}), "top-level volume sqlite_data mu
 
 # Edge is the sole published service (:80 + :443); both services on one
 # internal network. :443 is for HTTPS (Caddy auto-HTTPS in production via
-# Caddyfile.prod; present in local dev too but unused — the local Caddyfile
+# Caddyfile.prod; present in local dev too but unused - the local Caddyfile
 # binds :80 only).
 assert edge.get("ports"), "edge must publish :80 and :443"
 assert any(p.get("target") == 80 for p in edge["ports"]), f"edge must publish :80; got {edge['ports']}"
@@ -68,7 +68,7 @@ assert "app_network" in cfg.get("networks", {}), "app_network must be declared"
 
 # --- Edge ACME state (ADR-0001 as corrected by #55) --------------------------
 # Caddy's issued Let's Encrypt certificates + ACME account keys live in /data,
-# and its autosaved config in /config — runtime state that must survive
+# and its autosaved config in /config - runtime state that must survive
 # container recreations on named volumes. Without /data, every `docker compose
 # down/up` or deploy wipes ACME state and forces a fresh cert request, which
 # trips Let's Encrypt's 5-issuances-per-168h rate limit and takes HTTPS down
@@ -92,7 +92,7 @@ assert "caddy_config" in cfg.get("volumes", {}), "top-level volume caddy_config 
 # internal tracking tables (_litestream_seq, _litestream_shadow) in the source
 # SQLite database to record WAL position, so a read-only mount crash-loops with
 # `attempt to write a readonly database (8)` once real R2 credentials are
-# present. This is safe — Litestream appends ONLY to its own _litestream_*
+# present. This is safe - Litestream appends ONLY to its own _litestream_*
 # tables and never mutates braindump/concept/edge rows, so the Brain File's
 # user-data integrity is not at risk (ADR-0002 trust contract unchanged).
 lsvols = [v for v in litestream.get("volumes", []) if isinstance(v, dict) and v.get("target") == "/data"]
@@ -105,7 +105,7 @@ assert lm.get("read_only") is not True, f"litestream must mount sqlite_data READ
 lscfg = [v for v in litestream.get("volumes", []) if isinstance(v, dict) and v.get("target") == "/etc/litestream.yml"]
 assert lscfg, f"litestream must mount litestream.yml at /etc/litestream.yml; got {litestream.get('volumes')}"
 assert lscfg[0].get("read_only") is True, "litestream config must be mounted read-only"
-# Metrics published on 127.0.0.1 ONLY (loopback) — never 0.0.0.0 — so the host
+# Metrics published on 127.0.0.1 ONLY (loopback) - never 0.0.0.0 - so the host
 # cron Health Push (#33) can curl /metrics without exposing it externally.
 lports = litestream.get("ports", [])
 assert lports, "litestream must publish :9090 (metrics) for the Health Push (#33)"
@@ -113,7 +113,7 @@ assert any(p.get("target") == 9090 and p.get("host_ip") == "127.0.0.1" for p in 
     f"litestream :9090 must bind 127.0.0.1 only (not external); got {lports}"
 assert not any(p.get("host_ip") in (None, "0.0.0.0", "::") for p in lports), \
     f"litestream must not publish on all interfaces; got {lports}"
-# env_file (ADR-0004) is asserted by the raw-YAML grep below — NOT here. Compose
+# env_file (ADR-0004) is asserted by the raw-YAML grep below - NOT here. Compose
 # v2 resolves env_file into `environment` and returns env_file=[] in the JSON,
 # so a JSON-level check would always fail (the original test's convention).
 assert "app_network" in (litestream.get("networks") or []), "litestream must be on app_network"
@@ -150,7 +150,7 @@ grep -q 'ARG CADDYFILE=Caddyfile' "$DF" \
 grep -q 'COPY infrastructure/edge/${CADDYFILE}' "$DF" \
   || die "Edge Dockerfile must COPY \${CADDYFILE} (build arg selects which Caddyfile is baked in)"
 if grep -iEn '\.env|COPY[^E]*[Ss]ecret|ENV.*[A-Z0-9_]*(KEY|SECRET|TOKEN|PASSWORD)|ARG.*[A-Z0-9_]*(KEY|SECRET|TOKEN|PASSWORD)' "$DF"; then
-  die "Edge Dockerfile bakes a secret — Zero-Trust Image violation (ADR-0004)"
+  die "Edge Dockerfile bakes a secret - Zero-Trust Image violation (ADR-0004)"
 fi
 pass "Edge Dockerfile: multi-stage, PWA Bundle baked in, CADDYFILE build arg, Zero-Trust (no secrets)"
 
@@ -165,7 +165,7 @@ grep -q 'file_server' "$CF" || die "Caddyfile must serve the PWA Bundle via file
 # flat <path>.html files (e.g. /srv/login.html), not <path>/index.html. Without
 # the {path}.html term every prerendered leaf route falls through to
 # /index.html and the query string is dropped (e.g. /login?invite=<token>
-# serves the landing page instead of the login page — invitation deep-link
+# serves the landing page instead of the login page - invitation deep-link
 # breakage, #79).
 grep -q 'try_files {path}.html {path} /index.html' "$CF" \
   || die "Caddyfile must try_files {path}.html {path} /index.html (flat prerendered files, #79)"
@@ -216,11 +216,11 @@ pass "GET / returns the PWA Bundle (Caddy file_server)"
 # (and the invite-token disclosure); the landing page carries
 # data-testid="auth-nav" + data-testid="health". Asserting the login marker is
 # present AND the landing markers are absent proves the right flat file was
-# served — and by extension that /login?invite=<token> would keep the query
+# served - and by extension that /login?invite=<token> would keep the query
 # string (Caddy try_files rewrites internally; the URL bar is unchanged).
 login_html="$(curl -fsS http://localhost:80/login)"
 [[ "$login_html" == *'data-testid="auth-form"'* ]] \
-  || die "GET /login did not serve the login page (missing auth-form); got the landing page instead — invitation deep links are broken (#79)"
+  || die "GET /login did not serve the login page (missing auth-form); got the landing page instead - invitation deep links are broken (#79)"
 [[ "$login_html" != *'data-testid="health"'* ]] \
   || die "GET /login served the landing page (health marker present); try_files is falling through to /index.html (#79)"
 pass "GET /login serves the prerendered login page (try_files {path}.html, #79 deep-link fix)"

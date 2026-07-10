@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Structural tests for the deploy pipeline — the command-restricted SSH deploy
+# Structural tests for the deploy pipeline - the command-restricted SSH deploy
 # entrypoint (deploy.sh) + the bootstrap ownership split (ADR-0003 / ADR-0007 /
 # ADR-0010).
 #
@@ -9,16 +9,16 @@
 #   - deploy.sh keeps the ADR-0007 deploy.env whitelist (REGISTRY/EDGE_TAG/
 #     BACKEND_TAG only) and the SHA extraction that drives config sync.
 #   - deploy.sh syncs config by FETCHING from raw.githubusercontent.com (public
-#     repo) at the deployed SHA — never by accepting piped config content — so a
+#     repo) at the deployed SHA - never by accepting piped config content - so a
 #     leaked SSH key can replay but not craft config (ADR-0003 invariant).
 #   - deploy.sh is Zero-Trust: references NO runtime secret (ADR-0004). It pulls
 #     from a public repo with no token, so no secret is needed on the VPS or GHA.
 #   - bootstrap.sh installs the 3 sync-eligible config files as deploy-owned
 #     (so deploy.sh, running as deploy, can overwrite them) but keeps deploy.sh
-#     itself root-owned and the install dir root-owned — the gate the deploy key
+#     itself root-owned and the install dir root-owned - the gate the deploy key
 #     cannot replace (ADR-0010).
 # Complements deploy.sh --self-test (behavioral, mocked) which is invoked
-# separately in CI. Uses grep only — no third-party deps, runs in CI.
+# separately in CI. Uses grep only - no third-party deps, runs in CI.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -59,13 +59,13 @@ grep -qF 'Fetch ALL first' "$DEPLOY" \
   || die "deploy.sh must fetch all config files before installing any (atomic sync)"
 pass "deploy.sh syncs config by FETCHING from the public repo at the deployed SHA (ADR-0010)"
 
-# --- deploy.sh: Zero-Trust — references NO runtime secret (ADR-0004) ----------
+# --- deploy.sh: Zero-Trust - references NO runtime secret (ADR-0004) ----------
 # deploy.sh pulls from a PUBLIC repo with no auth; it must not read, expand, or
 # reference any [SECRET] key from .env.example. Naming one in a comment would be
 # a leak vector if the comment drifted into a real reference, so assert absence.
 for secret in GEMINI_API_KEY LITESTREAM_ACCESS_KEY_ID LITESTREAM_SECRET_ACCESS_KEY NTFY_WEBHOOK_URL; do
   if grep -qF "$secret" "$DEPLOY"; then
-    die "deploy.sh references secret $secret — Zero-Trust violation (ADR-0004): config sync must need no secret (public repo)"
+    die "deploy.sh references secret $secret - Zero-Trust violation (ADR-0004): config sync must need no secret (public repo)"
   fi
 done
 pass "deploy.sh is Zero-Trust: no runtime-secret reference (public-repo fetch needs no token, ADR-0004)"
@@ -91,7 +91,7 @@ pass "bootstrap.sh installs the 3 sync-eligible config files as deploy-owned (AD
 
 # --- bootstrap.sh: deploy.sh + install dir stay root-owned (the gate) ---------
 # If deploy.sh were deploy-owned (or the install dir deploy-writable), the deploy
-# key could replace the validation gate — neutering ADR-0007. Both must be root.
+# key could replace the validation gate - neutering ADR-0007. Both must be root.
 if ! grep -Eq 'install -m 755 -o root -g root "\$REPO_ROOT/infrastructure/deploy\.sh"' "$BOOT"; then
   die "bootstrap.sh must install deploy.sh as -o root (the gate must NOT be deploy-writable, ADR-0010)"
 fi

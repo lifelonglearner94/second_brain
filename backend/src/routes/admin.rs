@@ -1,14 +1,14 @@
 //! Admin routes. `/admin/logs` (issue #4) is the hidden admin tab's pull-based
-//! log view — the backend reads its own in-memory log ring buffer and surfaces
+//! log view - the backend reads its own in-memory log ring buffer and surfaces
 //! it here so the phone can show errors (e.g. Gemini generation failures)
 //! without SSH. `/admin/invites*` (issue #73) lets the admin mint single-use
 //! invitations that gate future passkey registration. `/admin/system` (#81)
 //! surfaces live host load (CPU/RAM/disk) so the operator reads VPS pressure
 //! from the phone without SSH.
 //!
-//! `/admin/logs` and `/admin/system` are behind `require_session` — only an
+//! `/admin/logs` and `/admin/system` are behind `require_session` - only an
 //! authenticated user can read backend internals. `/admin/invites*` is
-//! additionally behind `require_admin` (issue #73) — only an admin can mint or
+//! additionally behind `require_admin` (issue #73) - only an admin can mint or
 //! list invitations. The log buffer is bounded (fixed capacity) and the
 //! `?limit` query caps the log response, so the endpoint is VPS-safe on the
 //! 8 GB box.
@@ -40,7 +40,7 @@ pub struct LogsResponse {
     capacity: usize,
 }
 
-/// `GET /admin/logs` — return up to `?limit` (default 200, capped at capacity)
+/// `GET /admin/logs` - return up to `?limit` (default 200, capped at capacity)
 /// most-recent structured log entries, newest-first. Newest-first so the admin
 /// tab's top-down list shows the freshest state at the top without scrolling
 /// past stale history. Auth-gated upstream.
@@ -63,7 +63,7 @@ pub async fn logs(
 /// per-core readings (0–100); `cores` is the logical-core count; `per_core`
 /// carries each core's 0–100 so the admin can spot a pinned core. CPU usage is
 /// a diff between two samples, so the handler refreshes once, waits the
-/// crate's minimum update interval, and refreshes again — a single refresh on
+/// crate's minimum update interval, and refreshes again - a single refresh on
 /// a fresh `System` returns 0 (no baseline).
 #[derive(Serialize)]
 pub struct CpuMetrics {
@@ -94,9 +94,9 @@ pub struct DiskMetrics {
     pub usage_percent: f32,
 }
 
-/// `GET /admin/system` — current host load (CPU, RAM, disk) for the admin
+/// `GET /admin/system` - current host load (CPU, RAM, disk) for the admin
 /// panel's system tab (#81). Lets the operator read VPS pressure from the
-/// phone without SSH. Behind `require_session` — same auth guard as
+/// phone without SSH. Behind `require_session` - same auth guard as
 /// `/admin/logs`. Sampling is stateless (a fresh `sysinfo::System` per
 /// request) so the handler stays self-contained and doesn't widen `AppState`;
 /// the CPU double-refresh costs one `MINIMUM_CPU_UPDATE_INTERVAL` of latency,
@@ -167,7 +167,7 @@ async fn sample_cpu_and_memory() -> (CpuMetrics, MemoryMetrics) {
 }
 
 /// Sample every mounted filesystem and identify the one holding the Brain File.
-/// `Disks` is sampled per request (disk usage is instantaneous — no baseline
+/// `Disks` is sampled per request (disk usage is instantaneous - no baseline
 /// needed, unlike CPU), so it doesn't need to live in `AppState`.
 fn sample_disks(db_path: &str) -> (Vec<DiskMetrics>, Option<String>) {
     let disks = sysinfo::Disks::new_with_refreshed_list();
@@ -224,7 +224,7 @@ fn brain_file_mount_point(disks: &sysinfo::Disks, db_path: &str) -> Option<Strin
 /// in the list so an admin can re-share a still-pending invite. `status` is
 /// `pending` until a registration flow consumes the token, then `consumed`.
 /// `consumed_by_display_name` is the invitee's display name (NULL while
-/// pending) — a convenience join so the admin list reads as human-readable
+/// pending) - a convenience join so the admin list reads as human-readable
 /// without a second round-trip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Invitation {
@@ -238,7 +238,7 @@ pub struct Invitation {
     pub consumed_by_display_name: Option<String>,
 }
 
-/// `POST /admin/invites` — mint a fresh single-use invitation. Admin-only (the
+/// `POST /admin/invites` - mint a fresh single-use invitation. Admin-only (the
 /// `require_admin` guard runs upstream). Returns the new token and metadata;
 /// the token is shown once to the admin and shared out-of-band with the
 /// invitee, who consumes it in a later slice's registration flow (issue #74).
@@ -275,7 +275,7 @@ fn mint_invite_conn(conn: &rusqlite::Connection, created_by: &str) -> Result<Inv
     })
 }
 
-/// `GET /admin/invites` — list every invitation (pending and consumed) with
+/// `GET /admin/invites` - list every invitation (pending and consumed) with
 /// consumer info. Admin-only. Ordered newest-first so the freshest mint is at
 /// the top of the admin tab. The token is included so a pending invite can be
 /// re-shared; the consumed rows retain their token for audit.

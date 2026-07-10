@@ -19,7 +19,7 @@
 	const supported = browserSupportsWebAuthn();
 
 	// Issue #74 introduced the `?invite=<token>` deep link; issue #79 adds the
-	// out-of-band path — an invitee who receives a bare token needs a place to
+	// out-of-band path - an invitee who receives a bare token needs a place to
 	// paste it. Both entry paths converge on a single source of truth: the
 	// text input inside the disclosure below. When the query param is present,
 	// onMount pre-fills the input and opens the disclosure so the invitee can
@@ -39,7 +39,7 @@
 
 	// The single value the register flow consumes and the label reads. Null
 	// when empty so registerBegin posts `{ invite: null }` (the bootstrap
-	// exception path — the first registration creates the admin with no token).
+	// exception path - the first registration creates the admin with no token).
 	let effectiveInviteToken = $derived(
 		inviteInput.trim() ? inviteInput.trim() : null
 	);
@@ -54,7 +54,7 @@
 				effectiveInviteToken
 			);
 			// Registration mints a session (the backend sets the cookie), so the
-			// user is authenticated immediately — update session state and go to
+			// user is authenticated immediately - update session state and go to
 			// the app rather than asking them to sign in again.
 			session.setAuthenticated(user_id);
 			await goto('/app');

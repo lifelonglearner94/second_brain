@@ -83,7 +83,7 @@ async function makeLoadedStore(
 	return store;
 }
 
-describe('HousekeepingQueue.svelte — the low-epistemic-weight HITL surface (ADR-0004)', () => {
+describe('HousekeepingQueue.svelte - the low-epistemic-weight HITL surface (ADR-0004)', () => {
 	beforeEach(() => {
 		cleanup();
 	});
@@ -122,7 +122,7 @@ describe('HousekeepingQueue.svelte — the low-epistemic-weight HITL surface (AD
 		expect(queryByText('Approve Connection')).toBeNull();
 	});
 
-	it('shows NO Evidence Disclosure (only similarity scores — that lives in the Endorsement Queue)', async () => {
+	it('shows NO Evidence Disclosure (only similarity scores - that lives in the Endorsement Queue)', async () => {
 		const api = apiStub();
 		const store = await makeLoadedStore(api);
 		const { queryByText } = render(HousekeepingQueue, { props: { store } });

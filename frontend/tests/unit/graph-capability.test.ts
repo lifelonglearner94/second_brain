@@ -36,7 +36,7 @@ const NO_WEBGL2: CapabilityEnv = {
 	hardwareConcurrency: 8
 };
 
-describe('detectRendererCapability — picks 3D vs 2D for the Spatial View-Graph', () => {
+describe('detectRendererCapability - picks 3D vs 2D for the Spatial View-Graph', () => {
 	it('chooses 3D on a capable desktop with WebGL2 and a discrete GPU', () => {
 		expect(detectRendererCapability(DESKTOP_CHROME)).toBe('3d');
 	});

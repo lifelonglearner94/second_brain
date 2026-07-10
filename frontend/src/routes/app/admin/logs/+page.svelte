@@ -38,7 +38,7 @@
 			</svg>
 			Back to the app
 		</a>
-		<h1>Admin — logs</h1>
+		<h1>Admin - logs</h1>
 		<p class="tagline" data-testid="admin-logs-bounded">
 			Showing
 			<code class="mono" data-testid="admin-logs-count">{adminLogs.count}</code>

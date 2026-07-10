@@ -320,7 +320,7 @@ async function readErrorDetail(res: Response): Promise<string> {
 
 function failedError(errorLabel: string, res: Response, detail: string): Error {
 	return new Error(
-		`${errorLabel} failed: ${res.status}${detail ? ` — ${detail}` : ''}`
+		`${errorLabel} failed: ${res.status}${detail ? ` - ${detail}` : ''}`
 	);
 }
 

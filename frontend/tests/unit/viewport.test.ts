@@ -36,7 +36,7 @@ const STATE: ViewportState = {
 	selectedNodeId: 'concept-42'
 };
 
-describe('viewportState — LocalStorage home for observer state', () => {
+describe('viewportState - LocalStorage home for observer state', () => {
 	it('round-trips the viewport (camera, zoom, selected node) through LocalStorage', () => {
 		const storage = new MemoryStorage();
 		saveViewport(STATE, storage);

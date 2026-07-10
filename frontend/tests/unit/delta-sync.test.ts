@@ -32,7 +32,7 @@ const SNAPSHOT: GlobalTopologySnapshot = {
 	]
 };
 
-describe('syncDelta — pull-on-focus Delta Sync orchestrator', () => {
+describe('syncDelta - pull-on-focus Delta Sync orchestrator', () => {
 	describe('cursor advancement (last_sync_timestamp)', () => {
 		it('fetches changes since the cursor and advances last_sync_timestamp to the fresh cursor on success', async () => {
 			const delta: GraphDelta = {
@@ -124,7 +124,7 @@ describe('syncDelta — pull-on-focus Delta Sync orchestrator', () => {
 		});
 	});
 
-	describe('onWindowFocus — pull-on-focus event wiring (no WebSocket/SSE/polling)', () => {
+	describe('onWindowFocus - pull-on-focus event wiring (no WebSocket/SSE/polling)', () => {
 		it('calls the callback when the target regains focus', () => {
 			const target = new EventTarget();
 			const calls: number[] = [];

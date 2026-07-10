@@ -56,7 +56,7 @@ function setUrl(url: string): void {
 	stubs.pageHolder.url = new URL(url);
 }
 
-describe('login page — invitation-token disclosure (issue #79)', () => {
+describe('login page - invitation-token disclosure (issue #79)', () => {
 	beforeEach(() => {
 		cleanup();
 		setUrl('http://localhost/login');

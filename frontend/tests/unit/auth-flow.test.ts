@@ -90,7 +90,7 @@ const RECOVER_RES: RecoverResponse = {
 		'Master-passphrase recovery is a documented seam; not yet implemented.'
 };
 
-describe('registerPasskey — the begin→WebAuthn→finish orchestration', () => {
+describe('registerPasskey - the begin→WebAuthn→finish orchestration', () => {
 	beforeEach(() => vi.clearAllMocks());
 
 	it('threads the invite token through begin and posts the credential + state to finish, returning user_id', async () => {
@@ -128,7 +128,7 @@ describe('registerPasskey — the begin→WebAuthn→finish orchestration', () =
 	});
 });
 
-describe('loginPasskey — the begin→WebAuthn→finish orchestration', () => {
+describe('loginPasskey - the begin→WebAuthn→finish orchestration', () => {
 	beforeEach(() => vi.clearAllMocks());
 
 	it('forwards the begin challenge to startAuthentication and posts the assertion + state, returning user_id', async () => {
@@ -157,7 +157,7 @@ describe('loginPasskey — the begin→WebAuthn→finish orchestration', () => {
 	});
 });
 
-describe('recoverPasskey — the master-passphrase recovery seam', () => {
+describe('recoverPasskey - the master-passphrase recovery seam', () => {
 	it('delegates to the API recover endpoint and surfaces the stubbed response', async () => {
 		const api = flowApiStub();
 		api.recover.mockResolvedValue(RECOVER_RES);

@@ -6,7 +6,7 @@
 //! only along edges that actually exist; when the graph doesn't support an
 //! answer, chat is silent (ADR-0005). Auth is bypassed by minting a session row
 //! directly (as in `tests/retrieval.rs`); the extractor is a scripted stand-in
-//! so the accretion pipeline runs on deterministic concepts/edges — no Gemini
+//! so the accretion pipeline runs on deterministic concepts/edges - no Gemini
 //! call. The LLM seam is a scripted stand-in so synthesis is hermetic.
 
 use std::sync::{Arc, Mutex};
@@ -137,7 +137,7 @@ fn app_with(db: Db, llm: Arc<dyn Llm>) -> axum::Router {
 #[tokio::test]
 async fn chat_is_silent_when_the_graph_does_not_support_an_answer() {
     // ADR-0005 silence contract: an empty graph cannot support any answer, so
-    // chat returns "you haven't told me about that" — without calling the LLM
+    // chat returns "you haven't told me about that" - without calling the LLM
     // (silence is enforced structurally, not entrusted to the model).
     let db = Db::open_in_memory().unwrap();
     let llm_calls = Arc::new(Mutex::new(0usize));
@@ -189,7 +189,7 @@ async fn chat_synthesizes_a_grounded_answer_citing_braindumps_and_edges() {
         },
         answer: String::from(
             "Q3 is at risk because Maria is leaving, which endangers the launch \
-             [bd:1] [edge:Maria —endangers→ Q3 launch]",
+             [bd:1] [edge:Maria -endangers→ Q3 launch]",
         ),
         calls: llm_calls.clone(),
     });
@@ -204,7 +204,7 @@ async fn chat_synthesizes_a_grounded_answer_citing_braindumps_and_edges() {
     assert_eq!(
         body["answer"].as_str().unwrap(),
         "Q3 is at risk because Maria is leaving, which endangers the launch \
-         [bd:1] [edge:Maria —endangers→ Q3 launch]",
+         [bd:1] [edge:Maria -endangers→ Q3 launch]",
         "answer is the grounded synthesis"
     );
     let citations = body["citations"].as_array().expect("citations array");

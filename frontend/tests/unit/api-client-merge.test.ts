@@ -18,7 +18,7 @@ function noContent(): Response {
 	return new Response(null, { status: 204 });
 }
 
-describe('apiClient.getMergeSuggestions — backend #7 GET /merge-suggestions (concept pairs)', () => {
+describe('apiClient.getMergeSuggestions - backend #7 GET /merge-suggestions (concept pairs)', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	const SUGGESTIONS: ConceptMergeSuggestion[] = [
@@ -71,7 +71,7 @@ describe('apiClient.getMergeSuggestions — backend #7 GET /merge-suggestions (c
 	});
 });
 
-describe('apiClient.approveMergeSuggestion — backend #7 POST /merge-suggestions/{id}/approve', () => {
+describe('apiClient.approveMergeSuggestion - backend #7 POST /merge-suggestions/{id}/approve', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {
@@ -102,7 +102,7 @@ describe('apiClient.approveMergeSuggestion — backend #7 POST /merge-suggestion
 	});
 });
 
-describe('apiClient.rejectMergeSuggestion — backend #7 POST /merge-suggestions/{id}/reject', () => {
+describe('apiClient.rejectMergeSuggestion - backend #7 POST /merge-suggestions/{id}/reject', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {
@@ -118,7 +118,7 @@ describe('apiClient.rejectMergeSuggestion — backend #7 POST /merge-suggestions
 	});
 });
 
-describe('apiClient.getOntology — backend #3 GET /ontology (type context, public)', () => {
+describe('apiClient.getOntology - backend #3 GET /ontology (type context, public)', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	const ONTOLOGY: Ontology = {
@@ -156,7 +156,7 @@ describe('apiClient.getOntology — backend #3 GET /ontology (type context, publ
 	});
 });
 
-describe('apiClient.getOntologyProposals — backend #3 GET /ontology/proposals (type-merge queue)', () => {
+describe('apiClient.getOntologyProposals - backend #3 GET /ontology/proposals (type-merge queue)', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	const PROPOSAL: OntologyTypeProposal = {
@@ -201,7 +201,7 @@ describe('apiClient.getOntologyProposals — backend #3 GET /ontology/proposals 
 	});
 });
 
-describe('apiClient.approveOntologyProposal — backend #3 POST /ontology/proposals/{id}/approve', () => {
+describe('apiClient.approveOntologyProposal - backend #3 POST /ontology/proposals/{id}/approve', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {

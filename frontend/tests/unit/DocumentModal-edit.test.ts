@@ -45,7 +45,7 @@ async function typeInto(
 	await tick();
 }
 
-describe('DocumentModal — error-correction edit flow (ADR-0003, ADR-0007)', () => {
+describe('DocumentModal - error-correction edit flow (ADR-0003, ADR-0007)', () => {
 	it('Edit populates the input with the verbatim, never the cleaned rendering (ADR-0003)', async () => {
 		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
 			async () => BRAINDUMP

@@ -84,7 +84,7 @@ afterEach(() => {
 	cleanup();
 });
 
-describe('EndorsementQueue — Evidence Disclosure surface (ADR-0004/0009)', () => {
+describe('EndorsementQueue - Evidence Disclosure surface (ADR-0004/0009)', () => {
 	it('lists every pending chat-inferred edge proposal from the backend', () => {
 		render(EndorsementQueue, {
 			props: {
@@ -99,7 +99,7 @@ describe('EndorsementQueue — Evidence Disclosure surface (ADR-0004/0009)', () 
 		expect(screen.getByTestId('endorsement-item-102')).toBeTruthy();
 	});
 
-	it('uses the action verb "Approve Connection" — never "Merge"', () => {
+	it('uses the action verb "Approve Connection" - never "Merge"', () => {
 		render(EndorsementQueue, {
 			props: {
 				proposals: [STRUCTURAL, THEMATIC],
@@ -116,7 +116,7 @@ describe('EndorsementQueue — Evidence Disclosure surface (ADR-0004/0009)', () 
 		expect(screen.queryByText('Merge')).toBeNull();
 	});
 
-	it('shows NO academic "Structural"/"Thematic" type labels — the distinction is the evidence payload, not a name', () => {
+	it('shows NO academic "Structural"/"Thematic" type labels - the distinction is the evidence payload, not a name', () => {
 		render(EndorsementQueue, {
 			props: {
 				proposals: [STRUCTURAL, THEMATIC],
@@ -132,7 +132,7 @@ describe('EndorsementQueue — Evidence Disclosure surface (ADR-0004/0009)', () 
 		expect(screen.queryByText('thematic_inference')).toBeNull();
 	});
 
-	it('renders the proposed connection readably using concept labels (Maria —[endangers]→ Beta release)', () => {
+	it('renders the proposed connection readably using concept labels (Maria -[endangers]→ Beta release)', () => {
 		render(EndorsementQueue, {
 			props: { proposals: [STRUCTURAL], labelFor, onApproveConnection: vi.fn() }
 		});
@@ -142,7 +142,7 @@ describe('EndorsementQueue — Evidence Disclosure surface (ADR-0004/0009)', () 
 		expect(head.textContent).toContain('endangers');
 	});
 
-	describe('expand-evidence — structural proposal', () => {
+	describe('expand-evidence - structural proposal', () => {
 		it('discloses the heading "Based on existing path" and, on expand, the traversable node-edge-node chain', async () => {
 			render(EndorsementQueue, {
 				props: {
@@ -166,7 +166,7 @@ describe('EndorsementQueue — Evidence Disclosure surface (ADR-0004/0009)', () 
 		});
 	});
 
-	describe('expand-evidence — thematic proposal', () => {
+	describe('expand-evidence - thematic proposal', () => {
 		it('discloses the heading "Based on thematic density" and, on expand, the frozen Thematic Snapshot', async () => {
 			render(EndorsementQueue, {
 				props: { proposals: [THEMATIC], labelFor, onApproveConnection: vi.fn() }

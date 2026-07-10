@@ -75,7 +75,7 @@ function graphStub(): {
 	};
 }
 
-describe('EndorsementStore — the high-epistemic-weight HITL queue (ADR-0004)', () => {
+describe('EndorsementStore - the high-epistemic-weight HITL queue (ADR-0004)', () => {
 	it('starts idle with an empty queue', () => {
 		const store = new EndorsementStore(
 			apiStub(vi.fn(), vi.fn()),
@@ -104,7 +104,7 @@ describe('EndorsementStore — the high-epistemic-weight HITL queue (ADR-0004)',
 		expect(store.proposals).toHaveLength(3);
 	});
 
-	it('pending shows only status=pending proposals — the queue is what still awaits the user', async () => {
+	it('pending shows only status=pending proposals - the queue is what still awaits the user', async () => {
 		const getInferenceProposals = vi
 			.fn<EndorsementApi['getInferenceProposals']>()
 			.mockResolvedValue([
@@ -134,7 +134,7 @@ describe('EndorsementStore — the high-epistemic-weight HITL queue (ADR-0004)',
 		expect(store.pending).toEqual([]);
 	});
 
-	describe('approve(id) — Approve Connection → POST endorsement + optimistic merge (ADR-0002/0004)', () => {
+	describe('approve(id) - Approve Connection → POST endorsement + optimistic merge (ADR-0002/0004)', () => {
 		it('POSTs the endorsement, optimistically merges the edge into the Spatial View-Graph, and drops the proposal from the queue', async () => {
 			const getInferenceProposals = vi
 				.fn<EndorsementApi['getInferenceProposals']>()

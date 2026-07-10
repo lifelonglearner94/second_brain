@@ -1,12 +1,12 @@
 //! Cookie construction for the session. The cookie is the *only* transport
-//! for the opaque session id and carries none of the session's meaning — the
+//! for the opaque session id and carries none of the session's meaning - the
 //! `sessions` SQLite row is the source of truth.
 //!
 //! Semantics, per `first_draft.md` §A:
-//! * `httpOnly` — no JS access, so an XSS cannot exfiltrate the id.
-//! * `Secure` — only ever sent over HTTPS in production.
-//! * `SameSite=Strict` — never sent on cross-site requests (CSRF defence).
-//! * `__Host-` prefix — pin to this host: no `Domain`, `Path=/`, `Secure`.
+//! * `httpOnly` - no JS access, so an XSS cannot exfiltrate the id.
+//! * `Secure` - only ever sent over HTTPS in production.
+//! * `SameSite=Strict` - never sent on cross-site requests (CSRF defence).
+//! * `__Host-` prefix - pin to this host: no `Domain`, `Path=/`, `Secure`.
 //!
 //! In tests we craft `Cookie:` headers by hand; the server doesn't re-check
 //! `Secure` on read (that's a browser-wire concern), so http test clients work.

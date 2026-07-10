@@ -6,7 +6,7 @@
 //! backfill) form the context. Unanchored queries fall back to
 //! braindump-vector-direct. Auth is bypassed by minting a session row directly
 //! (as in `tests/extraction.rs`); the extractor is a scripted stand-in so the
-//! accretion pipeline runs on deterministic concepts/edges — no Gemini call.
+//! accretion pipeline runs on deterministic concepts/edges - no Gemini call.
 
 use std::sync::{Arc, Mutex};
 
@@ -179,8 +179,8 @@ fn app_with_llm(db: Db, llm: Arc<dyn Llm>) -> axum::Router {
 #[tokio::test]
 async fn retrieve_finds_graph_linked_braindump_via_expansion() {
     // ADR-0004 canonical demo: a braindump graph-linked
-    // `Maria —[endangers]→ Q3 launch` but not containing "Q3" is found by
-    // querying "Q3" — seed on Q3 launch, traverse the incoming edge to Maria,
+    // `Maria -[endangers]→ Q3 launch` but not containing "Q3" is found by
+    // querying "Q3" - seed on Q3 launch, traverse the incoming edge to Maria,
     // collect her braindump.
     let db = Db::open_in_memory().unwrap();
     let llm = Arc::new(ScriptedLlm {
@@ -225,7 +225,7 @@ async fn retrieve_finds_graph_linked_braindump_via_expansion() {
 #[tokio::test]
 async fn retrieve_backfills_strays_the_graph_missed() {
     // A braindump whose concept does not seed and is not graph-connected,
-    // but whose text matches the query — found by braindump-embedding backfill.
+    // but whose text matches the query - found by braindump-embedding backfill.
     let db = Db::open_in_memory().unwrap();
     let llm = Arc::new(SequencedLlm {
         calls: Mutex::new(0),

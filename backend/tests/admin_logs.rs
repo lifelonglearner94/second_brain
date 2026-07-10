@@ -133,7 +133,7 @@ async fn admin_logs_returns_recent_entries_when_authed() {
     let db = Db::open(":memory:").unwrap();
     let state = AppState::for_tests(db);
     // Pre-populate the shared buffer (Arc-backed, so the router's clone sees
-    // the same entries) with a couple of structured log lines — the kind of
+    // the same entries) with a couple of structured log lines - the kind of
     // thing the admin tab exists to surface.
     state.log_buffer.push(entry("generation failed", "ERROR"));
     state.log_buffer.push(entry("retrying", "WARN"));
@@ -191,7 +191,7 @@ async fn admin_logs_limit_bounds_the_response() {
 }
 
 /// Regression for issue #80: the admin tab must show a full, recent tail of
-/// the ring buffer — newest-first and complete up to the default cap — not a
+/// the ring buffer - newest-first and complete up to the default cap - not a
 /// handful of stale entries. Pushing more than the default limit (200) and
 /// fetching with no `?limit` must return exactly the default limit, with the
 /// freshest entry at index 0 and the (limit-th) newest at the tail. This is

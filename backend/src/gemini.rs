@@ -1,10 +1,10 @@
 //! Real Gemini-backed implementation of the LLM/embedding seam (issue #6).
 //! One client serves cleaning (ADR-0007), structured-output extraction
 //! (ADR-0001 / ADR-0002 / ADR-0010), grounded synthesis (ADR-0005), and
-//! embeddings (ADR-0001 / ADR-0003 / ADR-0004) — the single [`crate::llm::Llm`]
+//! embeddings (ADR-0001 / ADR-0003 / ADR-0004) - the single [`crate::llm::Llm`]
 //! trait (issue #39 collapsed the former three traits into it).
 //!
-//! Provider is Gemini — this supersedes the Cohere choice in `first_draft.md`
+//! Provider is Gemini - this supersedes the Cohere choice in `first_draft.md`
 //! §C (recorded at close-out of the extraction slice). The embedding model's
 //! task-type parameter distinguishes a storage/document task type
 //! (braindump/concept/type embeddings) from a query task type (retrieval
@@ -25,7 +25,7 @@ use crate::llm::Llm;
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_TEXT_MODEL: &str = "gemini-2.0-flash";
-/// Issue #86: default fallback text model — a lighter tier that stays within
+/// Issue #86: default fallback text model - a lighter tier that stays within
 /// the free quota when the primary trips 429s. Configurable via
 /// `GEMINI_TEXT_MODEL_FALLBACK`.
 const DEFAULT_FALLBACK_TEXT_MODEL: &str = "gemini-3.1-flash-lite";
@@ -33,7 +33,7 @@ const DEFAULT_EMBED_MODEL: &str = "text-embedding-004";
 
 /// Output dimensionality for a Gemini embedding model. Used to size the
 /// `vec0` virtual tables at startup (`ensure_vec_tables`) BEFORE any embed
-/// API call — so it must be derivable from `GEMINI_EMBED_MODEL` without
+/// API call - so it must be derivable from `GEMINI_EMBED_MODEL` without
 /// network I/O. A wrong dim panics at the first insert (vec0 rejects
 /// mismatched-length vectors), which is exactly the issue #35 crash-loop.
 ///
@@ -108,7 +108,7 @@ pub struct GeminiClient {
     text_model: String,
     embed_model: String,
     /// Cached output dim of `embed_model` (validated at construction via
-    /// [`embed_dim_for`]) so [`dim`] stays synchronous and cheap — the vec0
+    /// [`embed_dim_for`]) so [`dim`] stays synchronous and cheap - the vec0
     /// tables are created at startup before any embed API call.
     embed_dim: usize,
     /// `None` = `GEMINI_REASONING_EFFORT` unset → don't send `thinkingConfig`.
@@ -124,7 +124,7 @@ impl GeminiClient {
 
     /// Build from env. `Ok(None)` if `GEMINI_API_KEY` is unset (dev/CI
     /// fallback to the fake clients). `Err` if the key is set but
-    /// `GEMINI_EMBED_MODEL` is not in [`embed_dim_for`]'s table — a wrong
+    /// `GEMINI_EMBED_MODEL` is not in [`embed_dim_for`]'s table - a wrong
     /// dim is the issue #35 crash-loop, so an unknown model must fail loudly
     /// at startup rather than silently booting with mismatched vec0 tables.
     pub fn from_env() -> Result<Option<Self>> {
@@ -162,7 +162,7 @@ impl GeminiClient {
 
     /// Issue #86: build a fallback client sharing the primary's credentials,
     /// embed config, and HTTP connection pool but with a different text model.
-    /// Clears `reasoning` — the fallback is a degraded path on a lighter model
+    /// Clears `reasoning` - the fallback is a degraded path on a lighter model
     /// whose thinking-budget calibration is unknown, so no `thinkingConfig` is
     /// sent to it. The default fallback model is [`DEFAULT_FALLBACK_TEXT_MODEL`]
     /// (`gemini-3.1-flash-lite`), overridable via `GEMINI_TEXT_MODEL_FALLBACK`.
@@ -246,7 +246,7 @@ impl GeminiClient {
     }
 }
 
-/// Issue #85: map a transport-level reqwest failure to a transient error —
+/// Issue #85: map a transport-level reqwest failure to a transient error -
 /// connection resets, DNS, TLS, timeouts are all "try again in 3 minutes," not
 /// "give up." Never terminal a braindump on a transport blip.
 fn map_reqwest(e: reqwest::Error) -> Error {
@@ -254,7 +254,7 @@ fn map_reqwest(e: reqwest::Error) -> Error {
 }
 
 /// Issue #85: classify a non-2xx Gemini status into retryable vs non-retryable.
-/// 5xx (server error) and 429 (rate-limited / overloaded) are transient — the
+/// 5xx (server error) and 429 (rate-limited / overloaded) are transient - the
 /// provider is briefly unavailable and a retry after the backoff interval is
 /// expected to succeed. Any other 4xx is non-retryable: a 400/401/403 is a
 /// bad-request or auth problem the retry loop cannot fix, so it terminal's the
@@ -295,7 +295,7 @@ impl Llm for GeminiClient {
     }
 
     async fn synthesize(&self, system: &str, user: &str) -> Result<String> {
-        // ADR-0005: grounded synthesis is temperature 0 — claims must be
+        // ADR-0005: grounded synthesis is temperature 0 - claims must be
         // reproducible, and the citation/silence rules in the system prompt
         // are load-bearing, not ornamental. Free-handed variance is exactly
         // what the grounded-synthesis contract forbids.
@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn embed_dim_for_gemini_embedding_001_is_3072() {
         // The 3072-dim model from the real infrastructure/.env that crash-looped
-        // the backend before issue #35 — must not map to the 768 default.
+        // the backend before issue #35 - must not map to the 768 default.
         assert_eq!(embed_dim_for("gemini-embedding-001").unwrap(), 3072);
     }
 
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn embed_dim_for_unknown_model_errors_loudly() {
         // A wrong dim is exactly the bug #35 fixes, so an unknown model must
-        // NOT silently fall back to a default — it errors so startup fails
+        // NOT silently fall back to a default - it errors so startup fails
         // loudly rather than creating vec0 tables at the wrong dimensionality.
         assert!(embed_dim_for("some-future-model-2099").is_err());
     }

@@ -115,14 +115,14 @@
 		{/if}
 		{#if headerTaps >= 5}
 			<p class="admin-entry">
-				<a href="/app/admin/logs" data-testid="admin-link">Admin — logs</a>
+				<a href="/app/admin/logs" data-testid="admin-link">Admin - logs</a>
 				<span class="sep" aria-hidden="true">·</span>
 				<a href="/app/admin/invites" data-testid="admin-invites-link">
-					Admin — invitations
+					Admin - invitations
 				</a>
 				<span class="sep" aria-hidden="true">·</span>
 				<a href="/app/admin/system" data-testid="admin-system-link">
-					Admin — system
+					Admin - system
 				</a>
 			</p>
 		{/if}

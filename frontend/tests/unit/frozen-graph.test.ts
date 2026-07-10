@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { frozenGraphStatus } from '../../src/lib/graph/frozen-graph';
 
-describe('frozenGraphStatus — the Frozen Graph staleness indicator contract (ADR-0005, issue #21)', () => {
+describe('frozenGraphStatus - the Frozen Graph staleness indicator contract (ADR-0005, issue #21)', () => {
 	it('returns offline + a label showing the fetchedAt timestamp and the offline state when the snapshot came from cache', () => {
 		const outcome = frozenGraphStatus('cache', '2026-07-04T12:00:00Z', true);
 		expect(outcome.status).toBe('offline');
@@ -23,7 +23,7 @@ describe('frozenGraphStatus — the Frozen Graph staleness indicator contract (A
 		expect(outcome.label).toContain('2026-07-04T12:00:00Z');
 	});
 
-	it('never yields a blank screen on connectivity failure — the error case maps to a non-null label carrying the error message', () => {
+	it('never yields a blank screen on connectivity failure - the error case maps to a non-null label carrying the error message', () => {
 		const outcome = frozenGraphStatus(
 			'error',
 			null,

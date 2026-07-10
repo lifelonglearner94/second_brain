@@ -16,7 +16,7 @@ function browserOrigin(): string {
  * Admin tab state for the invitation minter (backend #73). The store mints a
  * single-use invite and lists all outstanding/consumed invitations. The most
  * recently minted token is held in `lastMinted` so the page can show it once
- * (copyable) and then drop it from memory via `clearLastMinted` — the token is
+ * (copyable) and then drop it from memory via `clearLastMinted` - the token is
  * a bearer secret, so it should not linger in reactive state longer than the
  * admin needs to copy it. The canonical record of every invite lives on the
  * backend and is re-fetched via `refresh`.
@@ -92,7 +92,7 @@ export class AdminInviteStore {
 
 	/**
 	 * Issue #78: build the full registration deep link for an invitation token
-	 * — `<origin>/login?invite=<token>` — so an admin can share a ready-to-
+	 * - `<origin>/login?invite=<token>` - so an admin can share a ready-to-
 	 * click URL out-of-band. The PWA is static, so the deployed origin is read
 	 * client-side from `window.location.origin` (correct in dev, preview, and
 	 * production). The token is `encodeURIComponent`-encoded so the deep link

@@ -17,7 +17,7 @@
 	}
 
 	function fmtBytes(bytes: number): string {
-		if (!Number.isFinite(bytes) || bytes < 0) return '—';
+		if (!Number.isFinite(bytes) || bytes < 0) return '-';
 		if (bytes < 1024) return `${bytes} B`;
 		const units = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
 		let value = bytes / 1024;
@@ -31,7 +31,7 @@
 	}
 
 	function fmtPercent(pct: number): string {
-		if (!Number.isFinite(pct)) return '—';
+		if (!Number.isFinite(pct)) return '-';
 		return `${pct.toFixed(1)}%`;
 	}
 
@@ -55,9 +55,9 @@
 			</svg>
 			Back to the app
 		</a>
-		<h1>Admin — system</h1>
+		<h1>Admin - system</h1>
 		<p class="tagline" data-testid="admin-system-summary">
-			Live host load — CPU, memory, disk. Refresh to sample again.
+			Live host load - CPU, memory, disk. Refresh to sample again.
 		</p>
 	</header>
 

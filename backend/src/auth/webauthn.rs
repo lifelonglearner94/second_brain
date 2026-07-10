@@ -8,7 +8,7 @@
 //! State is held in an in-memory, TTL-bounded `ChallengeStore` keyed by an
 //! opaque, single-use token the client echoes back. Personal scale: a
 //! process-local map is the right shape. If the server restarts mid flow the
-//! user simply re-starts — no session is poisoned.
+//! user simply re-starts - no session is poisoned.
 //!
 //! Issue #74 replaces the deploy-time "first passkey wins" singleton lock with
 //! invitation-gated registration plus a one-time bootstrap exception:
@@ -43,7 +43,7 @@ use crate::db::{now_seconds, seed_ontology_for_user_conn, Db, BOOTSTRAP_ADMIN_US
 use crate::error::{Error, Result};
 
 /// Display name / friendly name for the bootstrap admin's WebAuthn challenge.
-/// The bootstrap registration is the only path that uses these — invitees get a
+/// The bootstrap registration is the only path that uses these - invitees get a
 /// generic placeholder name (issue #74).
 const BOOTSTRAP_USER_NAME: &str = "me";
 const BOOTSTRAP_USER_DISPLAY_NAME: &str = "me";
@@ -55,7 +55,7 @@ const INVITEE_DISPLAY_NAME: &str = "user";
 /// How long a begin-state stays valid before its finish must arrive.
 const CHALLENGE_TTL: Duration = Duration::from_secs(5 * 60);
 
-/// Token mint / lookup key. 32 bytes of OsRNG, base64url — same rules as a
+/// Token mint / lookup key. 32 bytes of OsRNG, base64url - same rules as a
 /// session id but with a separate namespace (it never leaves the begin/finish
 /// pair), so a distinct type keeps them from being confused at call sites.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +73,7 @@ impl ChallengeToken {
 #[derive(Debug)]
 struct RegisterContext {
     state: PasskeyRegistration,
-    /// The `users.id` to create at finish — `BOOTSTRAP_ADMIN_USER_ID` for the
+    /// The `users.id` to create at finish - `BOOTSTRAP_ADMIN_USER_ID` for the
     /// bootstrap path, a fresh `Uuid::new_v4()` for the invite path.
     user_id: String,
     /// Whether the new row is the admin. True only for the bootstrap path.
@@ -160,7 +160,7 @@ pub fn build_webauthn(rp_id: &str, rp_origin: &str, rp_name: &str) -> Result<Web
 /// the opaque `state` token the client echoes on finish.
 #[derive(Debug, serde::Serialize)]
 pub struct RegistrationBegin {
-    /// The WebAuthn creation options — forward `publicKey` verbatim to the
+    /// The WebAuthn creation options - forward `publicKey` verbatim to the
     /// browser's `navigator.credentials.create`.
     pub challenge: webauthn_rs_proto::CreationChallengeResponse,
     /// Opaque state token; send it back in the finish request body.
@@ -188,7 +188,7 @@ pub struct RegistrationFinish {
 /// Result of a successful login-begin.
 #[derive(Debug, serde::Serialize)]
 pub struct LoginBegin {
-    /// The WebAuthn request options — forward `publicKey` verbatim to the
+    /// The WebAuthn request options - forward `publicKey` verbatim to the
     /// browser's `navigator.credentials.get`.
     pub challenge: webauthn_rs_proto::RequestChallengeResponse,
     /// Opaque state token; send it back in the finish request body.
@@ -210,7 +210,7 @@ pub struct LoginResult {
     pub user_id: String,
 }
 
-/// High-level auth façade — owns the `Webauthn` instance and the challenge
+/// High-level auth façade - owns the `Webauthn` instance and the challenge
 /// store, talks to the `Db` for credential persistence. Cloned cheaply into
 /// the shared `AppState`.
 #[derive(Clone)]
@@ -297,7 +297,7 @@ impl AuthService {
     /// create the bootstrap admin (exception path, re-checked against
     /// `COUNT(users) == 0`) or consume the invite and create a fresh non-admin
     /// user. Binds the passkey, seeds the new user's day-zero ontology, and
-    /// mints a session. Single-use — the state token is consumed.
+    /// mints a session. Single-use - the state token is consumed.
     pub async fn register_finish(
         &self,
         db: &Db,
@@ -437,7 +437,7 @@ impl AuthService {
     }
 }
 
-/// `SELECT COUNT(*) FROM users` — the bootstrap-exception gate (issue #74).
+/// `SELECT COUNT(*) FROM users` - the bootstrap-exception gate (issue #74).
 /// When this is zero, `register_begin` proceeds with no invitation and creates
 /// the admin; the moment it is non-zero, the exception closes and registration
 /// requires an invite.
@@ -540,8 +540,8 @@ async fn load_all_passkeys(db: &Db) -> Result<Vec<Passkey>> {
 /// the spec's cloned-credential check. We load the matching user's passkeys,
 /// ask the library to fold the authentication result into it
 /// (`update_credential` advances the counter internally), and re-persist. Pure-
-/// server counter inspection isn't possible — `Passkey.cred.counter` is
-/// `pub(crate)` — so the library's own mutator is the only safe handle.
+/// server counter inspection isn't possible - `Passkey.cred.counter` is
+/// `pub(crate)` - so the library's own mutator is the only safe handle.
 ///
 /// A counter that didn't advance (cloned-credential signal) is logged but not
 /// auto-invalidated: at personal scale we surface it to the human via logs
@@ -565,7 +565,7 @@ async fn update_passkey_counter(
             return Ok(());
         }
     }
-    // No matching credential id — shouldn't happen since finish verified it,
+    // No matching credential id - shouldn't happen since finish verified it,
     // but treat as a benign no-op rather than failing a verified login.
     tracing::warn!("authenticated credential not found in passkey store");
     Ok(())

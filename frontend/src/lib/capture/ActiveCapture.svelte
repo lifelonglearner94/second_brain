@@ -45,7 +45,7 @@
 				webSpeechAvailable
 			});
 			if (!primary) {
-				store.error = 'No STT source available — type instead.';
+				store.error = 'No STT source available - type instead.';
 				store.status = 'error';
 				return;
 			}
@@ -170,7 +170,7 @@
 	{#if store.status === 'queued'}
 		<p class="meta" data-testid="active-capture-queued">
 			<span class="pill pill-warn">
-				Saved offline — review in Pending Captures when back online.
+				Saved offline - review in Pending Captures when back online.
 			</span>
 		</p>
 	{/if}

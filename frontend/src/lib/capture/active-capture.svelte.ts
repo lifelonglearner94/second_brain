@@ -78,7 +78,7 @@ export class ActiveCaptureStore {
 	): Promise<CaptureSubmission> {
 		const verbatim = this.text;
 		if (verbatim.trim().length === 0) {
-			throw new Error('Active Capture buffer is empty — nothing to submit');
+			throw new Error('Active Capture buffer is empty - nothing to submit');
 		}
 		if (this.shouldQueuePending(online)) {
 			const capture: PendingCapture = {

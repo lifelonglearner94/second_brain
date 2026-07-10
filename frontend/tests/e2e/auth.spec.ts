@@ -171,7 +171,7 @@ test('issue #79: opening the disclosure, pasting a token, and clicking register 
 		beginBody = JSON.parse(route.request().postData() ?? '{}');
 		// A minimal but valid PublicKeyCredentialCreationOptionsJSON so the
 		// client hands off to the WebAuthn prompt (which has no authenticator
-		// in CI and rejects — we only care that the begin request carried the
+		// in CI and rejects - we only care that the begin request carried the
 		// token, not that registration completes).
 		return route.fulfill({
 			status: 200,

@@ -38,7 +38,7 @@ function clientStub(
 	return { submitBraindump, getGraphDelta };
 }
 
-describe('createIngestApi — POST /braindumps then GET /graph/delta → optimistic-merge payload (ADR-0002)', () => {
+describe('createIngestApi - POST /braindumps then GET /graph/delta → optimistic-merge payload (ADR-0002)', () => {
 	it('submits the verbatim, fetches the delta since the cursor, and packages concepts/edges + fresh cursor', async () => {
 		const submitBraindump = vi.fn(async () => BRAINDUMP);
 		const getGraphDelta = vi.fn(async () => DELTA);

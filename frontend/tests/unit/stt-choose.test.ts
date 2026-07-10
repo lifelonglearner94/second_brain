@@ -10,7 +10,7 @@ function fakeSource(label: 'deepgram' | 'web-speech'): SttSource {
 	};
 }
 
-describe('chooseSttSource — Deepgram primary, Web Speech offline fallback, keyboard-only otherwise', () => {
+describe('chooseSttSource - Deepgram primary, Web Speech offline fallback, keyboard-only otherwise', () => {
 	it('picks Deepgram (Nova-3) when an API key is configured', async () => {
 		const buildDeepgram = vi.fn((key: string) => {
 			void key;
@@ -57,7 +57,7 @@ describe('chooseSttSource — Deepgram primary, Web Speech offline fallback, key
 	});
 });
 
-describe('describeSttAvailability — graceful typing-only fallback when no STT source exists (issue #82)', () => {
+describe('describeSttAvailability - graceful typing-only fallback when no STT source exists (issue #82)', () => {
 	it('reports voice available with no reason when a Deepgram key is configured', () => {
 		expect(describeSttAvailability({ deepgramApiKey: 'k' })).toEqual({
 			canCaptureVoice: true,

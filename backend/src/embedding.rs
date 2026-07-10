@@ -1,5 +1,5 @@
 //! Embedding utilities (ADR-0001 / ADR-0004). Gemini is the provider
-//! (supersedes the Cohere choice in `first_draft.md` §C — recorded at close-out
+//! (supersedes the Cohere choice in `first_draft.md` §C - recorded at close-out
 //! of the extraction slice). The seam distinguishes a *document* task type
 //! (storage: braindump/concept/type embeddings) from a *query* task type
 //! (retrieval seeds); both are methods on the single [`crate::llm::Llm`] trait

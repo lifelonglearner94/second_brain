@@ -1,14 +1,14 @@
 # Two-service Compose topology (ADR-0001) + one infra sidecar:
-#   Edge    — custom Caddy image: terminates TLS, serves the baked PWA Bundle
+#   Edge    - custom Caddy image: terminates TLS, serves the baked PWA Bundle
 #             via file_server, reverse-proxies /api/* to the Backend.
-#   Backend — Rust/Axum; internal-only (ADR-0006): expose, no host ports.
-#   Litestream — Brain Replica sidecar (ADR-0002): streams the Brain File WAL on
+#   Backend - Rust/Axum; internal-only (ADR-0006): expose, no host ports.
+#   Litestream - Brain Replica sidecar (ADR-0002): streams the Brain File WAL on
 #             sqlite_data to Cloudflare R2. Infra, not user-facing.
 #
 # The Brain File lives on the named volume `sqlite_data` mounted at /data
 # (never a bind mount, never baked into an image). Runtime secrets come from
 # infrastructure/.env via env_file (ADR-0004). Image tags fall back to `latest`
-# when deploy.env is absent — the Deploy State file (#31 / ADR-0007) is not
+# when deploy.env is absent - the Deploy State file (#31 / ADR-0007) is not
 # required for local dev.
 #
 #   Local dev:  docker compose up
@@ -30,14 +30,14 @@ services:
       # in local dev where Caddyfile binds :80 only). The firewall in
       # bootstrap.sh already allows 443.
       - "443:443"
-    # Caddy ACME state — issued Let's Encrypt certificates + ACME account keys
-    # in /data, autosaved config in /config — is runtime state that must survive
+    # Caddy ACME state - issued Let's Encrypt certificates + ACME account keys
+    # in /data, autosaved config in /config - is runtime state that must survive
     # container recreations. Without /data, every `down/up` or deploy wipes ACME
     # state and forces a fresh cert request, which trips Let's Encrypt's
     # 5-issuances-per-168h rate limit and takes HTTPS down (#55). The Edge stays
     # a disposable IMAGE (rebuilt per deploy, ADR-0001) and a Zero-Trust Image
     # (ADR-0004): the volume is host-side runtime state, nothing is baked into
-    # the image — same host-disk trust boundary as the Brain File, not the
+    # the image - same host-disk trust boundary as the Brain File, not the
     # Zero-Trust Image boundary.
     volumes:
       - caddy_data:/data
@@ -57,7 +57,7 @@ services:
     # ADR-0006: the Backend is internal-only. `expose:` documents the
     # container port WITHOUT publishing it to the host; there is deliberately
     # NO `ports:` block. Caddy (the Edge) is the sole published port. Do not
-    # "fix" the missing ports — see ADR-0006.
+    # "fix" the missing ports - see ADR-0006.
     expose:
       - "8080"
     volumes:
@@ -74,7 +74,7 @@ services:
   litestream:
     # Brain Replica sidecar (ADR-0002, slice #32). Streams the Brain File WAL on
     # the shared sqlite_data volume to Cloudflare R2, cutting the Recovery Point
-    # Objective to ~1 second. NOT a user-facing service — an infra sidecar
+    # Objective to ~1 second. NOT a user-facing service - an infra sidecar
     # alongside edge/backend. The backend already runs in WAL mode with
     # busy_timeout=5000 (backend/src/db.rs), so Litestream's PASSIVE checkpoints
     # do not contend with writes.
@@ -82,7 +82,7 @@ services:
     # its own internal tracking tables (_litestream_seq, _litestream_shadow) in
     # the source SQLite database to record WAL position, so a read-only mount
     # crash-loops with `attempt to write a readonly database (8)` as soon as real
-    # R2 credentials are present. This is safe — Litestream appends ONLY to its
+    # R2 credentials are present. This is safe - Litestream appends ONLY to its
     # own _litestream_* tables and never mutates braindump/concept/edge rows, so
     # the Brain File's user-data integrity is not at risk (ADR-0002 trust
     # contract unchanged). The /etc/litestream.yml config mount below stays :ro.
@@ -92,16 +92,16 @@ services:
       # Brain File mount is READ-WRITE: Litestream v0.5.x appends only to its
       # own _litestream_* tracking tables in the source DB to record WAL
       # position (see the service comment above + ADR-0002 for the safety
-      # argument — it never mutates braindump/concept/edge rows).
+      # argument - it never mutates braindump/concept/edge rows).
       - sqlite_data:/data
       - ./infrastructure/litestream.yml:/etc/litestream.yml:ro
     env_file:
       # R2 credentials are auto-read by Litestream from LITESTREAM_ACCESS_KEY_ID
       # / LITESTREAM_SECRET_ACCESS_KEY in infrastructure/.env (ADR-0004). The
-      # committed litestream.yml references no secret — Zero-Trust (ADR-0004).
+      # committed litestream.yml references no secret - Zero-Trust (ADR-0004).
       - infrastructure/.env
     ports:
-      # Prometheus metrics for the Health Push (#33) — loopback-only so the
+      # Prometheus metrics for the Health Push (#33) - loopback-only so the
       # host cron can curl /metrics without exposing it externally. The nftables
       # firewall (bootstrap.sh) drops :9090 from outside as defense-in-depth.
       - "127.0.0.1:9090:9090"
@@ -118,7 +118,7 @@ networks:
 volumes:
   sqlite_data:
   # Caddy ACME state (issued LE certs + account keys at /data, autosaved config
-  # at /config) — persists across `down/up` so recreating the Edge reuses its
+  # at /config) - persists across `down/up` so recreating the Edge reuses its
   # existing certificate instead of re-issuing (#55). Survives `down` but NOT
   # `down -v` (see DISASTER_RECOVERY.md). Host-side runtime state, not baked
   # into the Zero-Trust Image (ADR-0004).

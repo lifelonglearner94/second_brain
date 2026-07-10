@@ -3,15 +3,15 @@
 //! Seed-then-expand: the graph is load-bearing, vectors are seed and backfill.
 //! A query is Gemini-embedded (query task type), sqlite-vec KNN over
 //! concept-embeddings seeds the entry concept(s), petgraph traversal along typed
-//! edges expands the neighbourhood, braindumps collected from the subgraph — plus
-//! braindump-embedding backfill for strays the graph missed — form the context.
+//! edges expands the neighbourhood, braindumps collected from the subgraph - plus
+//! braindump-embedding backfill for strays the graph missed - form the context.
 //!
 //! Unanchored queries with no concept seed fall back to braindump-vector-direct
-//! — the one place vectors become primary rather than seed/backfill.
+//! - the one place vectors become primary rather than seed/backfill.
 //!
 //! After #47 the full pipeline (KNN seed + BFS expand + collect + backfill) is
 //! behind the [`GraphRepo::retrieve`] trait method. The petgraph BFS is private
-//! to the retrieval implementation in `graph_repo.rs` — no other module imports
+//! to the retrieval implementation in `graph_repo.rs` - no other module imports
 //! petgraph. The LLM query-embedding runs in this wrapper; the trait method
 //! takes the precomputed `query_vec` (following #46's pattern: LLM in the
 //! wrapper, trait is pure-DB).
@@ -33,7 +33,7 @@ pub const SEED_TOP_K: usize = 5;
 
 /// How many typed-edge hops to expand from each seed concept. The neighbourhood
 /// is traversed undirected (incoming + outgoing edges) so a seed reached via an
-/// incoming edge — the canonical `Maria —[endangers]→ Q3` case — still
+/// incoming edge - the canonical `Maria -[endangers]→ Q3` case - still
 /// collects the source concept's braindumps.
 pub const EXPAND_DEPTH: usize = 2;
 
@@ -54,8 +54,8 @@ pub enum RetrievalMode {
 #[serde(rename_all = "snake_case")]
 pub enum BraindumpSource {
     /// Collected from the traversed subgraph (concept extraction provenance;
-    /// edge provenance is a subset — a braindump asserting an edge always
-    /// extracts both endpoints — so concept provenance captures the subgraph).
+    /// edge provenance is a subset - a braindump asserting an edge always
+    /// extracts both endpoints - so concept provenance captures the subgraph).
     Subgraph,
     /// Braindump-embedding KNN for strays the graph missed.
     Backfill,
@@ -74,7 +74,7 @@ pub struct RetrievedBraindump {
     pub source: BraindumpSource,
 }
 
-/// A typed edge traversed during neighbourhood expansion — the citable structure
+/// A typed edge traversed during neighbourhood expansion - the citable structure
 /// connecting the seed to the returned braindumps.
 #[derive(Debug, Clone, Serialize)]
 pub struct RetrievedEdge {

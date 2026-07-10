@@ -1,4 +1,4 @@
-//! `GET /health` — pings the database and confirms `sqlite-vec` loaded.
+//! `GET /health` - pings the database and confirms `sqlite-vec` loaded.
 
 use axum::extract::State;
 use axum::response::Json;

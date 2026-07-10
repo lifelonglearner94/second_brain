@@ -1,7 +1,7 @@
 # Second Brain Health Push cron (ADR-0005, issue #33).
 #
 # Installed by infrastructure/bootstrap.sh into /etc/cron.d/second-brain-health-push
-# (root-owned, mode 0644). Runs the host health check every 5 minutes — zero-RAM,
+# (root-owned, mode 0644). Runs the host health check every 5 minutes - zero-RAM,
 # zero-containers between invocations (cron spawns the script, it exits). The
 # script reads NTFY_WEBHOOK_URL from /opt/second-brain/infrastructure/.env; it
 # ships no secrets (ADR-0004). RPO is ~1s, so a 5-minute check detects Brain Replica
@@ -10,7 +10,7 @@
 # Edit the interval here; bootstrap.sh copies this file verbatim into
 # /etc/cron.d/second-brain-health-push, so this is the single source of the
 # cadence (the "every 5 min" notes in bootstrap.sh / DISASTER_RECOVERY.md are
-# descriptive — re-word them if you change the value below).
+# descriptive - re-word them if you change the value below).
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 */5 * * * * root /opt/second-brain/infrastructure/health-push.sh >/dev/null 2>&1

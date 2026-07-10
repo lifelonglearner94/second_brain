@@ -1,27 +1,27 @@
 # Backend
 
-The Rust/Axum orchestrator and graph engine. Owns the core data model — braindumps, concepts, and the knowledge graph that emerges from them — plus the extraction and retrieval pipeline that feeds and queries it.
+The Rust/Axum orchestrator and graph engine. Owns the core data model - braindumps, concepts, and the knowledge graph that emerges from them - plus the extraction and retrieval pipeline that feeds and queries it.
 
 ## Language
 
 **Braindump**:
-The atomic unit of input — an immutable snapshot of the user's state of mind at a timestamp. Voice-transcribed or typed, user-confirmed at explicit submit, and preserved verbatim as the source of truth; each braindump also has a cleaned, readable rendering (LLM-produced at ingest) shown by default. Edits exist solely for error-correction (STT hallucinations, typos) and overwrite in place — substantive thinking-evolution is never retroactive, it spawns a new braindump and the graph grows additively. (See ADR-0007.)
+The atomic unit of input - an immutable snapshot of the user's state of mind at a timestamp. Voice-transcribed or typed, user-confirmed at explicit submit, and preserved verbatim as the source of truth; each braindump also has a cleaned, readable rendering (LLM-produced at ingest) shown by default. Edits exist solely for error-correction (STT hallucinations, typos) and overwrite in place - substantive thinking-evolution is never retroactive, it spawns a new braindump and the graph grows additively. (See ADR-0007.)
 _Avoid_: thought, idea, memo, entry, note, recording
 
 **Concept**:
-A node in the knowledge graph, extracted from one or more braindumps by the LLM. A concept recurs and accretes over time as the same concept appears across many braindumps, forming the hubs and clusters the user navigates. Carries extraction provenance — the list of braindumps the LLM extracted it from — symmetric to edge provenance (ADR-0002); deleting a braindump drops it from every concept's extraction provenance, and a concept vanishes when its last extracting braindump is deleted. (See ADR-0010.)
+A node in the knowledge graph, extracted from one or more braindumps by the LLM. A concept recurs and accretes over time as the same concept appears across many braindumps, forming the hubs and clusters the user navigates. Carries extraction provenance - the list of braindumps the LLM extracted it from - symmetric to edge provenance (ADR-0002); deleting a braindump drops it from every concept's extraction provenance, and a concept vanishes when its last extracting braindump is deleted. (See ADR-0010.)
 _Avoid_: entity, node, thought, knoten, topic
 
 **Edge**:
-A typed, directional connection between two concepts (`A —[type]→ B`), where the type is drawn from the ontology — never invented by the LLM. One edge per (source, original type, target) accretes: it carries provenance (origin-typed assertions) and survives until its last asserter is removed. (See ADR-0002; type history refined by ADR-0003; provenance origin-typed by ADR-0006.)
+A typed, directional connection between two concepts (`A -[type]→ B`), where the type is drawn from the ontology - never invented by the LLM. One edge per (source, original type, target) accretes: it carries provenance (origin-typed assertions) and survives until its last asserter is removed. (See ADR-0002; type history refined by ADR-0003; provenance origin-typed by ADR-0006.)
 _Avoid_: relationship, connection, link, relation
 
 **Provenance**:
-The list of assertions backing an edge (and concept), each tagged by origin — a human braindump, or a chat inference. Lets the graph distinguish raw user thoughts from endorsed LLM deductions, and purge the latter if the brain drifts. (Introduced ADR-0002; origin-typed by ADR-0006; thematic evidence snapshotted by ADR-0009; concept-level extraction provenance specified by ADR-0010.)
+The list of assertions backing an edge (and concept), each tagged by origin - a human braindump, or a chat inference. Lets the graph distinguish raw user thoughts from endorsed LLM deductions, and purge the latter if the brain drifts. (Introduced ADR-0002; origin-typed by ADR-0006; thematic evidence snapshotted by ADR-0009; concept-level extraction provenance specified by ADR-0010.)
 _Avoid_: source list, attribution, citation list
 
 **Type history**:
-An append-only log of the types an edge has worn, event-sourced: index 0 is the LLM's original assertion (immutable), each refactor appends a migrated type, and the edge's current type is the projected state of the last entry — a read model off the log, not a mutable field. Preserves the original assertion the way the verbatim braindump is preserved under its cleaned rendering. (See ADR-0003.)
+An append-only log of the types an edge has worn, event-sourced: index 0 is the LLM's original assertion (immutable), each refactor appends a migrated type, and the edge's current type is the projected state of the last entry - a read model off the log, not a mutable field. Preserves the original assertion the way the verbatim braindump is preserved under its cleaned rendering. (See ADR-0003.)
 _Avoid_: type log, retag log, type field
 
 **Ontology**:
@@ -33,37 +33,37 @@ The asynchronous background re-classification of existing edges when the ontolog
 _Avoid_: retag job, backfill, migration
 
 **Merge suggestion**:
-A borderline pair the pipeline cannot confidently identify as the same — of concepts, of edge types, or of chat-inferred edges — surfaced to the user to confirm or reject rather than committed silently. Reused fractally across three layers: concepts (auto-merge >95%, else suggest — ADR-0001), ontology types (>99.5%, else suggest — ADR-0003), and chat write-back (always proposed, never auto-endorsed — ADR-0006).
+A borderline pair the pipeline cannot confidently identify as the same - of concepts, of edge types, or of chat-inferred edges - surfaced to the user to confirm or reject rather than committed silently. Reused fractally across three layers: concepts (auto-merge >95%, else suggest - ADR-0001), ontology types (>99.5%, else suggest - ADR-0003), and chat write-back (always proposed, never auto-endorsed - ADR-0006).
 _Avoid_: pending merge, merge candidate, duplicate suggestion
 
 **Retrieval**:
-The read path that answers a query — concept-embeddings seed the entry concept(s), the graph traverses typed edges to expand the neighbourhood, and braindumps collected from the subgraph (plus braindump-embedding backfill) form the context for chat. The graph is load-bearing; vectors are seed and backfill. (See ADR-0004.)
+The read path that answers a query - concept-embeddings seed the entry concept(s), the graph traverses typed edges to expand the neighbourhood, and braindumps collected from the subgraph (plus braindump-embedding backfill) form the context for chat. The graph is load-bearing; vectors are seed and backfill. (See ADR-0004.)
 _Avoid_: GraphRAG, hybrid search, fusion, search
 
 **Chat**:
-The conversational read surface that answers a query with grounded synthesis over retrieved braindumps — and a governed write-back surface: chat may also *propose* its inferences as new edges, routed through the merge-suggestion queue (ADR-0006) rather than persisted silently. Inferences are constrained to edges that actually exist (or are proposed-via-governance), must disclose sources at every step, and citations are mandatory; when the graph doesn't support an answer, chat is silent. (See ADR-0005; write-back in ADR-0006.)
+The conversational read surface that answers a query with grounded synthesis over retrieved braindumps - and a governed write-back surface: chat may also *propose* its inferences as new edges, routed through the merge-suggestion queue (ADR-0006) rather than persisted silently. Inferences are constrained to edges that actually exist (or are proposed-via-governance), must disclose sources at every step, and citations are mandatory; when the graph doesn't support an answer, chat is silent. (See ADR-0005; write-back in ADR-0006.)
 _Avoid_: GraphRAG chat, assistant, copilot, Q&A
 
 **Chat inference**:
-A connection chat proposes as a candidate edge, carrying its own provenance origin (distinct from a braindump). Strictly a proposal — human-gated via the merge-suggestion queue before it persists, so the graph never silently absorbs the LLM's deductions. Once endorsed, the edge's provenance records it as `asserted_by: [Chat_Inference_ID]`, origin-tagged so user thoughts and LLM deductions stay distinguishable. Splits into two proposal modes with distinct epistemic status: Structural Inference (graph-backed, deterministic) and Thematic Inference (statistical hypothesis, non-graph-backed, Louvain-motivated). (See ADR-0006.)
+A connection chat proposes as a candidate edge, carrying its own provenance origin (distinct from a braindump). Strictly a proposal - human-gated via the merge-suggestion queue before it persists, so the graph never silently absorbs the LLM's deductions. Once endorsed, the edge's provenance records it as `asserted_by: [Chat_Inference_ID]`, origin-tagged so user thoughts and LLM deductions stay distinguishable. Splits into two proposal modes with distinct epistemic status: Structural Inference (graph-backed, deterministic) and Thematic Inference (statistical hypothesis, non-graph-backed, Louvain-motivated). (See ADR-0006.)
 _Avoid_: inferred edge, LLM suggestion, auto-edge
 
 **Thematic Read Model**:
-The third read surface alongside Retrieval (ADR-0004) and Chat (ADR-0005/0006) — a backend-owned projection of the knowledge graph's topology into clusters, computed for thematic navigation. The frontend renders this projection; it does not compute it. Serves three roles: visualization for the human, macrostructure context for Chat (ADR-0008), and the system's Hypothesis Engine — the sole source of Thematic Inference proposals (ADR-0006). (See ADR-0008.)
+The third read surface alongside Retrieval (ADR-0004) and Chat (ADR-0005/0006) - a backend-owned projection of the knowledge graph's topology into clusters, computed for thematic navigation. The frontend renders this projection; it does not compute it. Serves three roles: visualization for the human, macrostructure context for Chat (ADR-0008), and the system's Hypothesis Engine - the sole source of Thematic Inference proposals (ADR-0006). (See ADR-0008.)
 _Avoid_: graph layout, community detection, clustering view, thematic view
 
 **Cluster**:
-A non-deterministic topological partition of concepts, emitted by the Thematic Read Model. Has no stable identity, no provenance, and no persistence across sessions — it reflects the graph's "now." If a transient cluster deserves persistence, it routes through governed write-back (ADR-0006) as a proposed new Concept; clusters themselves never accrete. (See ADR-0008.)
+A non-deterministic topological partition of concepts, emitted by the Thematic Read Model. Has no stable identity, no provenance, and no persistence across sessions - it reflects the graph's "now." If a transient cluster deserves persistence, it routes through governed write-back (ADR-0006) as a proposed new Concept; clusters themselves never accrete. (See ADR-0008.)
 _Avoid_: community, group, thematic node
 
 **Structural Inference**:
-One of two proposal modes a Chat Inference may take (ADR-0006). The LLM traces an existing multi-hop edge path and proposes a direct edge summarizing it — "the graph supports this; I'm labeling existing structure." Graph-backed: deterministic, low-risk, the proposal's evidence is a traversable edge path. Carries origin type `structural_inference`.
+One of two proposal modes a Chat Inference may take (ADR-0006). The LLM traces an existing multi-hop edge path and proposes a direct edge summarizing it - "the graph supports this; I'm labeling existing structure." Graph-backed: deterministic, low-risk, the proposal's evidence is a traversable edge path. Carries origin type `structural_inference`.
 _Avoid_: edge shortcut, path summary, multi-hop summary
 
 **Thematic Inference**:
-The second, riskier proposal mode (ADR-0006). The LLM observes thematic density in the current Thematic Read Model partition — concepts clustered by Louvain with no connecting edge path — and proposes a new edge bridging the gap. Not graph-backed: the evidence is a statistical hypothesis from a non-deterministic partition that won't exist tomorrow. Carries origin type `thematic_inference`; the explicit tag lets the HITL queue distinguish graph-backed proposals from LLM-hallucinated hypotheses. Uniquely sourced from the Hypothesis Engine role of the Thematic Read Model. Provenance carries a Thematic Snapshot (ADR-0009) — a frozen capture of the motivating cluster's braindumps — because the ephemeral evidence must be preserved as an audit trail even after the cluster dissolves.
+The second, riskier proposal mode (ADR-0006). The LLM observes thematic density in the current Thematic Read Model partition - concepts clustered by Louvain with no connecting edge path - and proposes a new edge bridging the gap. Not graph-backed: the evidence is a statistical hypothesis from a non-deterministic partition that won't exist tomorrow. Carries origin type `thematic_inference`; the explicit tag lets the HITL queue distinguish graph-backed proposals from LLM-hallucinated hypotheses. Uniquely sourced from the Hypothesis Engine role of the Thematic Read Model. Provenance carries a Thematic Snapshot (ADR-0009) - a frozen capture of the motivating cluster's braindumps - because the ephemeral evidence must be preserved as an audit trail even after the cluster dissolves.
 _Avoid_: gap-filling proposal, statistical inference, cluster-based proposal
 
 **Thematic Snapshot**:
-A frozen capture of a cluster's composition (specifically, the braindump IDs whose edges formed the thematic density) at the moment a Thematic Inference is proposed, preserved in the provenance of the resulting edge *or concept* as an audit trail. Exists because the cluster that motivated the proposal is ephemeral and will not exist tomorrow; the snapshot is the historical receipt that lets the user audit, months later, exactly why they endorsed a thematic proposal. Endorsement is immutable — the snapshot is a frozen receipt, never re-evaluated. Attaches to any thematic-origin proposal (edge or concept); structural-origin proposals carry no snapshot, since their evidence is the graph itself, always present. (See ADR-0009.)
+A frozen capture of a cluster's composition (specifically, the braindump IDs whose edges formed the thematic density) at the moment a Thematic Inference is proposed, preserved in the provenance of the resulting edge *or concept* as an audit trail. Exists because the cluster that motivated the proposal is ephemeral and will not exist tomorrow; the snapshot is the historical receipt that lets the user audit, months later, exactly why they endorsed a thematic proposal. Endorsement is immutable - the snapshot is a frozen receipt, never re-evaluated. Attaches to any thematic-origin proposal (edge or concept); structural-origin proposals carry no snapshot, since their evidence is the graph itself, always present. (See ADR-0009.)
 _Avoid_: cluster snapshot, evidence snapshot, partition snapshot, audit log

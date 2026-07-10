@@ -1,4 +1,4 @@
-//! Integration tests for issue #9: ontology governance — propose/approve types,
+//! Integration tests for issue #9: ontology governance - propose/approve types,
 //! type-embedding dedup (>99.5% auto-merge else queued), and the async refactor
 //! job that retags existing edges via the append-only type history (ADR-0003).
 //!
@@ -134,7 +134,7 @@ impl Llm for ScriptedLlm {
 
 /// Set scripted embedding vectors for every ontology type's full `type_text`
 /// (slug + label + description), using `mapper` to pick a vector per slug.
-/// This is what `seed_type_embeddings` will embed when it runs — so the test
+/// This is what `seed_type_embeddings` will embed when it runs - so the test
 /// controls the exact cosine between proposed and existing types.
 async fn set_ontology_vectors<F>(llm: &ScriptedLlm, db: &Db, mapper: F)
 where
@@ -296,7 +296,7 @@ async fn propose_duplicate_type_above_threshold_auto_merges() {
     let dim = 2;
     let llm = ScriptedLlm::new(dim, "causes");
     // The proposed "causes" duplicate lands at cosine 1.0 to the existing
-    // "causes" type embedding — well above the 0.995 threshold → auto-merged.
+    // "causes" type embedding - well above the 0.995 threshold → auto-merged.
     llm.set_vector(
         "brings_about Brings about A is the reason B happens.",
         vec![1.0, 0.0],
@@ -331,7 +331,7 @@ async fn propose_duplicate_type_above_threshold_auto_merges() {
         "above-threshold duplicate auto-merges: {body}"
     );
     assert_eq!(body["near_match_slug"], "causes");
-    // The new slug was NOT added — it's the same as the existing type.
+    // The new slug was NOT added - it's the same as the existing type.
     let slugs = graph::ontology_slugs(&db, BOOTSTRAP_ADMIN_USER_ID)
         .await
         .unwrap();
@@ -344,7 +344,7 @@ async fn propose_duplicate_type_above_threshold_auto_merges() {
 
 #[tokio::test]
 async fn propose_borderline_duplicate_below_threshold_is_queued() {
-    // Cosine 0.99 — above concept identity's 0.95 floor but below the ontology
+    // Cosine 0.99 - above concept identity's 0.95 floor but below the ontology
     // threshold 0.995 → queued for human confirm/reject, NOT auto-merged.
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
@@ -656,7 +656,7 @@ async fn governance_routes_require_a_session() {
 async fn approve_merge_refactor_retags_existing_edges_appending_to_history() {
     // Propose "nurtures" as a merge of "helps". On approve, the existing
     // "helps" edge is retagged to "nurtures" by appending to its type history
-    // (never overwriting — ADR-0003). The scripted LLM returns "nurtures" as
+    // (never overwriting - ADR-0003). The scripted LLM returns "nurtures" as
     // the re-classification.
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
@@ -666,7 +666,7 @@ async fn approve_merge_refactor_retags_existing_edges_appending_to_history() {
         vec![1.0, 0.0],
     );
     // The "helps" type's embedding is what the accretion pipeline stores for
-    // the seeded concept — we set it to a distinct vector so accretion works.
+    // the seeded concept - we set it to a distinct vector so accretion works.
     set_ontology_vectors(&llm, &db, |_| vec![0.0, 1.0]).await;
     set_refactor_concept_vectors(&llm);
     let (app, state) = app_with_state(db.clone(), llm).await;
@@ -730,7 +730,7 @@ async fn approve_merge_refactor_retags_existing_edges_appending_to_history() {
         2,
         "refactor appended exactly one new entry: {after:?}"
     );
-    // Index 0 is the original assertion (immutable — ADR-0003).
+    // Index 0 is the original assertion (immutable - ADR-0003).
     assert_eq!(after[0].seq_index, 0);
     assert_eq!(after[0].type_slug, "helps", "original assertion preserved");
     // Index 1 is the refactor's re-classification.
@@ -749,7 +749,7 @@ async fn approve_merge_refactor_retags_existing_edges_appending_to_history() {
 async fn second_refactor_over_already_retagged_edge_appends_a_third_entry() {
     // First refactor: helps → nurtures (merge_of=helps).
     // Second refactor: nurtures → sustains (merge_of=nurtures).
-    // The edge's history must be [helps, nurtures, sustains] — proving the
+    // The edge's history must be [helps, nurtures, sustains] - proving the
     // refactor reads the *projected current* type (last entry), not the
     // original, and appends rather than overwriting.
     let db = Db::open_in_memory().unwrap();
@@ -865,7 +865,7 @@ async fn second_refactor_over_already_retagged_edge_appends_a_third_entry() {
 #[tokio::test]
 async fn refactor_only_retags_edges_of_the_merged_type() {
     // An edge of type "endangers" must NOT be retagged when "helps" is merged
-    // into "nurtures" — the refactor targets only edges whose current type is
+    // into "nurtures" - the refactor targets only edges whose current type is
     // the merge source.
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
@@ -941,7 +941,7 @@ async fn refactor_only_retags_edges_of_the_merged_type() {
 #[tokio::test]
 async fn approve_new_type_with_no_merge_of_does_not_retag_anything() {
     // A pure-new-type approval (no merge_of) adds the type to the ontology but
-    // triggers no refactor — there is no source type to retag from.
+    // triggers no refactor - there is no source type to retag from.
     let db = Db::open_in_memory().unwrap();
     let dim = 2;
     let llm = ScriptedLlm::new(dim, "nurtures");

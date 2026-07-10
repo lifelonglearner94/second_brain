@@ -1,4 +1,4 @@
-//! `POST /chat` — the chat read surface (issue #10, ADR-0005).
+//! `POST /chat` - the chat read surface (issue #10, ADR-0005).
 //!
 //! Runs the retrieval read path (ADR-0004), then synthesizes over the
 //! retrieved braindumps + traversed edge paths under a grounded-synthesis
@@ -19,14 +19,14 @@ use crate::chat::{self, ChatResponse};
 use crate::error::{Error, Result};
 use crate::state::AppState;
 
-/// Body for `POST /chat`: the query text. Empty queries are rejected — a chat
+/// Body for `POST /chat`: the query text. Empty queries are rejected - a chat
 /// with no query is a no-op.
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
     pub query: String,
 }
 
-/// `POST /chat` — run retrieval + grounded synthesis (or return silence) for
+/// `POST /chat` - run retrieval + grounded synthesis (or return silence) for
 /// the query and return the answer with its citations.
 pub async fn chat(
     State(state): State<AppState>,

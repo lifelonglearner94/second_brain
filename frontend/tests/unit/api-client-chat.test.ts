@@ -15,7 +15,7 @@ function okResponse(body: unknown, status = 200): Response {
 
 const GROUNDED: ChatResponse = {
 	answer:
-		'Q3 launch is at risk because Maria is leaving [bd:42] [edge:Maria —endangers→ Q3 launch].',
+		'Q3 launch is at risk because Maria is leaving [bd:42] [edge:Maria -endangers→ Q3 launch].',
 	citations: [
 		{
 			id: 42,
@@ -54,7 +54,7 @@ const BRAINDUMP: Braindump = {
 	created_at: 1_700_000_000
 };
 
-describe('apiClient — chat surface against backend #10 (POST /chat, ADR-0005)', () => {
+describe('apiClient - chat surface against backend #10 (POST /chat, ADR-0005)', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {
@@ -108,7 +108,7 @@ describe('apiClient — chat surface against backend #10 (POST /chat, ADR-0005)'
 	});
 });
 
-describe('apiClient — braindump reader against backend #5 (GET /braindumps/:id)', () => {
+describe('apiClient - braindump reader against backend #5 (GET /braindumps/:id)', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {

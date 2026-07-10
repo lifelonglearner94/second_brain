@@ -2,12 +2,12 @@
 //!
 //! A braindump is an immutable thought-snapshot: verbatim (user-confirmed
 //! text at submit), cleaned (LLM-produced rendering), and a timestamp. Edits
-//! are error-correction only — they overwrite the verbatim in place and
+//! are error-correction only - they overwrite the verbatim in place and
 //! re-clean; substantive thinking-evolution spawns a new braindump, never
 //! edits the old one.
 //!
-//! This module owns the ingest pipeline — clean → persist → ontology →
-//! extract → accrete (ADR-0007) — as [`ingest`] (submit) / [`ingest_edit`]
+//! This module owns the ingest pipeline - clean → persist → ontology →
+//! extract → accrete (ADR-0007) - as [`ingest`] (submit) / [`ingest_edit`]
 //! (error-correction). The HTTP handlers in [`crate::routes::braindump`] are
 //! thin adapters (parse, validate non-empty, delegate, log); the pipeline is
 //! unit-testable without an HTTP roundtrip. The accretion step delegates to
@@ -60,7 +60,7 @@ pub async fn get_braindump(db: &Db, user_id: &str, id: i64) -> Result<Option<Bra
 }
 
 /// Overwrite the verbatim in place (error-correction, ADR-0007) and store the
-/// re-cleaned rendering. The id and created_at are untouched — a braindump's
+/// re-cleaned rendering. The id and created_at are untouched - a braindump's
 /// timestamp is its original submit instant, not its last edit. Returns the
 /// updated row, or `None` if no braindump with `id` exists.
 ///
@@ -82,7 +82,7 @@ pub async fn overwrite_verbatim(
 /// immutably, then run extraction + atomic accretion (ontology → extract →
 /// [`crate::graph::ingest_extraction`], ADR-0001/0002/0003/0010). Returns the
 /// stored braindump and the accretion outcome so the caller can log it. This
-/// is the spec — the sequence the `submit` HTTP handler delegates to, so the
+/// is the spec - the sequence the `submit` HTTP handler delegates to, so the
 /// pipeline is exercisable without an HTTP roundtrip. The edit path differs
 /// only in its persist step; see [`ingest_edit`].
 pub async fn ingest(
@@ -101,7 +101,7 @@ pub async fn ingest(
 /// clean the corrected verbatim, overwrite it in place (id + created_at
 /// untouched), then re-run extraction + accretion (the stale extraction is
 /// retracted first inside [`crate::graph::ingest_extraction`]). Returns `None`
-/// if no braindump with `id` exists — the caller (the `edit` HTTP handler)
+/// if no braindump with `id` exists - the caller (the `edit` HTTP handler)
 /// maps that to `404`. Substantive thinking-evolution spawns a new braindump
 /// via [`ingest`], never this.
 pub async fn ingest_edit(
@@ -145,7 +145,7 @@ async fn accrete(
 
 // --- Issue #84/#85: async fire-and-forget ingest with background processing ---
 
-/// Persist a new braindump's verbatim immediately and return right away — the
+/// Persist a new braindump's verbatim immediately and return right away - the
 /// HTTP request completes in milliseconds, independent of Gemini availability
 /// (issue #84). The cleaned rendering is stored empty (`""`) as a placeholder;
 /// the clean → extract → accrete pipeline runs in a background task
@@ -158,7 +158,7 @@ pub async fn submit_braindump(db: &Db, user_id: &str, verbatim: &str) -> Result<
 
 /// Run one attempt of the clean → extract → accrete pipeline against an
 /// already-persisted braindump (issue #84). This is the background task's
-/// single-attempt unit — the [`IngestRunner`] decides whether to retry on
+/// single-attempt unit - the [`IngestRunner`] decides whether to retry on
 /// failure. Loads the braindump, cleans the verbatim via the LLM seam,
 /// overwrites the cleaned rendering in place (verbatim + created_at
 /// untouched), then runs extraction + atomic accretion. Idempotent over a
@@ -192,9 +192,9 @@ pub async fn process_ingest_once(
 /// logs the accretion outcome (concepts/edges created, etc.) through the
 /// existing tracing facility (the admin log buffer picks it up via
 /// `LogBufferLayer`). On a transient failure (Gemini 5xx / rate-limited /
-/// transport — [`Error::is_transient`]), the braindump stays `pending`, the
+/// transport - [`Error::is_transient`]), the braindump stays `pending`, the
 /// attempt is logged, and the loop backs off for `config.ingest_retry_interval`
-/// before retrying — so a transiently-failed braindump eventually enters the
+/// before retrying - so a transiently-failed braindump eventually enters the
 /// graph without user interaction. On a non-retryable failure (malformed
 /// response, logic error), the braindump is terminal'd as `failed` and the
 /// loop exits (it surfaces in the admin logs; it is not retried forever). One
@@ -289,7 +289,7 @@ async fn run_ingest_loop(
 ///
 /// `inline` mode (test-only): the loop runs to completion inside `spawn`
 /// before it returns, so a test's submit handler returns only once the
-/// pipeline has committed — existing ingest tests stay deterministic without
+/// pipeline has committed - existing ingest tests stay deterministic without
 /// each calling [`await_pending_ingests`]. `AppState::for_tests` wires inline
 /// mode; production wires the spawned mode. The pipeline function
 /// ([`process_ingest_once`]) is identical in both.
@@ -318,7 +318,7 @@ impl IngestRunner {
     }
 
     /// Test runner: `spawn` runs the loop inline (awaited) so the submit
-    /// handler returns only after the pipeline commits — deterministic without
+    /// handler returns only after the pipeline commits - deterministic without
     /// `await_pending_ingests`. No `JoinHandle` is tracked (the work is done).
     pub fn new_inline() -> Self {
         Self {
@@ -351,7 +351,7 @@ impl IngestRunner {
         }
     }
 
-    /// Await every in-flight ingest (test-only seam — production never waits
+    /// Await every in-flight ingest (test-only seam - production never waits
     /// on the background job). Drains the tracked `JoinHandle`s.
     pub async fn await_all(&self) {
         let handles = {
@@ -365,7 +365,7 @@ impl IngestRunner {
 }
 
 /// Test seam: await every in-flight ingest spawned by the submit route on this
-/// state. Production code never calls this — the ingest runs out-of-band.
+/// state. Production code never calls this - the ingest runs out-of-band.
 pub async fn await_pending_ingests(state: &crate::state::AppState) {
     state.ingest_runner.await_all().await;
 }
@@ -651,7 +651,7 @@ mod tests {
         assert_eq!(edited.verbatim, "  maria endangers q3 launch again  ");
         assert_eq!(edited.cleaned, "maria endangers q3 launch again");
         // ADR-0007: the edit retracts the stale extraction first, then
-        // re-accretes — so Maria/Q3 (whose only extractor was this braindump)
+        // re-accretes - so Maria/Q3 (whose only extractor was this braindump)
         // vanish and are re-created fresh, not accreted. The braindump id is
         // unchanged, so the re-created concepts carry provenance [first.id].
         assert_eq!(edited_outcome.concepts_created, 2, "{edited_outcome:?}");

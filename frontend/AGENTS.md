@@ -2,13 +2,13 @@
 
 ## Commands
 
-- `npm run dev` — Vite dev server
-- `npm run build` — `adapter-static` PWA Bundle into `build/`
-- `npm run preview` — serve the built PWA Bundle
-- `npm test` — Vitest unit/component tests
-- `npm run test:e2e` — Playwright smoke tests (builds first)
-- `npm run check` — `svelte-check` typecheck
-- `npm run lint` — ESLint
+- `npm run dev` - Vite dev server
+- `npm run build` - `adapter-static` PWA Bundle into `build/`
+- `npm run preview` - serve the built PWA Bundle
+- `npm test` - Vitest unit/component tests
+- `npm run test:e2e` - Playwright smoke tests (builds first)
+- `npm run check` - `svelte-check` typecheck
+- `npm run lint` - ESLint
 
 ## Stack
 

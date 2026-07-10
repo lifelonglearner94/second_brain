@@ -54,7 +54,7 @@ const AUTH_RESPONSE: AuthenticationResponseJSON = {
 	type: 'public-key'
 };
 
-describe('apiClient — passkey auth surface against backend #2', () => {
+describe('apiClient - passkey auth surface against backend #2', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {

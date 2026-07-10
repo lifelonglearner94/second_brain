@@ -23,10 +23,10 @@ mod thematic;
 
 /// Build the full router. State is threaded in here (rather than via
 /// `.with_state` on the caller) because the auth middleware needs it at
-/// layer-build time — `axum::middleware::from_fn_with_state` is the only
+/// layer-build time - `axum::middleware::from_fn_with_state` is the only
 /// `from_fn` variant that lets a middleware extract `State<AppState>`.
 pub fn router(state: AppState) -> Router {
-    // Public auth routes — no session required. The WebAuthn begin/finish
+    // Public auth routes - no session required. The WebAuthn begin/finish
     // pairs are stateless here; the opaque `state` token carries flow state.
     let auth_routes: Router<AppState> = Router::new()
         .route("/auth/register/begin", post(auth::register_begin))
@@ -35,29 +35,29 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/login/finish", post(auth::login_finish))
         .route("/auth/recover", post(auth::recover));
 
-    // Protected routes — every handler behind this layer requires a valid
+    // Protected routes - every handler behind this layer requires a valid
     // session cookie. `/me` is the demonstrator; `/auth/logout` needs the
     // validated session to invalidate it; `/braindumps` is the ingest write
-    // path (ADR-0007) — submit, read, error-correction edit, and deletion with
+    // path (ADR-0007) - submit, read, error-correction edit, and deletion with
     // provenance cascade (issue #7); `/merge-suggestions` is the borderline
-    // concept-pair queue (ADR-0001 — list, approve, reject); `/retrieve` is
+    // concept-pair queue (ADR-0001 - list, approve, reject); `/retrieve` is
     // the seed-then-expand read path (ADR-0004); `/chat` is the grounded-
-    // synthesis read surface (ADR-0005 — mandatory citations, graph-constrained
+    // synthesis read surface (ADR-0005 - mandatory citations, graph-constrained
     // inference, silence when unsupported); `/chat/inferences*` is the
-    // governed write-back surface (ADR-0006 — structural + thematic inference
+    // governed write-back surface (ADR-0006 - structural + thematic inference
     // proposals enter the queue pending, never auto-endorsed; endorse persists
     // the edge with `structural_inference` or `thematic_inference` provenance;
     // thematic mode (issue #13, ADR-0009) carries a frozen Thematic Snapshot); `/thematic` is the Thematic Read
-    // Model endpoint (ADR-0008 — backend-owned Louvain partition with ephemeral
+    // Model endpoint (ADR-0008 - backend-owned Louvain partition with ephemeral
     // session labels, layered into chat as macrostructure context);
-    // `/graph` is the Global Topology Snapshot — the full renderable graph in
+    // `/graph` is the Global Topology Snapshot - the full renderable graph in
     // one gzipped payload (all concepts + typed edges with projected current
     // type + current Louvain partition IDs, ADR-0003/0008) the frontend fetches
     // wholesale on app load (issue #27); `/graph/delta` is the incremental read
     // surface for pull-on-focus reconciliation (issue #28); `/admin/logs`
     // surfaces backend logs to the hidden admin tab; `/admin/system` surfaces
     // live host load (CPU/RAM/disk) to the admin system tab (#81); `/ontology/propose*` is
-    // the governance queue (ADR-0003) — propose/approve/reject edge types and
+    // the governance queue (ADR-0003) - propose/approve/reject edge types and
     // trigger the async refactor.
     let protected_routes: Router<AppState> = Router::new()
         .route("/me", get(auth::me))
@@ -99,7 +99,7 @@ pub fn router(state: AppState) -> Router {
         .route("/ontology/proposals/{id}/reject", post(ontology::reject))
         .route_layer(from_fn_with_state(state.clone(), require_session));
 
-    // Admin-only routes (issue #73) — behind `require_session` (outer, resolves
+    // Admin-only routes (issue #73) - behind `require_session` (outer, resolves
     // the session and stashes `SessionInfo` in extensions) AND `require_admin`
     // (inner, refuses non-admins with 403 by reading `SessionInfo.is_admin`).
     // The layer order is load-bearing: `require_session` must run first so the

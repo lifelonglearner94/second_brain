@@ -35,7 +35,7 @@ const SNAPSHOT: GlobalTopologySnapshot = {
 	]
 };
 
-describe('buildGraphData — snapshot → graphology Spatial View-Graph → 3d-force-graph data', () => {
+describe('buildGraphData - snapshot → graphology Spatial View-Graph → 3d-force-graph data', () => {
 	it('turns every concept into a node carrying its id and label', () => {
 		const { nodes } = buildGraphData(SNAPSHOT);
 		expect(nodes).toHaveLength(4);

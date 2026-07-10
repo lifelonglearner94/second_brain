@@ -28,7 +28,7 @@ const BASE: GlobalTopologySnapshot = {
 	]
 };
 
-describe('applyDelta — reconcile the Spatial View-Graph with a Delta Sync payload', () => {
+describe('applyDelta - reconcile the Spatial View-Graph with a Delta Sync payload', () => {
 	describe('apply-additions', () => {
 		it('merges added concepts and edges from ingests the user did not trigger', () => {
 			const delta: GraphDelta = {
@@ -236,7 +236,7 @@ describe('applyDelta — reconcile the Spatial View-Graph with a Delta Sync payl
 		});
 	});
 
-	describe('ingest optimistic-merge — applyDelta with empty deletes/retags (ADR-0002)', () => {
+	describe('ingest optimistic-merge - applyDelta with empty deletes/retags (ADR-0002)', () => {
 		it('appends newly-extracted concepts and edges from a braindump ingestion response', () => {
 			const delta: GraphDelta = {
 				cursor: 1700000000,
@@ -269,7 +269,7 @@ describe('applyDelta — reconcile the Spatial View-Graph with a Delta Sync payl
 			);
 		});
 
-		it('leaves the Louvain partitions untouched — new concepts get NO_PARTITION until the next sync (ADR-0008)', () => {
+		it('leaves the Louvain partitions untouched - new concepts get NO_PARTITION until the next sync (ADR-0008)', () => {
 			const delta: GraphDelta = {
 				cursor: 1700000000,
 				added_concepts: [
@@ -287,7 +287,7 @@ describe('applyDelta — reconcile the Spatial View-Graph with a Delta Sync payl
 			).toBeUndefined();
 		});
 
-		it('does not mutate the input snapshot (pure merge — the next Delta Sync overwrites the view)', () => {
+		it('does not mutate the input snapshot (pure merge - the next Delta Sync overwrites the view)', () => {
 			const before = JSON.parse(JSON.stringify(BASE)) as GlobalTopologySnapshot;
 			applyDelta(BASE, {
 				cursor: 1700000000,

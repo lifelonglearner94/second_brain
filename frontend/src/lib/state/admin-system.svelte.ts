@@ -9,7 +9,7 @@ export type AdminSystemApi = {
 
 /**
  * Admin tab state for the server-load view (backend #81). Pulls current host
- * metrics — CPU, RAM, disk — from `GET /admin/system` so the operator reads VPS
+ * metrics - CPU, RAM, disk - from `GET /admin/system` so the operator reads VPS
  * pressure from the phone without SSH. The store holds the latest snapshot and
  * re-fetches on demand; the metrics are instantaneous readings (no live
  * streaming), mirroring the pull-based admin-logs store. The backend owns no

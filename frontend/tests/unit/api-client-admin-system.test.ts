@@ -31,7 +31,7 @@ const SYSTEM_BODY: SystemResponse = {
 	brain_file_mount: '/'
 };
 
-describe('apiClient — admin system surface against backend #81', () => {
+describe('apiClient - admin system surface against backend #81', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {

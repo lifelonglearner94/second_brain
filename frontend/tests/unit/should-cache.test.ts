@@ -12,13 +12,13 @@ function get(path: string, origin = ORIGIN): Request {
 	return new Request(`${origin}${path}`, { method: 'GET' });
 }
 
-describe('shouldServeFromCache — the dumb Service Worker fetch gate (ADR-0005)', () => {
+describe('shouldServeFromCache - the dumb Service Worker fetch gate (ADR-0005)', () => {
 	it('serves a cached app-shell asset from the cache', () => {
 		expect(shouldServeFromCache(get('/favicon.png'), shell, ORIGIN)).toBe(true);
 		expect(shouldServeFromCache(get('/'), shell, ORIGIN)).toBe(true);
 	});
 
-	it('never intercepts API calls — the Edge /api/* proxy goes straight to the network', () => {
+	it('never intercepts API calls - the Edge /api/* proxy goes straight to the network', () => {
 		expect(shouldServeFromCache(get('/api/health'), shell, ORIGIN)).toBe(false);
 		expect(shouldServeFromCache(get('/api/ingest'), shell, ORIGIN)).toBe(false);
 		expect(

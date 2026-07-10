@@ -8,18 +8,18 @@
 //! auto-merged and everything riskier goes to a human curation queue.
 //!
 //! On approval of a `merge_of` proposal, an async refactor retags each affected
-//! edge by *appending* to its `edge_type_history` (never overwriting — ADR-0003:
+//! edge by *appending* to its `edge_type_history` (never overwriting - ADR-0003:
 //! index 0 is the immutable original assertion, the current type is the
 //! projection of the last entry). The refactor runs at Temperature=0 against a
 //! pinned model snapshot via [`crate::llm::Llm::generate_pinned`].
 //!
 //! After #47 the governance SQL (propose/approve/reject, current-type
 //! projection, edge selection, refactor retag) lives behind the [`GraphRepo`]
-//! trait — in [`SqliteGraphRepo`]'s impl — so the full flow is testable via
+//! trait - in [`SqliteGraphRepo`]'s impl - so the full flow is testable via
 //! [`InMemoryGraphRepo`] without SQLite. The free functions here are thin
 //! delegating wrappers: they own the LLM embedding computation and validation,
 //! then delegate the pure-DB storage work to the trait. `seed_type_embeddings`
-//! stays as direct SQL — it is a startup seed, not a governance operation.
+//! stays as direct SQL - it is a startup seed, not a governance operation.
 
 use std::sync::Arc;
 
@@ -34,7 +34,7 @@ use crate::llm::Llm;
 /// every edge using that type.
 pub const TYPE_MERGE_THRESHOLD: f32 = 0.995;
 
-/// The text canonicalised for type-embedding — slug + label + description — so
+/// The text canonicalised for type-embedding - slug + label + description - so
 /// dedup compares the full type, not just the slug.
 pub fn type_text(slug: &str, label: &str, description: &str) -> String {
     format!("{slug} {label} {description}")
@@ -98,7 +98,7 @@ pub async fn propose_type(
             "slug, label, and description must be non-empty".into(),
         ));
     }
-    // Reject a proposal whose slug already exists in the ontology — the user
+    // Reject a proposal whose slug already exists in the ontology - the user
     // should edit the existing type instead.
     if ontology_slug_exists(db, user_id, &slug).await? {
         return Err(Error::BadRequest(format!(
@@ -178,13 +178,13 @@ pub async fn approve_proposal(
 ) -> Result<TypeProposal> {
     // Load first so we can validate status and compute the embedding text
     // outside the transaction (the network call cannot live in a sync SQLite
-    // transaction — same shape as `ingest_extraction`).
+    // transaction - same shape as `ingest_extraction`).
     let proposal = get_proposal(db, user_id, id)
         .await?
         .ok_or_else(|| Error::NotFound(format!("type proposal {id} not found")))?;
     if proposal.status != "pending" {
         return Err(Error::Conflict(format!(
-            "proposal {id} is `{}`, not `pending` — cannot approve",
+            "proposal {id} is `{}`, not `pending` - cannot approve",
             proposal.status
         )));
     }
@@ -229,7 +229,7 @@ pub async fn reject_proposal(db: &Db, user_id: &str, id: i64) -> Result<TypeProp
 
 /// The projected current type of an edge: the last entry of its append-only
 /// type history (ADR-0003). `None` if the edge has no type history (should not
-/// happen for a real edge — index 0 is initialised at creation).
+/// happen for a real edge - index 0 is initialised at creation).
 ///
 /// Wrapper: delegates to [`GraphRepo::current_edge_type`] (issue #47).
 pub async fn current_edge_type(db: &Db, user_id: &str, edge_id: i64) -> Result<Option<String>> {
@@ -271,7 +271,7 @@ pub async fn knn_type(db: &Db, user_id: &str, query_vec: &[f32]) -> Result<Optio
 /// Whether a slug already exists in the ontology.
 ///
 /// Wrapper: delegates to [`GraphRepo::ontology_slugs`] (issue #45) and checks
-/// membership — a governance read, not a hot path.
+/// membership - a governance read, not a hot path.
 pub async fn ontology_slug_exists(db: &Db, user_id: &str, slug: &str) -> Result<bool> {
     let slug = slug.to_string();
     let slugs = SqliteGraphRepo::new(db.clone())
@@ -284,7 +284,7 @@ pub async fn ontology_slug_exists(db: &Db, user_id: &str, slug: &str) -> Result<
 /// to seed type-embeddings and by tests to construct `type_text` for dedup.
 ///
 /// Delegates to the [`GraphRepo`] trait (issue #45); the SQL lives in
-/// [`SqliteGraphRepo`]'s trait impl — the duplicated `SELECT slug, label,
+/// [`SqliteGraphRepo`]'s trait impl - the duplicated `SELECT slug, label,
 /// description FROM ontology ORDER BY id` query exists in exactly one place
 /// now (the Sqlite adapter). Stays as a free function so the integration
 /// tests under `backend/tests/` keep compiling; #48 removes it.
@@ -351,14 +351,14 @@ pub async fn run_refactor(
 
 /// A handle to the in-flight refactor spawned by an approve route, so tests
 /// can await it deterministically without sleeping. Production code fires and
-/// forgets — the spawned task runs out-of-band and ingest is not blocked.
+/// forgets - the spawned task runs out-of-band and ingest is not blocked.
 ///
 /// Uses `std::sync::Mutex` (not `tokio::sync::Mutex`) because the lock is only
-/// held briefly to push a `JoinHandle` and never across an `.await` — so a
+/// held briefly to push a `JoinHandle` and never across an `.await` - so a
 /// sync lock is correct and never blocks the async runtime meaningfully.
 ///
 /// After #47, `spawn` takes `Arc<dyn GraphRepo>` (not `Db`) so the refactor
-/// runs against any adapter — production wires `SqliteGraphRepo`, tests wire
+/// runs against any adapter - production wires `SqliteGraphRepo`, tests wire
 /// `InMemoryGraphRepo`.
 #[derive(Clone, Default)]
 pub struct RefactorRunner {
@@ -392,7 +392,7 @@ impl RefactorRunner {
         }
     }
 
-    /// Await every in-flight refactor (test-only seam — production never waits
+    /// Await every in-flight refactor (test-only seam - production never waits
     /// on the background job).
     pub async fn await_all(&self) {
         let handles = {
@@ -406,7 +406,7 @@ impl RefactorRunner {
 }
 
 /// Test seam: await every in-flight refactor spawned by the approve route on
-/// this state. Production code never calls this — the refactor runs
+/// this state. Production code never calls this - the refactor runs
 /// out-of-band.
 pub async fn await_pending_refactors(state: &crate::state::AppState) {
     state.refactor_runner.await_all().await;

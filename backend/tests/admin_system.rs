@@ -1,6 +1,6 @@
 //! Integration tests for issue #81: `GET /admin/system` is auth-gated (same
-//! `require_session` guard as `/admin/logs`) and returns current host load —
-//! CPU, memory, and per-disk usage — plus the mount point holding the Brain
+//! `require_session` guard as `/admin/logs`) and returns current host load -
+//! CPU, memory, and per-disk usage - plus the mount point holding the Brain
 //! File. The assertions pin the response *shape* (types and ranges), not
 //! specific values: load varies by host and a CI box may be near-idle, so the
 //! contract is "the fields exist and are well-formed," not "CPU is X%."

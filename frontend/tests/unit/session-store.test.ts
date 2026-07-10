@@ -11,7 +11,7 @@ function apiStub(getMe: SessionApi['getMe']): SessionApi {
 	return { getMe };
 }
 
-describe('SessionStore — opaque-cookie auth state (reload stays authenticated)', () => {
+describe('SessionStore - opaque-cookie auth state (reload stays authenticated)', () => {
 	it('starts unknown so the guard can decide after the first /me probe', () => {
 		const store = new SessionStore(apiStub(vi.fn<SessionApi['getMe']>()));
 		expect(store.status).toBe('unknown');

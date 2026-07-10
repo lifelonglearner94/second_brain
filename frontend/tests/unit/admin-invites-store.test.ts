@@ -36,7 +36,7 @@ function apiStub(api: Partial<AdminInviteApi>): AdminInviteApi {
 	};
 }
 
-describe('AdminInviteStore — admin invite mint+list over backend #73', () => {
+describe('AdminInviteStore - admin invite mint+list over backend #73', () => {
 	it('starts idle with no invitations and no minted token', () => {
 		const store = new AdminInviteStore(
 			apiStub({
@@ -110,7 +110,7 @@ describe('AdminInviteStore — admin invite mint+list over backend #73', () => {
 		expect(store.invitations).toEqual(LIST.invitations);
 	});
 
-	it('mint() is mutually exclusive — minting is true while in flight, false after', async () => {
+	it('mint() is mutually exclusive - minting is true while in flight, false after', async () => {
 		let resolveMint: (v: Invitation) => void = () => {};
 		const mintInvite = vi
 			.fn<AdminInviteApi['mintInvite']>()
@@ -149,7 +149,7 @@ describe('AdminInviteStore — admin invite mint+list over backend #73', () => {
 		expect(store.copied).toBe(false);
 	});
 
-	describe('issue #78 — copy-invite-link affordance', () => {
+	describe('issue #78 - copy-invite-link affordance', () => {
 		it('inviteLink(token) builds <origin>/login?invite=<token> from the live browser origin', () => {
 			const store = new AdminInviteStore(apiStub({}));
 			expect(store.inviteLink('tok-abc')).toBe(

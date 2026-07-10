@@ -15,7 +15,7 @@ export type WebSpeechResultView = {
 
 /**
  * Minimal, DOM-free view of a `SpeechRecognitionEvent`. `resultIndex` is the
- * lowest index the engine reports as changed since the last event — on Android
+ * lowest index the engine reports as changed since the last event - on Android
  * Chrome it is unreliable and re-delivers already-final results, so the tracker
  * below deliberately does NOT depend on it for correctness.
  */

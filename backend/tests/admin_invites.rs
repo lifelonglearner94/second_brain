@@ -151,7 +151,7 @@ async fn admin_mints_and_lists_invite() {
         "non-admin list must be refused: {body}"
     );
 
-    // The non-admin 403s did not mint anything — the admin's list is unchanged.
+    // The non-admin 403s did not mint anything - the admin's list is unchanged.
     let (status, list) = list_invites(&app, &cookie_admin).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -184,7 +184,7 @@ async fn minted_token_is_unguessable_bearer_shape() {
     let cookie_admin = session_cookie(&db, ADMIN_ID).await;
 
     // Mint a few tokens and assert they are base64url (no padding), reasonably
-    // long, and mutually distinct — a sanity check on the CSPRNG minter.
+    // long, and mutually distinct - a sanity check on the CSPRNG minter.
     let mut tokens = Vec::new();
     for _ in 0..4 {
         let (status, body) = mint_invite(&app, &cookie_admin).await;

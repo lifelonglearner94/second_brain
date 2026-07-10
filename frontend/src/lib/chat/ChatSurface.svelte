@@ -57,7 +57,7 @@
 <section class="chat-surface" data-testid="chat-surface">
 	{#if !online}
 		<div class="notice pill pill-warn" data-testid="chat-offline">
-			Chat unavailable offline — connect to use the backend LLM.
+			Chat unavailable offline - connect to use the backend LLM.
 		</div>
 	{/if}
 

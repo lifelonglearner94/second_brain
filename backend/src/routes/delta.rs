@@ -1,4 +1,4 @@
-//! Delta-sync route (issue #28): `GET /graph/delta?since=<ts>` — the
+//! Delta-sync route (issue #28): `GET /graph/delta?since=<ts>` - the
 //! incremental read surface backing the frontend's pull-on-focus
 //! reconciliation. Returns additions + deletions + retags since the client's
 //! cursor, plus a fresh cursor for the next pull.
@@ -23,7 +23,7 @@ pub struct DeltaQuery {
     pub since: Option<i64>,
 }
 
-/// `GET /graph/delta?since=<ts>` — return the graph changes since the cursor.
+/// `GET /graph/delta?since=<ts>` - return the graph changes since the cursor.
 pub async fn graph_delta(
     State(state): State<AppState>,
     Extension(session): Extension<SessionInfo>,

@@ -1,15 +1,15 @@
 //! Integration tests for issue #27: the Global Topology Snapshot endpoint
-//! `GET /graph` — the primary read surface for visualization. Returns all
+//! `GET /graph` - the primary read surface for visualization. Returns all
 //! concepts + typed edges (current type projected from type_history,
 //! ADR-0003) + current Louvain partition IDs (ADR-0008) as a single gzipped
 //! JSON payload the frontend fetches wholesale on app load. The backend owns
-//! all graph computation, including the partition IDs — the frontend never
+//! all graph computation, including the partition IDs - the frontend never
 //! runs Louvain (ADR-0008).
 //!
 //! Concepts/edges are created via the real submit→extract→accrete path; auth
 //! is bypassed by minting a session row directly (as in `delta_sync.rs`). The
 //! extractor is a scripted stand-in so the accretion pipeline runs on
-//! deterministic concepts/edges — no Gemini call.
+//! deterministic concepts/edges - no Gemini call.
 
 use std::io::Read;
 use std::sync::Arc;
@@ -115,7 +115,7 @@ async fn submit(app: &axum::Router, cookie: &http::HeaderValue, verbatim: &str) 
     value["id"].as_i64().expect("id present")
 }
 
-/// Append a retag entry (seq_index = max+1) to an edge's type history —
+/// Append a retag entry (seq_index = max+1) to an edge's type history -
 /// simulates the async ontology refactor (ADR-0003) without standing up
 /// governance.
 async fn append_retag(db: &Db, edge_id: i64, type_slug: &str) {

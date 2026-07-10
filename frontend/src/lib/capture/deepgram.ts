@@ -84,7 +84,7 @@ export class DeepgramSttSource implements SttSource {
 
 		// iOS Safari: an AudioContext starts suspended and only resumes when
 		// resume() is called within a user gesture. Create it and kick off
-		// resume() synchronously here — before any await — so the call happens
+		// resume() synchronously here - before any await - so the call happens
 		// inside the Record tap's transient activation window (the awaits below
 		// for the SDK import and the WebSocket open would otherwise leave the
 		// gesture and leave the context suspended, producing silence).

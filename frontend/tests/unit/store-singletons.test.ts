@@ -22,7 +22,7 @@ import {
 	adminSystem
 } from '../../src/lib/state/admin-system.svelte';
 
-describe('store singletons — one shared instance exported from each store module (the spatial-graph pattern)', () => {
+describe('store singletons - one shared instance exported from each store module (the spatial-graph pattern)', () => {
 	it('adminLogs is the shared AdminLogStore singleton exported by the store module', () => {
 		expect(adminLogs).toBeInstanceOf(AdminLogStore);
 	});

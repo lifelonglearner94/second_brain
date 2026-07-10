@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Server-side deploy entrypoint — the forced command in the deploy user's
+# Server-side deploy entrypoint - the forced command in the deploy user's
 # authorized_keys (ADR-0003). The command restriction *is* the security model:
-# the GHA deploy key can only run this script — no shell, no pty, no port
+# the GHA deploy key can only run this script - no shell, no pty, no port
 # forwarding, no agent forwarding. If the key leaks, an attacker can only
 # trigger a pull + restart of the stack with a tag that must already exist in
 # GHCR (which they cannot push without repo write access).
@@ -14,7 +14,7 @@
 #   4. syncs the non-secret infra config files (docker-compose.yml,
 #      litestream.yml, health-push.sh) from the PUBLIC repo at the deployed
 #      commit SHA (ADR-0010), so the running config always matches the running
-#      images — closes the gap that left a stale read-only litestream mount on
+#      images - closes the gap that left a stale read-only litestream mount on
 #      the VPS long after the repo fix shipped (R2 stayed empty),
 #   5. runs `docker compose pull && up -d` with those tags (ADR-0003).
 #
@@ -22,17 +22,17 @@
 # at the SHA in BACKEND_TAG. The repo is PUBLIC, so no auth and no new secret is
 # needed on the VPS or in GHA. This preserves ADR-0003's invariant: an attacker
 # with only the leaked SSH key can REPLAY past configs (any real commit SHA) but
-# cannot CRAFT novel ones — the config must exist in the repo. (Piping a crafted
+# cannot CRAFT novel ones - the config must exist in the repo. (Piping a crafted
 # tar over stdin was rejected: it would let a leaked key run arbitrary compose,
-# bind-mount .env, and exfiltrate secrets — breaking the command-restriction
+# bind-mount .env, and exfiltrate secrets - breaking the command-restriction
 # model. See ADR-0010 for the full rejected-alternatives list.)
 #
-# Secrets (.env) are never touched here — GHA is blind to them (ADR-0004).
+# Secrets (.env) are never touched here - GHA is blind to them (ADR-0004).
 # deploy.sh itself is NOT in the sync set (mid-execution chicken-and-egg); it
 # stays root-owned and is updated manually like .env (one-time scp + bootstrap).
 #
 # Self-test:  bash infrastructure/deploy.sh --self-test
-#   (mocks the fetch + docker steps — no network, no VPS, no docker needed)
+#   (mocks the fetch + docker steps - no network, no VPS, no docker needed)
 set -euo pipefail
 
 # --- config (env-overridable for --self-test; prod defaults are fixed) ---------
@@ -120,7 +120,7 @@ deploy_up() {
 }
 
 # --- main deploy (stdin = deploy.env piped by GHA) ----------------------------
-# tmp/TMP_SYNC are intentionally NOT `local` — the EXIT trap (which fires after
+# tmp/TMP_SYNC are intentionally NOT `local` - the EXIT trap (which fires after
 # main returns, in global scope) must see them to clean up on an early exit.
 tmp=""
 TMP_SYNC=""
@@ -148,7 +148,7 @@ main() {
   if [[ -n "$git_sha" ]]; then
     TMP_SYNC="$(mktemp -d)"
     local entry repo_path mode out dest
-    # Fetch ALL first — a single 404 aborts before any file is touched (atomic).
+    # Fetch ALL first - a single 404 aborts before any file is touched (atomic).
     for entry in "${SYNC_FILES[@]}"; do
       repo_path="${entry%:*}"
       out="$TMP_SYNC/$(echo "$repo_path" | tr / _)"
@@ -157,7 +157,7 @@ main() {
         exit 1
       fi
     done
-    # All fetched OK — install. cp preserves the deploy ownership set by
+    # All fetched OK - install. cp preserves the deploy ownership set by
     # bootstrap (the files pre-exist deploy-owned); chmod re-asserts the mode.
     for entry in "${SYNC_FILES[@]}"; do
       repo_path="${entry%:*}"; mode="${entry#*:}"

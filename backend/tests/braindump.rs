@@ -1,7 +1,7 @@
 //! Integration tests for issue #5: braindump ingest skeleton
 //! (submit → clean → persist → read → error-correct, ADR-0007).
 //!
-//! Auth is bypassed by minting a session row directly — these tests exercise
+//! Auth is bypassed by minting a session row directly - these tests exercise
 //! the braindump write path, not WebAuthn (covered by `tests/auth.rs`).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -130,7 +130,7 @@ fn app_with_recording_llm(db: Db) -> (axum::Router, Arc<AtomicUsize>) {
 async fn submit_persists_verbatim_immediately_with_placeholder_cleaned() {
     // Issue #84: submit is fire-and-forget. The verbatim is persisted
     // immediately and the response returns right away with an empty
-    // (placeholder) cleaned rendering — the LLM cleaning runs in the
+    // (placeholder) cleaned rendering - the LLM cleaning runs in the
     // background. The response still carries id + created_at so the UI can
     // confirm the submit landed; the cleaned rendering lands once the
     // background task commits (here it runs inline via the test runner, so a

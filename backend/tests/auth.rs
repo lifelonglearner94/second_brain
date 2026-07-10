@@ -75,7 +75,7 @@ fn session_id_from_set_cookie(headers: &http::HeaderMap) -> String {
     id.to_string()
 }
 
-/// A truly fresh in-memory DB with ZERO users — the bootstrap-exception
+/// A truly fresh in-memory DB with ZERO users - the bootstrap-exception
 /// precondition. `Db::open_in_memory` seeds the admin under `test-support` for
 /// the convenience of the domain tests; the bootstrap path here must start
 /// empty, so we open `:memory:` directly.
@@ -186,7 +186,7 @@ async fn bootstrap_registration_creates_admin_and_mints_session() {
     .await
     .unwrap();
 
-    // Registration set a session cookie — /me reads the admin without a login.
+    // Registration set a session cookie - /me reads the admin without a login.
     let session_id = session_id_from_set_cookie(&headers);
     let cookie = request_cookie_header_value(&SessionId::parse(&session_id).unwrap());
     let (status, body, _h) =
@@ -203,7 +203,7 @@ async fn bootstrap_registration_creates_admin_and_mints_session() {
 #[tokio::test]
 async fn bootstrap_exception_closes_once_the_admin_exists() {
     // After the bootstrap admin exists, registration WITHOUT an invite is
-    // refused (400 — missing required token), and WITH a valid invite proceeds
+    // refused (400 - missing required token), and WITH a valid invite proceeds
     // and creates a fresh non-admin user.
     let db = fresh_db();
     let app = routes::router(AppState::for_tests(db.clone()));
@@ -214,7 +214,7 @@ async fn bootstrap_exception_closes_once_the_admin_exists() {
     assert_eq!(status, StatusCode::OK, "bootstrap creates admin");
     let admin_cookie = cookie_from_headers(&headers);
 
-    // A second registration with no invite is refused — the exception closed.
+    // A second registration with no invite is refused - the exception closed.
     let (status, body, _h) = do_request(
         &app,
         "POST",
@@ -318,7 +318,7 @@ async fn reused_invite_at_finish_is_410_atomic_consume() {
 
     let token = mint_invite(&app, &admin_cookie).await;
 
-    // Two begins with the same invite — both succeed (begin validates but does
+    // Two begins with the same invite - both succeed (begin validates but does
     // not consume).
     let mut a1 = WebauthnAuthenticator::new(SoftPasskey::new(true));
     let mut a2 = WebauthnAuthenticator::new(SoftPasskey::new(true));
@@ -364,7 +364,7 @@ async fn reused_invite_at_finish_is_410_atomic_consume() {
     .await;
     assert_eq!(st, StatusCode::OK, "first finish consumes invite");
 
-    // Second finish hits the authoritative gate — invite already consumed → 410.
+    // Second finish hits the authoritative gate - invite already consumed → 410.
     let (st, body, _h) = do_request(
         &app,
         "POST",

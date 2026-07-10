@@ -39,7 +39,7 @@ const INVITES_BODY: InvitationsResponse = {
 	]
 };
 
-describe('apiClient — admin invites surface against backend #73', () => {
+describe('apiClient - admin invites surface against backend #73', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	beforeEach(() => {

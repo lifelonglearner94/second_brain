@@ -8,7 +8,7 @@ pub struct Config {
     pub bind_addr: String,
     /// SQLite path (file) or `:memory:` for tests.
     pub database_url: String,
-    /// `json` (default) or `plain` — controls the tracing subscriber format.
+    /// `json` (default) or `plain` - controls the tracing subscriber format.
     pub log_format: LogFormat,
     /// Value for the `RUST_LOG`-style env filter.
     pub rust_log: String,
@@ -73,7 +73,7 @@ impl Config {
             webauthn_rp_origin: "http://localhost:8080".to_string(),
             webauthn_rp_name: "Second Brain (test)".to_string(),
             // Zero so the inline-test runner (and any retry test using the
-            // default) never blocks on a sleep — the FakeLlm seam succeeds on
+            // default) never blocks on a sleep - the FakeLlm seam succeeds on
             // the first attempt, so the loop exits immediately.
             ingest_retry_interval_secs: 0,
         }

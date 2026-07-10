@@ -3,7 +3,7 @@
 //!
 //! Auth is bypassed by minting a session row directly (as in `braindump.rs`).
 //! The extractor is a scripted stand-in returning canned concepts/edges so the
-//! test is hermetic — no Gemini call. The accretion it triggers is the real
+//! test is hermetic - no Gemini call. The accretion it triggers is the real
 //! pipeline (`graph::ingest_extraction`).
 
 use std::sync::{Arc, Mutex};

@@ -1,6 +1,6 @@
 //! Auth middleware: gates every non-auth route behind a valid session cookie.
 //!
-//! Reusable — apply with `.route_layer(from_fn(require_session))` on whatever
+//! Reusable - apply with `.route_layer(from_fn(require_session))` on whatever
 //! sub-router you want protected. On missing/invalid/expired session it returns
 //! `401`; on success it stashes the validated [`SessionInfo`] in request
 //! extensions so downstream handlers read it via [`axum::Extension`].
@@ -39,7 +39,7 @@ pub async fn require_session(
     Ok(next.run(request).await)
 }
 
-/// Admin-only guard (issue #73). Runs *behind* [`require_session`] — the
+/// Admin-only guard (issue #73). Runs *behind* [`require_session`] - the
 /// validated [`SessionInfo`] is already in request extensions (its `is_admin`
 /// flag was sourced from the `users` table by `lookup_session`, so no second
 /// DB hit is needed). Refuses non-admin callers with 403; forwards otherwise.

@@ -57,7 +57,7 @@ const THEMATIC: ChatInferenceProposal = {
 	}
 };
 
-describe('mergeEndorsedEdge — action-driven optimistic merge into the Spatial View-Graph (ADR-0002/0004)', () => {
+describe('mergeEndorsedEdge - action-driven optimistic merge into the Spatial View-Graph (ADR-0002/0004)', () => {
 	it('adds the endorsed edge as a link spanning source → target with the proposed type', () => {
 		const graph = graphWith(1, 2, 3);
 		const merged = mergeEndorsedEdge(graph, STRUCTURAL);
@@ -81,7 +81,7 @@ describe('mergeEndorsedEdge — action-driven optimistic merge into the Spatial 
 		expect(merged.links[0]?.color).toBe(EDGE_COLOR);
 	});
 
-	it('merges a thematic proposal the same way — the edge bridges the two cluster-mates', () => {
+	it('merges a thematic proposal the same way - the edge bridges the two cluster-mates', () => {
 		const graph = graphWith(10, 11, 12);
 		const merged = mergeEndorsedEdge(graph, THEMATIC);
 		expect(merged.links).toHaveLength(1);

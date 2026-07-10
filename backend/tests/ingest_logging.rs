@@ -102,7 +102,7 @@ async fn session_cookie(db: &Db) -> http::HeaderValue {
     request_cookie_header_value(&id)
 }
 
-/// Install a global tracing subscriber that feeds the admin log buffer — the
+/// Install a global tracing subscriber that feeds the admin log buffer - the
 /// production wiring (`main::init_tracing` installs `LogBufferLayer`
 /// globally). `set_global_default` is process-wide; this is the only test in
 /// this binary, so it succeeds on the first call and the spawned background

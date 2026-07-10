@@ -7,18 +7,18 @@
 //!
 //! - **Structural Inference** (issue #11, `origin: structural_inference`): the
 //!   LLM traces an existing multi-hop edge path and proposes a direct edge
-//!   summarizing it — "the graph supports this; I'm labeling existing
+//!   summarizing it - "the graph supports this; I'm labeling existing
 //!   structure." Graph-backed, deterministic, low-risk. The proposal's
 //!   evidence is a traversable edge path, captured verbatim in `evidence_path`.
 //!
 //! - **Thematic Inference** (issue #13, `origin: thematic_inference`): the LLM
 //!   observes thematic density in the current Thematic Read Model partition
-//!   (ADR-0008) — concepts clustered by Louvain with no connecting edge path —
+//!   (ADR-0008) - concepts clustered by Louvain with no connecting edge path -
 //!   and proposes a new edge bridging the gap. Not graph-backed: the evidence
 //!   is a statistical hypothesis from a non-deterministic partition that won't
 //!   exist tomorrow. Riskier by nature.
 //!
-//! The inference-claim is ALWAYS human-gated — no auto-endorse. Endorsing an
+//! The inference-claim is ALWAYS human-gated - no auto-endorse. Endorsing an
 //! LLM deduction is the highest-stakes graph mutation (it can drift the brain
 //! toward the LLM's worldview), so the propose→HITL→endorse pattern applies
 //! with no tolerance threshold. A proposal starts `pending`; only the explicit
@@ -26,14 +26,14 @@
 //!
 //! On endorsement the edge persists (or accretes, if it already exists) with
 //! provenance recorded in `edge_inference_provenance` as
-//! `asserted_by: [Chat_Inference_ID, mode: structural|thematic]` — origin-typed
+//! `asserted_by: [Chat_Inference_ID, mode: structural|thematic]` - origin-typed
 //! so user thoughts (braindump provenance, ADR-0002) and LLM deductions stay
 //! distinguishable, and within LLM deductions, graph-backed summaries stay
 //! distinguishable from LLM-hallucinated hypotheses. Structural inferences
 //! carry NO Thematic Snapshot (ADR-0009): their evidence is the graph itself,
 //! always present, recorded in `evidence_path`. Thematic inferences carry a
-//! Thematic Snapshot — a frozen capture of the motivating cluster's braindumps
-//! — because the ephemeral evidence must be preserved as an audit trail even
+//! Thematic Snapshot - a frozen capture of the motivating cluster's braindumps
+//! - because the ephemeral evidence must be preserved as an audit trail even
 //! after the cluster dissolves.
 //!
 //! After #47 the full propose→HITL→endorse/reject storage flow is behind the
@@ -41,10 +41,10 @@
 //! they own the pure validation (path shape, type non-empty, cluster shape)
 //! and delegate the DB work (ontology slug check, traversability, INSERT,
 //! edge persistence, status flip) to [`SqliteGraphRepo`]'s trait impl. No
-//! `*_conn` helpers live here after #47 — they moved to the adapter.
+//! `*_conn` helpers live here after #47 - they moved to the adapter.
 //!
 //! The `InferenceProposer` trait is the natural next step after this slice:
-//! splitting Structural and Thematic proposal *generation* (the LLM side —
+//! splitting Structural and Thematic proposal *generation* (the LLM side -
 //! tracing the path, observing the cluster, composing the rationale) behind a
 //! separate trait, so the chat route depends on the proposer interface rather
 //! than calling the LLM directly. The DB trait (`GraphRepo`) stays pure-DB.
@@ -56,12 +56,12 @@ use crate::error::{Error, Result};
 use crate::graph_repo::{GraphRepo, SqliteGraphRepo};
 
 /// Origin tag for a structural inference proposal (ADR-0006). The
-/// graph-backed, deterministic mode — "the graph supports this; I'm labeling
+/// graph-backed, deterministic mode - "the graph supports this; I'm labeling
 /// existing structure."
 pub const STRUCTURAL_MODE: &str = "structural_inference";
 
 /// Origin tag for a thematic inference proposal (ADR-0006). The non-graph-
-/// backed, statistical-hypothesis mode — "Louvain clustered these with no
+/// backed, statistical-hypothesis mode - "Louvain clustered these with no
 /// connecting edge path; I'm proposing a bridge." Riskier than structural:
 /// the evidence is an ephemeral Louvain partition that won't exist tomorrow,
 /// so the proposal carries a Thematic Snapshot (ADR-0009) as a frozen receipt.
@@ -75,7 +75,7 @@ pub const STATUS_REJECTED: &str = "rejected";
 
 /// One hop of the traversable edge path that backs a structural inference
 /// (ADR-0006). The proposal's evidence is this path; on endorse the direct
-/// edge `source —[proposed_type]→ target` summarizes it. Serialized as JSON
+/// edge `source -[proposed_type]→ target` summarizes it. Serialized as JSON
 /// into `chat_inference_proposals.evidence_path`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceEdge {
@@ -89,17 +89,17 @@ pub struct EvidenceEdge {
 /// is ephemeral (Louvain is non-deterministic, ADR-0008) and will not exist
 /// tomorrow; the snapshot is the historical receipt that lets the user audit,
 /// months later, exactly why they endorsed a thematic proposal. Endorsement is
-/// immutable — the snapshot is a frozen receipt, never re-evaluated as the
+/// immutable - the snapshot is a frozen receipt, never re-evaluated as the
 /// partition evolves.
 ///
 /// `braindump_ids` is the braindump evidence whose edges formed the thematic
-/// density — computed backend-side from `edge_provenance` (the braindump
+/// density - computed backend-side from `edge_provenance` (the braindump
 /// asserters of edges between cluster concepts) so the receipt is a verifiable
 /// computation, not an LLM claim. `concept_ids` is the cluster's concept
 /// composition, from the LLM's observation of the current partition (the only
-/// thing the backend cannot re-derive — the partition is session-scoped and
+/// thing the backend cannot re-derive - the partition is session-scoped and
 /// non-deterministic). Both are frozen at proposal time and survive the
-/// deletion of their constituent braindumps/concepts (no FK — ADR-0009).
+/// deletion of their constituent braindumps/concepts (no FK - ADR-0009).
 ///
 /// Structural inferences carry NO snapshot (ADR-0009): their evidence is the
 /// graph itself, always present, recorded in `evidence_path`.
@@ -113,7 +113,7 @@ pub struct ThematicSnapshot {
 
 /// A pending or resolved chat-inference proposal (read model). `status` is
 /// `pending`, `endorsed`, or `rejected`. `evidence_path` is the traversable
-/// edge path that backs a structural proposal (empty for thematic — not
+/// edge path that backs a structural proposal (empty for thematic - not
 /// graph-backed). `snapshot` is the frozen Thematic Snapshot carried by a
 /// thematic proposal (ADR-0009); `None` for structural proposals.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -145,8 +145,8 @@ pub struct InferenceAssertion {
 }
 
 /// Propose a structural inference (ADR-0006 structural mode): a direct edge
-/// `source —[proposed_type]→ target` summarizing a real, traversable
-/// multi-hop edge path. The proposal enters the queue as `pending` — it is
+/// `source -[proposed_type]→ target` summarizing a real, traversable
+/// multi-hop edge path. The proposal enters the queue as `pending` - it is
 /// NEVER auto-endorsed. On a later endorse the edge persists with
 /// `asserted_by: [this proposal's id, mode: structural_inference]`.
 ///
@@ -198,7 +198,7 @@ pub(crate) fn validate_path(
 ) -> Result<()> {
     if path.is_empty() {
         return Err(Error::BadRequest(
-            "evidence_path must be non-empty — a structural inference summarizes \
+            "evidence_path must be non-empty - a structural inference summarizes \
              a real multi-hop path"
                 .into(),
         ));
@@ -230,18 +230,18 @@ pub(crate) fn validate_path(
 }
 
 /// Propose a thematic inference (ADR-0006 thematic mode): a new edge
-/// `source —[proposed_type]→ target` bridging cluster-mates that Louvain
-/// grouped together but that have no connecting edge path. Not graph-backed —
+/// `source -[proposed_type]→ target` bridging cluster-mates that Louvain
+/// grouped together but that have no connecting edge path. Not graph-backed -
 /// a statistical hypothesis from a non-deterministic partition that won't
-/// exist tomorrow. The proposal enters the queue as `pending` — NEVER
+/// exist tomorrow. The proposal enters the queue as `pending` - NEVER
 /// auto-endorsed. On a later endorse the edge persists with
 /// `asserted_by: [this proposal's id, mode: thematic_inference]` plus the
 /// Thematic Snapshot attached to the provenance.
 ///
 /// `cluster_concept_ids` is the LLM's observation of the motivating cluster's
 /// composition (the concepts Louvain grouped together). The backend computes
-/// the snapshot's `braindump_ids` from `edge_provenance` — the braindumps that
-/// asserted edges between cluster concepts — so the frozen receipt is a
+/// the snapshot's `braindump_ids` from `edge_provenance` - the braindumps that
+/// asserted edges between cluster concepts - so the frozen receipt is a
 /// verifiable computation, not an LLM claim (ADR-0009). The concept_ids come
 /// from the LLM because the partition is session-scoped and non-deterministic;
 /// the backend cannot re-derive them.
@@ -250,7 +250,7 @@ pub(crate) fn validate_path(
 /// `source` and `target` must be distinct and both in `cluster_concept_ids`
 /// (a thematic inference bridges cluster-mates); every cluster concept must
 /// exist; the computed `braindump_ids` must be non-empty (a cluster with no
-/// braindump-backed edges has no thematic density from user thoughts — a
+/// braindump-backed edges has no thematic density from user thoughts - a
 /// thematic inference must rest on user evidence, not LLM-on-LLM deduction).
 /// No graph-traversability check: the partition is non-deterministic, so
 /// "no edge path" is the LLM's observation at proposal time; the HITL
@@ -273,7 +273,7 @@ pub async fn propose_thematic_inference(
     }
     if source_concept_id == target_concept_id {
         return Err(Error::BadRequest(
-            "source and target must be distinct — a thematic inference bridges two cluster-mates"
+            "source and target must be distinct - a thematic inference bridges two cluster-mates"
                 .into(),
         ));
     }
@@ -287,7 +287,7 @@ pub async fn propose_thematic_inference(
     }
     if !cluster.contains(&source_concept_id) || !cluster.contains(&target_concept_id) {
         return Err(Error::BadRequest(
-            "source_concept_id and target_concept_id must be in cluster_concept_ids — \
+            "source_concept_id and target_concept_id must be in cluster_concept_ids - \
              a thematic inference bridges cluster-mates (ADR-0006)"
                 .into(),
         ));
@@ -305,10 +305,10 @@ pub async fn propose_thematic_inference(
 }
 
 /// Endorse a pending chat-inference proposal (ADR-0006): persist the
-/// direct edge `source —[proposed_type]→ target` and record the proposal as
+/// direct edge `source -[proposed_type]→ target` and record the proposal as
 /// its chat-inference asserter. The edge accretes (ADR-0002): if the direct
-/// edge already exists — asserted by a braindump, or by an earlier endorsed
-/// inference — the new assertion is added to its provenance rather than
+/// edge already exists - asserted by a braindump, or by an earlier endorsed
+/// inference - the new assertion is added to its provenance rather than
 /// duplicated. Type history is initialised at index 0 for a newly-created
 /// edge (ADR-0003). The proposal's `mode` origin-tags the persisted
 /// provenance (`structural_inference` or `thematic_inference`); for a
@@ -317,7 +317,7 @@ pub async fn propose_thematic_inference(
 /// motivated the edge, even after the cluster dissolves.
 ///
 /// `NotFound` if the proposal does not exist; `Conflict` if it is not
-/// `pending` (already endorsed or rejected — endorsement is immutable, no
+/// `pending` (already endorsed or rejected - endorsement is immutable, no
 /// second chance). Returns the refreshed proposal.
 ///
 /// Wrapper: delegates to [`GraphRepo::endorse_inference_proposal`] (issue #47).
@@ -332,7 +332,7 @@ pub async fn endorse_inference_proposal(
 }
 
 /// Reject a pending structural inference proposal (ADR-0006): keep the graph
-/// untouched and mark the proposal `rejected`. No edge is persisted — the
+/// untouched and mark the proposal `rejected`. No edge is persisted - the
 /// inference-claim never enters the graph. `NotFound` if the proposal does
 /// not exist; `Conflict` if it is not `pending`. Returns the refreshed
 /// proposal.
@@ -444,7 +444,7 @@ mod tests {
     }
 
     /// Seed the canonical ADR-0006 structural path:
-    /// `Maria —[endangers]→ Q3 launch —[depends_on]→ Beta release`.
+    /// `Maria -[endangers]→ Q3 launch -[depends_on]→ Beta release`.
     /// Returns the three concept ids in that order.
     async fn seed_path(db: &Db) -> (i64, i64, i64) {
         let llm = fake_llm();
@@ -515,7 +515,7 @@ mod tests {
 
     #[tokio::test]
     async fn propose_with_traversable_path_creates_pending_proposal_and_no_edge() {
-        // ADR-0006: the proposal enters the queue pending. No auto-endorse —
+        // ADR-0006: the proposal enters the queue pending. No auto-endorse -
         // no edge is persisted yet.
         let db = test_db();
         let (maria, q3, beta) = seed_path(&db).await;
@@ -544,7 +544,7 @@ mod tests {
         assert!(proposal.rationale.is_some());
         assert!(proposal.resolved_at.is_none());
 
-        // No edge Maria —[endangers]→ Beta release exists yet — the claim is
+        // No edge Maria -[endangers]→ Beta release exists yet - the claim is
         // not endorsed, so the graph is untouched.
         assert!(
             crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
@@ -565,7 +565,7 @@ mod tests {
     #[tokio::test]
     async fn propose_with_non_traversable_path_is_rejected() {
         // The structural guarantee: the path must be real. A hop that is not
-        // an edge in the graph is rejected — no proposal is created.
+        // an edge in the graph is rejected - no proposal is created.
         let db = test_db();
         let (maria, q3, beta) = seed_path(&db).await;
 
@@ -575,7 +575,7 @@ mod tests {
             maria,
             beta,
             "endangers",
-            // Maria —[helps]→ Q3 does not exist (the real edge is `endangers`).
+            // Maria -[helps]→ Q3 does not exist (the real edge is `endangers`).
             vec![hop(maria, "helps", q3), hop(q3, "depends_on", beta)],
             None,
         )
@@ -716,7 +716,7 @@ mod tests {
         assert_eq!(endorsed.status, STATUS_ENDORSED);
         assert!(endorsed.resolved_at.is_some());
 
-        // The direct edge Maria —[endangers]→ Beta release now exists.
+        // The direct edge Maria -[endangers]→ Beta release now exists.
         let edge = crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
@@ -736,7 +736,7 @@ mod tests {
         assert_eq!(assertions.len(), 1);
         assert_eq!(assertions[0].chat_inference_id, proposal.id);
         assert_eq!(assertions[0].mode, STRUCTURAL_MODE);
-        // No braindump provenance — the inference is the sole origin.
+        // No braindump provenance - the inference is the sole origin.
         assert!(
             crate::graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
                 .await
@@ -754,7 +754,7 @@ mod tests {
         let db = test_db();
         let llm = fake_llm();
 
-        // Seed the multi-hop path Maria —[endangers]→ Q3 —[depends_on]→ Beta.
+        // Seed the multi-hop path Maria -[endangers]→ Q3 -[depends_on]→ Beta.
         let bd_path = seed_braindump(&db, "maria endangers q3 which beta depends on").await;
         ingest_extraction(
             &db,
@@ -776,7 +776,7 @@ mod tests {
         let q3 = concept_id(&db, "Q3 launch").await;
         let beta = concept_id(&db, "Beta release").await;
 
-        // Separately assert the direct edge Maria —[endangers]→ Beta with a
+        // Separately assert the direct edge Maria -[endangers]→ Beta with a
         // second braindump (Maria and Beta accrete to the existing concepts).
         let bd_direct = seed_braindump(&db, "maria endangers the beta release directly").await;
         ingest_extraction(
@@ -895,7 +895,7 @@ mod tests {
 
     #[tokio::test]
     async fn endorse_already_endorsed_is_conflict() {
-        // Endorsement is immutable — no second chance.
+        // Endorsement is immutable - no second chance.
         let db = test_db();
         let (maria, q3, beta) = seed_path(&db).await;
         let proposal = seed_pending(
@@ -940,7 +940,7 @@ mod tests {
     async fn inference_backed_edge_survives_braindump_deletion() {
         // ADR-0006: a chat inference is its own provenance origin, distinct
         // from a braindump. An edge backed only by an endorsed inference must
-        // survive a braindump deletion — the orphan-edge cascade consults both
+        // survive a braindump deletion - the orphan-edge cascade consults both
         // provenance tables, so deleting the braindump that seeded the path
         // does not orphan the inferred direct edge (even though it has no
         // braindump asserter of its own).
@@ -983,7 +983,7 @@ mod tests {
                 .await
                 .unwrap()
                 .expect("inferred edge persisted");
-        // It has only an inference asserter — no braindump provenance.
+        // It has only an inference asserter - no braindump provenance.
         assert!(
             crate::graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, inferred.id)
                 .await
@@ -996,7 +996,7 @@ mod tests {
         // (their sole asserter is gone, and the endpoint concepts may vanish
         // too), but the inferred direct edge survives: the inference is its
         // own origin. (If the endpoint concepts vanish, the FK ON DELETE
-        // CASCADE on edges would remove it — so this test seeds Maria and
+        // CASCADE on edges would remove it - so this test seeds Maria and
         // Beta only via this one braindump; to keep them alive we add a
         // second extracting braindump for the endpoints.)
         let bd_keep = seed_braindump(&db, "maria and the beta release").await;
@@ -1015,7 +1015,7 @@ mod tests {
             .await
             .unwrap();
 
-        // The inferred direct edge survives — the inference origin still
+        // The inferred direct edge survives - the inference origin still
         // backs it, and Maria/Beta survive (bd_keep extracts them).
         let survivor =
             crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
@@ -1055,7 +1055,7 @@ mod tests {
 
     #[tokio::test]
     async fn structural_proposal_carries_no_thematic_snapshot() {
-        // ADR-0009: structural inferences carry NO Thematic Snapshot — their
+        // ADR-0009: structural inferences carry NO Thematic Snapshot - their
         // evidence is the graph itself (the `evidence_path`), always present.
         // The `thematic_snapshots` table exists (thematic mode uses it, issue
         // #13) but structural mode never populates it; the proposal's
@@ -1104,10 +1104,10 @@ mod tests {
 
     // --- issue #13: thematic inference (ADR-0006 thematic mode + ADR-0009) ---
 
-    /// Seed the canonical thematic cluster: `Maria —[endangers]→ Q3 launch
-    /// —[depends_on]→ Beta release`, all extracted from one braindump. Louvain
+    /// Seed the canonical thematic cluster: `Maria -[endangers]→ Q3 launch
+    /// -[depends_on]→ Beta release`, all extracted from one braindump. Louvain
     /// sees a single connected component; the braindump that asserted the edges
-    /// is the snapshot evidence. There is no direct Maria→Beta edge — the
+    /// is the snapshot evidence. There is no direct Maria→Beta edge - the
     /// thematic gap the LLM bridges. Returns (maria, q3, beta, cluster_bd).
     async fn seed_cluster(db: &Db) -> (i64, i64, i64, i64) {
         let (maria, q3, beta) = seed_path(db).await;
@@ -1131,11 +1131,11 @@ mod tests {
     #[tokio::test]
     async fn propose_thematic_inference_creates_pending_proposal_with_frozen_snapshot() {
         // ADR-0006 thematic mode + ADR-0009: the LLM observes a Louvain cluster
-        // (Maria/Q3/Beta — connected by edges but no direct Maria→Beta edge)
-        // and proposes a bridging edge Maria —[endangers]→ Beta. The proposal
+        // (Maria/Q3/Beta - connected by edges but no direct Maria→Beta edge)
+        // and proposes a bridging edge Maria -[endangers]→ Beta. The proposal
         // carries a Thematic Snapshot: the braindump ids whose edges formed
         // the thematic density, frozen at proposal time. The proposal is
-        // pending — no auto-endorse.
+        // pending - no auto-endorse.
         let db = test_db();
         let (maria, q3, beta, cluster_bd) = seed_cluster(&db).await;
 
@@ -1158,7 +1158,7 @@ mod tests {
         assert_eq!(proposal.proposed_type, "endangers");
         assert!(
             proposal.evidence_path.is_empty(),
-            "thematic mode has no evidence path — not graph-backed"
+            "thematic mode has no evidence path - not graph-backed"
         );
         assert_eq!(
             proposal.rationale.as_deref(),
@@ -1183,7 +1183,7 @@ mod tests {
             vec![maria, q3, beta],
             "snapshot captured the cluster's composition (LLM's observation)"
         );
-        // No edge persisted yet — no auto-endorse.
+        // No edge persisted yet - no auto-endorse.
         assert!(
             crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
                 .await
@@ -1228,7 +1228,7 @@ mod tests {
         // `asserted_by: [Chat_Inference_ID, mode: thematic_inference]` and
         // the frozen Thematic Snapshot attached to the provenance row. The
         // snapshot_id on edge_inference_provenance must match the proposal's
-        // snapshot — the receipt travels with the edge so the user can audit
+        // snapshot - the receipt travels with the edge so the user can audit
         // the ephemeral cluster months later.
         let db = test_db();
         let (maria, q3, beta, _bd) = seed_cluster(&db).await;
@@ -1242,7 +1242,7 @@ mod tests {
         assert_eq!(endorsed.status, STATUS_ENDORSED);
         assert!(endorsed.resolved_at.is_some());
 
-        // The direct edge Maria —[endangers]→ Beta persists.
+        // The direct edge Maria -[endangers]→ Beta persists.
         let edge = crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
             .unwrap()
@@ -1267,7 +1267,7 @@ mod tests {
             Some(snapshot_id),
             "the frozen snapshot is attached to the persisted provenance"
         );
-        // No braindump provenance — the inference is the sole origin.
+        // No braindump provenance - the inference is the sole origin.
         assert!(
             crate::graph::edge_provenance(&db, BOOTSTRAP_ADMIN_USER_ID, edge.id)
                 .await
@@ -1294,7 +1294,7 @@ mod tests {
         // a co-asserter with its snapshot, rather than duplicating the edge.
         let db = test_db();
         let llm = fake_llm();
-        // Seed the cluster path Maria —[endangers]→ Q3 —[depends_on]→ Beta.
+        // Seed the cluster path Maria -[endangers]→ Q3 -[depends_on]→ Beta.
         let bd_path = seed_braindump(&db, "maria endangers q3 which beta depends on").await;
         ingest_extraction(
             &db,
@@ -1315,7 +1315,7 @@ mod tests {
         let maria = concept_id(&db, "Maria").await;
         let q3 = concept_id(&db, "Q3 launch").await;
         let beta = concept_id(&db, "Beta release").await;
-        // Separately assert the direct edge Maria —[endangers]→ Beta.
+        // Separately assert the direct edge Maria -[endangers]→ Beta.
         let bd_direct = seed_braindump(&db, "maria endangers the beta release directly").await;
         ingest_extraction(
             &db,
@@ -1367,7 +1367,7 @@ mod tests {
         // never re-evaluated as the partition evolves. After endorsing a
         // thematic proposal, adding more braindumps (which changes the graph
         // topology and would produce a different Louvain partition) must NOT
-        // change the snapshot's braindump_ids or concept_ids — the receipt is
+        // change the snapshot's braindump_ids or concept_ids - the receipt is
         // frozen at proposal time.
         let db = test_db();
         let (maria, q3, beta, _bd) = seed_cluster(&db).await;
@@ -1393,7 +1393,7 @@ mod tests {
         .await
         .unwrap();
 
-        // The endorsed proposal's snapshot is unchanged — frozen receipt.
+        // The endorsed proposal's snapshot is unchanged - frozen receipt.
         let refreshed = get_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, proposal.id)
             .await
             .unwrap()
@@ -1402,11 +1402,11 @@ mod tests {
         assert_eq!(snapshot_after.id, snapshot_before.id, "snapshot id stable");
         assert_eq!(
             snapshot_after.braindump_ids, snapshot_before.braindump_ids,
-            "braindump_ids frozen — not recomputed"
+            "braindump_ids frozen - not recomputed"
         );
         assert_eq!(
             snapshot_after.concept_ids, snapshot_before.concept_ids,
-            "concept_ids frozen — not recomputed"
+            "concept_ids frozen - not recomputed"
         );
         // The edge's provenance snapshot_id is also stable.
         let edge = crate::graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
@@ -1428,7 +1428,7 @@ mod tests {
         let db = test_db();
         let (maria, q3, beta, _bd) = seed_cluster(&db).await;
 
-        // Structural: the real path Maria —[endangers]→ Q3 —[depends_on]→ Beta.
+        // Structural: the real path Maria -[endangers]→ Q3 -[depends_on]→ Beta.
         let structural = seed_pending(
             &db,
             maria,
@@ -1449,7 +1449,7 @@ mod tests {
         );
         assert!(thematic.snapshot.is_some(), "thematic carries a snapshot");
 
-        // Endorse both — they persist as different typed edges (endangers vs
+        // Endorse both - they persist as different typed edges (endangers vs
         // helps) with distinguishable provenance origins.
         endorse_inference_proposal(&db, BOOTSTRAP_ADMIN_USER_ID, structural.id)
             .await
@@ -1505,7 +1505,7 @@ mod tests {
     async fn propose_thematic_rejects_endpoints_not_in_cluster() {
         let db = test_db();
         let (maria, q3, beta, _bd) = seed_cluster(&db).await;
-        // Maria is in the cluster but the cluster list omits Beta — a
+        // Maria is in the cluster but the cluster list omits Beta - a
         // thematic inference must bridge cluster-mates.
         let err = propose_thematic_inference(
             &db,

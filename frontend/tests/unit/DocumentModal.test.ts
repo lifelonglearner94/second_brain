@@ -24,7 +24,7 @@ function apiStub(getBraindump: BraindumpApi['getBraindump']): BraindumpApi {
 	};
 }
 
-describe('DocumentModal — isolated braindump reader (ADR-0003, ADR-0005)', () => {
+describe('DocumentModal - isolated braindump reader (ADR-0003, ADR-0005)', () => {
 	it('renders a loading state while the braindump is being fetched', () => {
 		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
 			() => new Promise<Braindump>(() => {})
@@ -102,7 +102,7 @@ describe('DocumentModal — isolated braindump reader (ADR-0003, ADR-0005)', () 
 		);
 	});
 
-	it('does not render any graph-navigation control — citations are a reading interaction, not navigation (does not move the Spatial View-Graph camera)', async () => {
+	it('does not render any graph-navigation control - citations are a reading interaction, not navigation (does not move the Spatial View-Graph camera)', async () => {
 		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
 			async () => BRAINDUMP
 		);

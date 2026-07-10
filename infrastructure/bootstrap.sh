@@ -14,7 +14,7 @@
 # (ADR-0005, #33). deploy.sh re-syncs the three non-secret config files
 # (docker-compose.yml, litestream.yml, health-push.sh) from the public repo on
 # every deploy (ADR-0010); bootstrap installs them once to bootstrap the sync.
-# Does NOT handle secrets — .env (R2 creds + NTFY_WEBHOOK_URL + Gemini key) is
+# Does NOT handle secrets - .env (R2 creds + NTFY_WEBHOOK_URL + Gemini key) is
 # placed manually (ADR-0004). The Brain Replica itself runs as the litestream
 # sidecar in docker-compose.yml; bootstrap only installs its config file.
 set -euo pipefail
@@ -27,7 +27,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 echo ">>> bootstrap: repo root = $REPO_ROOT"
 [[ -f "$REPO_ROOT/docker-compose.yml" ]] || { echo "FAIL: run from the repo root (docker-compose.yml not found at $REPO_ROOT)"; exit 1; }
 
-# --- 1. Swap (safety net — the VPS has 4GB RAM and zero swap) ----------------
+# --- 1. Swap (safety net - the VPS has 4GB RAM and zero swap) ----------------
 if [[ "$(swapon --show --noheadings 2>/dev/null | wc -l)" -eq 0 ]]; then
   echo ">>> creating 4GB swapfile at /swapfile"
   fallocate -l 4G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=4096
@@ -59,12 +59,12 @@ if ! docker compose version >/dev/null 2>&1; then
   echo "FAIL: docker compose plugin missing"; exit 1
 fi
 
-# --- 3. Firewall (nftables INPUT-only — Docker owns FORWARD) ----------------
+# --- 3. Firewall (nftables INPUT-only - Docker owns FORWARD) ----------------
 # Docker (via iptables-nft) creates and manages its own FORWARD + DOCKER* chains
 # in the `ip filter` table for bridge networking. A `flush ruleset` + our own
 # FORWARD policy would wipe those chains and break `docker compose up` ("No
 # chain/target/match by that name" on DOCKER-FORWARD). So we manage INPUT only
-# — container-published ports traverse FORWARD (after DNAT), not INPUT, so a
+# - container-published ports traverse FORWARD (after DNAT), not INPUT, so a
 # drop-INPUT firewall does not block the Edge's :80. Docker is restarted after
 # the flush so it recreates its chains over the clean base, and docker.service
 # is ordered After nftables so a reboot flushes before Docker starts.
@@ -122,7 +122,7 @@ getent group docker >/dev/null 2>&1 && usermod -aG docker "$DEPLOY_USER"
 # Ownership split (ADR-0010): the three sync-eligible config files are owned by
 # $DEPLOY_USER so deploy.sh (which runs as $DEPLOY_USER via the forced command)
 # can `cp` over them in place on every deploy. deploy.sh ITSELF stays root-owned
-# and $INSTALL_DIR stays root-owned — so the deploy key (no shell, forced
+# and $INSTALL_DIR stays root-owned - so the deploy key (no shell, forced
 # command) cannot create new files in $INSTALL_DIR and cannot replace the
 # deploy.sh gate that validates its input. Overwriting an existing file you own
 # needs write perm on the FILE only (not the dir), so deploy can update these
@@ -140,7 +140,7 @@ install -m 644 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$REPO_ROOT/infrastructure/li
 # NTFY_WEBHOOK_URL from the manually-placed infrastructure/.env (ADR-0004).
 install -m 755 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$REPO_ROOT/infrastructure/health-push.sh" "$INSTALL_DIR/infrastructure/health-push.sh"
 # The gate: root-owned, NOT deploy-writable. deploy.sh validates stdin against
-# the ADR-0007 whitelist before writing anything — if deploy could replace it,
+# the ADR-0007 whitelist before writing anything - if deploy could replace it,
 # a leaked key could neuter the validation. Updated manually like .env (one-time
 # scp), not via the sync it gates.
 install -m 755 -o root -g root "$REPO_ROOT/infrastructure/deploy.sh"  "$INSTALL_DIR/deploy.sh"
@@ -149,7 +149,7 @@ chown "$DEPLOY_USER":"$DEPLOY_USER" "$INSTALL_DIR/deploy.log"
 chmod 644 "$INSTALL_DIR/deploy.log"
 
 # Placeholder deploy.env so `docker compose config` resolves before the first
-# GHA deploy writes a real SHA tag (ADR-0007). Never pulled — :latest has no
+# GHA deploy writes a real SHA tag (ADR-0007). Never pulled - :latest has no
 # GHCR image; the first real deploy overwrites this with a SHA tag.
 if [[ ! -f "$INSTALL_DIR/deploy.env" ]]; then
   cat > "$INSTALL_DIR/deploy.env" <<EOF
@@ -177,7 +177,7 @@ if [[ -f "$REPO_ROOT/infrastructure/health-push.cron" ]]; then
   systemctl enable --now cron >/dev/null 2>&1 || true
   echo ">>> health-push cron installed (/etc/cron.d/second-brain-health-push, every 5 min)"
 else
-  echo ">>> WARNING: infrastructure/health-push.cron missing — Health Push cron NOT installed"
+  echo ">>> WARNING: infrastructure/health-push.cron missing - Health Push cron NOT installed"
 fi
 
 # --- 7. Command-restricted deploy SSH key (ADR-0003) ------------------------
@@ -198,13 +198,13 @@ if [[ -f "$PUBKEY_FILE" && -s "$PUBKEY_FILE" ]]; then
     echo ">>> deploy key already present in authorized_keys"
   fi
 else
-  echo ">>> WARNING: $PUBKEY_FILE missing — deploy key NOT installed (GHA deploys will fail)"
+  echo ">>> WARNING: $PUBKEY_FILE missing - deploy key NOT installed (GHA deploys will fail)"
 fi
 
 # --- sshd: disable password auth for the deploy user (key only) --------------
 if ! grep -q "Match User $DEPLOY_USER" /etc/ssh/sshd_config 2>/dev/null; then
   {
-    printf '\n# Second Brain deploy user (ADR-0003) — key only, no password.\n'
+    printf '\n# Second Brain deploy user (ADR-0003) - key only, no password.\n'
     printf 'Match User %s\n' "$DEPLOY_USER"
     printf '    PasswordAuthentication no\n'
   } >> /etc/ssh/sshd_config
@@ -213,12 +213,12 @@ fi
 
 echo
 echo ">>> bootstrap complete."
-echo ">>> NEXT (manual — secrets, ADR-0004):"
+echo ">>> NEXT (manual - secrets, ADR-0004):"
 echo ">>>   1. Fill infrastructure/.env on your machine: GEMINI_API_KEY + the"
 echo ">>>      Brain Replica R2 keys (LITESTREAM_*) + NTFY_WEBHOOK_URL."
 echo ">>>   2. scp infrastructure/.env root@<vps>:$INSTALL_DIR/infrastructure/.env"
 echo ">>>   3. ssh root@<vps> 'chown $DEPLOY_USER:$DEPLOY_USER $INSTALL_DIR/infrastructure/.env; chmod 600 $INSTALL_DIR/infrastructure/.env'"
-echo ">>>   4. Push to main — GHA builds, pushes GHCR, SSHes here to pull + up."
+echo ">>>   4. Push to main - GHA builds, pushes GHCR, SSHes here to pull + up."
 echo ">>> The Health Push cron (/etc/cron.d/second-brain-health-push) is already"
 echo ">>> installed and will alert via ntfy once NTFY_WEBHOOK_URL is in .env."
 echo ">>> To RESTORE from R2 after a VPS loss, see DISASTER_RECOVERY.md."

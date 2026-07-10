@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { resampleTo16kMono } from '../../src/lib/capture/deepgram';
 
-describe('resampleTo16kMono — pure 16 kHz resampler (issue #82, iOS Safari sample-rate mismatch)', () => {
+describe('resampleTo16kMono - pure 16 kHz resampler (issue #82, iOS Safari sample-rate mismatch)', () => {
 	it('is a no-op when the input is already 16 kHz (desktop/Android Chrome path)', () => {
 		const input = new Float32Array([0, 0.25, 0.5, 0.75, 1]);
 		expect(resampleTo16kMono(input, 16000)).toBe(input);

@@ -24,7 +24,7 @@ beforeEach(async () => {
 	});
 });
 
-describe('PendingCapturesStore — the offline write-intent queue surface (ADR-0005)', () => {
+describe('PendingCapturesStore - the offline write-intent queue surface (ADR-0005)', () => {
 	it('starts empty with count 0', () => {
 		const store = new PendingCapturesStore(createIdb(fakeIndexedDB));
 		expect(store.items).toEqual([]);

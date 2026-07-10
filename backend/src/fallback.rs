@@ -5,7 +5,7 @@
 //! wraps a primary [`Llm`] with a fallback [`Llm`] behind a **circuit
 //! breaker**: once the primary has failed `GEMINI_FALLBACK_MAX_ATTEMPTS`
 //! (default 5) consecutive text-generation calls with transient errors
-//! ([`Error::TransientLlm`] — 429 / 5xx / transport), subsequent
+//! ([`Error::TransientLlm`] - 429 / 5xx / transport), subsequent
 //! text-generation calls route to the fallback model
 //! (`GEMINI_TEXT_MODEL_FALLBACK`, default `gemini-3.1-flash-lite`) until a
 //! cooldown expires and a half-open probe of the primary succeeds.
@@ -13,13 +13,13 @@
 //! Only the **text-generation** methods (`clean`, `generate_pinned`,
 //! `synthesize`, `extract`) pass through the circuit. Embeddings
 //! (`embed_document`, `embed_query`) bypass it entirely and always hit the
-//! primary — the embedding model is identity-calibrated (ADR-0001) and a
+//! primary - the embedding model is identity-calibrated (ADR-0001) and a
 //! fallback embed model would break concept identity and mismatch the vec0
 //! table dimensionality.
 //!
 //! ADR-0003 pins the ontology refactor (`generate_pinned`) to one model for
 //! determinism. Routing a refactor through the fallback is an accepted, logged
-//! **exception** to that guarantee — it exists only because the free tier
+//! **exception** to that guarantee - it exists only because the free tier
 //! forces it, and it is observable via tracing so the degradation is never
 //! silent. The ADR's free-tier-fallback addendum records the exception.
 
@@ -589,7 +589,7 @@ mod tests {
         );
     }
 
-    /// Always returns a non-transient `Internal` error on text calls — a
+    /// Always returns a non-transient `Internal` error on text calls - a
     /// malformed-response / auth / bad-request class that the circuit must NOT
     /// treat as a quota trip.
     struct NonTransientLlm;

@@ -10,8 +10,8 @@
 //! identity thresholds ([`ACCRETION_SIMILARITY`], [`SUGGESTION_FLOOR_SIMILARITY`])
 //! that the accretion logic consumes, plus one-line delegating wrappers
 //! ([`ingest_extraction`], [`delete_braindump`], [`approve_merge_suggestion`],
-//! [`reject_merge_suggestion`]) so existing callers — including the
-//! integration tests under `backend/tests/` — keep compiling without taking a
+//! [`reject_merge_suggestion`]) so existing callers - including the
+//! integration tests under `backend/tests/` - keep compiling without taking a
 //! `&dyn GraphRepo` directly. #48 removes these wrappers once every caller is
 //! migrated.
 //!
@@ -110,7 +110,7 @@ pub struct MergeSuggestion {
 /// Idempotent over a braindump: any prior extraction for `braindump_id` is
 /// retracted first (concepts/edges losing their last asserter vanish), so this
 /// is safe to call on both submit (retracts nothing) and edit (retracts the
-/// stale extraction before re-accreting — ADR-0007).
+/// stale extraction before re-accreting - ADR-0007).
 pub async fn ingest_extraction(
     db: &Db,
     user_id: &str,
@@ -139,8 +139,8 @@ pub async fn ingest_extraction(
 // --- read helpers (public; the future GET /graph surface + test seam) ---
 //
 // These free functions remain as one-line delegators to the [`GraphRepo`]
-// trait (issue #45) so existing callers — including the integration tests
-// under `backend/tests/` and the unit tests in this module — keep compiling
+// trait (issue #45) so existing callers - including the integration tests
+// under `backend/tests/` and the unit tests in this module - keep compiling
 // without taking a `&dyn GraphRepo` directly. The raw SQL that used to live
 // here moved into [`SqliteGraphRepo`]'s trait impl (one source of truth);
 // #48 removes these delegators once every caller is migrated to pass the
@@ -203,7 +203,7 @@ pub async fn merge_suggestions(db: &Db, user_id: &str) -> Result<Vec<MergeSugges
         .await
 }
 
-/// Look up a concept id by exact label. Identity is by embedding (ADR-0001), /// not label, so this is a test/inspection helper — not the identity path.
+/// Look up a concept id by exact label. Identity is by embedding (ADR-0001), /// not label, so this is a test/inspection helper - not the identity path.
 pub async fn concept_id_for_label(db: &Db, user_id: &str, label: &str) -> Result<Option<i64>> {
     SqliteGraphRepo::new(db.clone())
         .concept_id_for_label(user_id, label)
@@ -217,7 +217,7 @@ pub async fn braindump_embedding_stored(db: &Db, user_id: &str, braindump_id: i6
         .await
 }
 
-/// An edge paired with its projected current type (ADR-0003) — the last entry
+/// An edge paired with its projected current type (ADR-0003) - the last entry
 /// of the append-only `edge_type_history`, not a stored field. `original_type`
 /// anchors identity (immutable); `current_type` is the read-model projection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -230,7 +230,7 @@ pub struct EdgeProjection {
     pub created_at: i64,
 }
 
-/// Every concept, ordered by id — the full node set for whole-graph reads
+/// Every concept, ordered by id - the full node set for whole-graph reads
 /// (issue #27's Global Topology Snapshot).
 pub async fn all_concepts(db: &Db, user_id: &str) -> Result<Vec<Concept>> {
     SqliteGraphRepo::new(db.clone()).all_concepts(user_id).await
@@ -258,7 +258,7 @@ pub async fn delete_braindump(db: &Db, user_id: &str, braindump_id: i64) -> Resu
 }
 
 /// Approve a pending concept merge suggestion (ADR-0001 / ADR-0010): fold the
-/// `new_concept_id` into the `existing_concept_id` — union their extraction
+/// `new_concept_id` into the `existing_concept_id` - union their extraction
 /// provenance and repoint edges from the fold concept onto the surviving one,
 /// merging duplicate edges by unioning provenance (ADR-0002 accretion). The
 /// fold concept and the suggestion are removed. `NotFound` if the suggestion
@@ -365,7 +365,7 @@ mod tests {
     }
 
     /// Back an edge with a braindump that did not extract its endpoint concepts
-    /// (simulates a future chat-inference asserter, ADR-0006 — used to exercise
+    /// (simulates a future chat-inference asserter, ADR-0006 - used to exercise
     /// the endpoint-vanishing cascade, ADR-0010 addendum).
     async fn seed_edge_provenance(db: &Db, _user_id: &str, edge_id: i64, braindump_id: i64) {
         db.with_conn(move |conn| {
@@ -689,8 +689,8 @@ mod tests {
     #[tokio::test]
     async fn borderline_match_creates_concept_and_merge_suggestion() {
         // A scripted embedding places the second concept's vector at exactly
-        // cosine 0.9 from the first — inside the suggestion band
-        // [0.80, 0.95) — so the outcome is deterministic (ADR-0001: borderline
+        // cosine 0.9 from the first - inside the suggestion band
+        // [0.80, 0.95) - so the outcome is deterministic (ADR-0001: borderline
         // → new concept + merge suggestion, not silent accretion).
         let dim = 2;
         let db = test_db_dim(dim);
@@ -755,7 +755,7 @@ mod tests {
     async fn edit_retracts_stale_extraction_before_re_accreting() {
         // ADR-0007: re-extraction on edit mutates derived concepts/edges. The
         // old extraction is retracted (provenance dropped, orphan nodes/edges
-        // vanish) before the new one accretes — no double-accretion.
+        // vanish) before the new one accretes - no double-accretion.
         let db = test_db();
         let llm = fake_llm();
 
@@ -1016,7 +1016,7 @@ mod tests {
     async fn delete_braindump_cascade_deletes_edge_when_endpoint_concept_vanishes() {
         // ADR-0010 addendum: an edge whose endpoint concept vanishes is
         // cascade-deleted, even if another asserter still backs it (a future
-        // chat inference may assert an edge without extracting the endpoint —
+        // chat inference may assert an edge without extracting the endpoint -
         // ADR-0006). An edge with a missing endpoint is meaningless.
         let db = test_db();
         let llm = fake_llm();
@@ -1240,7 +1240,7 @@ mod tests {
     #[tokio::test]
     async fn delete_braindump_leaves_no_tombstone_when_concept_survives() {
         // A concept that still has an extracting braindump after the cascade
-        // must NOT be tombstoned — only vanished rows are.
+        // must NOT be tombstoned - only vanished rows are.
         let db = test_db();
         let llm = fake_llm();
         let bd1 = seed_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "q3 one").await;
@@ -1433,7 +1433,7 @@ mod tests {
                 .unwrap(),
             vec![bd2]
         );
-        // Maria's own edge (endangers) still present — contradictory edges coexist.
+        // Maria's own edge (endangers) still present - contradictory edges coexist.
         assert!(
             find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
                 .await
@@ -1618,7 +1618,7 @@ mod tests {
     }
 
     /// Insert a concept with a hand-rolled label + its fake embedding, no
-    /// provenance — used to seed a near-match for the borderline test.
+    /// provenance - used to seed a near-match for the borderline test.
     async fn concept_embedding_stored(db: &Db, _user_id: &str, concept_id: i64) -> bool {
         db.with_conn(move |conn| {
             let n: i64 = conn.query_row(
@@ -1635,8 +1635,8 @@ mod tests {
     /// An LLM with scripted per-text embedding vectors, for tests that need a
     /// controlled cosine (e.g. to land a match in the merge-suggestion band).
     /// Unknown text falls back to a zero vector (the braindump-verbatim
-    /// embedding in those tests — its value is irrelevant to the assertion).
-    /// The non-embedding methods are unused stubs — graph tests only drive
+    /// embedding in those tests - its value is irrelevant to the assertion).
+    /// The non-embedding methods are unused stubs - graph tests only drive
     /// `ingest_extraction`, which touches `embed_document`/`dim`.
     #[derive(Clone)]
     struct ScriptedLlm {

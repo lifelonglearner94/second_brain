@@ -1,9 +1,9 @@
-//! Delta sync — the incremental read surface for pull-on-focus reconciliation
+//! Delta sync - the incremental read surface for pull-on-focus reconciliation
 //! (issue #28).
 //!
 //! `graph_delta(db, since)` returns the changes since the client's cursor:
 //! **additions** (new concepts/edges from ingests), **deletions** (concepts/edges
-//! vanished via the braindump-deletion provenance cascade, ADR-0007/0010 —
+//! vanished via the braindump-deletion provenance cascade, ADR-0007/0010 -
 //! recorded as tombstones by [`crate::graph::retract_extraction`]), and
 //! **retags** (edges whose projected current type changed via the async
 //! ontology refactor appending to `edge_type_history`, ADR-0003). A fresh
@@ -16,7 +16,7 @@
 //! Boundary semantics: changes are filtered by `created_at > since` (strict), so
 //! a change at exactly the cursor timestamp is not re-reported on the next pull.
 //! The returned cursor is `now_seconds()` at query time, which is `>=` every
-//! returned row's timestamp, so nothing is missed across pulls — at worst a
+//! returned row's timestamp, so nothing is missed across pulls - at worst a
 //! same-second change lands in the next pull rather than this one (brief
 //! staleness, accepted by the design).
 
@@ -45,13 +45,13 @@ pub struct GraphDelta {
     pub deleted_edge_ids: Vec<i64>,
     /// Pre-existing edges whose projected current type changed (a refactor
     /// appended to `edge_type_history`) since the cursor. Edges created after
-    /// the cursor are excluded — they arrive as additions carrying their
+    /// the cursor are excluded - they arrive as additions carrying their
     /// current type, so a redundant retag would double-report.
     pub retagged_edges: Vec<RetaggedEdge>,
 }
 
 /// An added edge with its projected current type (the last `edge_type_history`
-/// entry — ADR-0003). For a freshly-created edge the current type equals the
+/// entry - ADR-0003). For a freshly-created edge the current type equals the
 /// original; including it keeps the addition self-describing even if a refactor
 /// landed between creation and this pull.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -158,7 +158,7 @@ mod tests {
     }
 
     /// Append a retag entry (seq_index = max+1) to an edge's type history at a
-    /// fixed timestamp — simulates the async refactor (ADR-0003) without
+    /// fixed timestamp - simulates the async refactor (ADR-0003) without
     /// standing up the governance pipeline.
     async fn append_retag(db: &Db, _user_id: &str, edge_id: i64, type_slug: &str, ts: i64) {
         let type_slug = type_slug.to_string();
@@ -353,8 +353,8 @@ mod tests {
 
     #[tokio::test]
     async fn delta_excludes_newly_created_edge_from_retags() {
-        // An edge created AND retagged after the cursor arrives once — as an
-        // addition carrying its current type — not duplicated as a retag.
+        // An edge created AND retagged after the cursor arrives once - as an
+        // addition carrying its current type - not duplicated as a retag.
         let db = test_db();
         let llm = fake_llm();
         let bd = seed_braindump(&db, BOOTSTRAP_ADMIN_USER_ID, "maria helps q3 launch").await;

@@ -54,7 +54,7 @@ function mockInvitesList(
 	});
 }
 
-// Single handler that answers both the GET list and the POST mint — Playwright
+// Single handler that answers both the GET list and the POST mint - Playwright
 // dispatches the last-registered matching route first, and `route.continue()`
 // does not reliably chain to earlier handlers, so combining the two methods
 // in one handler is the robust shape (mirrors admin-logs.spec.ts).
@@ -164,7 +164,7 @@ test('issue #78: copy-link and copy-token show independent copied-feedback (clic
 	await expect(copyToken).toContainText('Copy token');
 
 	// Click Copy token → it flips to "Copied" too; both now show "Copied"
-	// (independent state — neither resets the other).
+	// (independent state - neither resets the other).
 	await copyToken.click();
 	await expect(copyToken).toContainText('Copied');
 	await expect(copyLink).toContainText('Copied');

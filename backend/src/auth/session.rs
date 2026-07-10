@@ -6,7 +6,7 @@
 //! SameSite=Strict`, `__Host-`-prefixed cookie; the server is the source of
 //! truth for session state. Logout deletes the row.
 //!
-//! This module is deliberately cookie-unaware at the storage layer — it only
+//! This module is deliberately cookie-unaware at the storage layer - it only
 //! mints, looks up, and invalidates ids. The routes attach the cookie.
 
 use base64::Engine;
@@ -21,7 +21,7 @@ use crate::error::Result;
 /// Name of the opaque session cookie.
 ///
 /// The `__Host-` prefix enforces (per RFC 6265bis) that the cookie be `Secure`,
-/// `Path=/`, and carry no `Domain` attribute — i.e. scoped to exactly this
+/// `Path=/`, and carry no `Domain` attribute - i.e. scoped to exactly this
 /// host. Browsers reject Set-Cookies that violate those constraints, which is
 /// the defence we want.
 pub const SESSION_COOKIE_NAME: &str = "__Host-sb_session";
@@ -46,7 +46,7 @@ impl SessionId {
     /// Decode from the cookie value representation.
     pub fn parse(value: &str) -> Option<Self> {
         // Reject values that aren't a clean base64url encoding of exactly
-        // SESSION_ID_BYTES bytes — don't trust the wire.
+        // SESSION_ID_BYTES bytes - don't trust the wire.
         let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(value)
             .ok()?;
@@ -84,7 +84,7 @@ impl SessionInfo {
 
 /// base64url (no padding) of `bytes`. Shared by the session-id minter and the
 /// WebAuthn challenge-token minter so the two opaque-token encodings stay
-/// identical in shape — they're conceptually the same "random then encode".
+/// identical in shape - they're conceptually the same "random then encode".
 pub(super) fn base64url_encode(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
@@ -94,7 +94,7 @@ fn encode_id(bytes: &[u8]) -> String {
 }
 
 /// Mint a fresh cryptographically-random bearer token (base64url, no padding,
-/// 256 bits of entropy) — the same shape as a session id, but carrying no
+/// 256 bits of entropy) - the same shape as a session id, but carrying no
 /// server-side row of its own until the caller persists it. Used by the admin
 /// invite minter (issue #73): an invitation token is a one-time bearer the
 /// invitee consumes in a later slice's registration flow.
@@ -149,7 +149,7 @@ pub async fn mint_session(db: &Db, user_id: &str) -> Result<SessionInfo> {
 }
 
 /// Look up a session row by its cookie-presented id. Returns `None` if the row
-/// is missing — the middleware turns that into a 401. Issue #72: joins the
+/// is missing - the middleware turns that into a 401. Issue #72: joins the
 /// `users` table so the `SessionInfo` carries `display_name` and `is_admin`.
 pub async fn lookup_session(db: &Db, id: SessionId) -> Result<Option<SessionInfo>> {
     let id = id.0;
@@ -237,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalidated_session_id_is_not_reused_for_a_new_mint() {
-        // Mint two sessions and confirm distinct ids — sanity check SysRng.
+        // Mint two sessions and confirm distinct ids - sanity check SysRng.
         let db = Db::open(":memory:").unwrap();
         crate::db::seed_bootstrap_admin_for_tests(&db)
             .await

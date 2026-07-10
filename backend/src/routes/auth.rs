@@ -1,6 +1,6 @@
 //! Auth routes (issue #2): passkey register/login begin/finish, logout, and a
 //! stubbed master-passphrase recovery seam. `/me` is the demonstrator of a
-//! protected route — gated by [`crate::auth::middleware::require_session`].
+//! protected route - gated by [`crate::auth::middleware::require_session`].
 //!
 //! All flows are JSON-in / JSON-out so a non-browser client (the integration
 //! tests use a software passkey) can drive them exactly the way a browser would.
@@ -25,7 +25,7 @@ use crate::error::Result;
 use crate::state::AppState;
 
 /// Begin passkey registration. Issue #74: accepts an optional `{"invite":
-/// "<token>"}` body — required once the bootstrap admin exists, ignored while
+/// "<token>"}` body - required once the bootstrap admin exists, ignored while
 /// the bootstrap exception is open (zero users). Returns the creation
 /// challenge the browser signs plus an opaque `state` token echoed on finish.
 pub async fn register_begin(
@@ -40,7 +40,7 @@ pub async fn register_begin(
 /// Finish passkey registration: pair the client's credential with the stored
 /// state, consume the invite (or apply the bootstrap exception), create the
 /// `users` row, bind the passkey, and mint a session. The session cookie is
-/// set so the new user is authenticated immediately. Single-use — the state
+/// set so the new user is authenticated immediately. Single-use - the state
 /// token is consumed.
 pub async fn register_finish(
     State(state): State<AppState>,
@@ -64,7 +64,7 @@ struct RegisterOk {
 }
 
 /// Begin passkey login. Requires at least one registered passkey (across all
-/// users — issue #74).
+/// users - issue #74).
 pub async fn login_begin(State(state): State<AppState>) -> Result<Json<LoginBegin>> {
     let begin = state.auth.login_begin(&state.db).await?;
     Ok(Json(begin))
@@ -82,8 +82,8 @@ pub async fn login_finish(
     let session = mint_session(&state.db, &result.user_id).await?;
     let id = SessionId::parse(&session.session_id).expect("minted id is well-formed");
     // The session id rides only in the cookie. Echoing it in a JS-readable body
-    // would hand it straight to any XSS — the very thing the `httpOnly` cookie
-    // defends against — so the login body carries nothing beyond the account.
+    // would hand it straight to any XSS - the very thing the `httpOnly` cookie
+    // defends against - so the login body carries nothing beyond the account.
     let body = Json(LoginOk {
         user_id: session.user_id,
     });
@@ -106,7 +106,7 @@ pub struct MeResponse {
     pub is_admin: bool,
 }
 
-/// Logout: invalidate the session row and clear the cookie. Protected — without
+/// Logout: invalidate the session row and clear the cookie. Protected - without
 /// a valid cookie there's nothing to log out of.
 pub async fn logout(
     State(state): State<AppState>,
@@ -119,7 +119,7 @@ pub async fn logout(
     )))
 }
 
-/// `GET /me` — the protected-route demonstrator. Returns the validated session's
+/// `GET /me` - the protected-route demonstrator. Returns the validated session's
 /// account id, display name, and admin flag (issue #72). If you can read this,
 /// the middleware let you through.
 pub async fn me(Extension(session): Extension<SessionInfo>) -> Json<MeResponse> {
@@ -130,8 +130,8 @@ pub async fn me(Extension(session): Extension<SessionInfo>) -> Json<MeResponse> 
     })
 }
 
-/// Master-passphrase recovery seam (issue #2: "stub ok"). The full flow — verify
-/// a passphrase, reset credentials, mint a recovery session — is a later slice;
+/// Master-passphrase recovery seam (issue #2: "stub ok"). The full flow - verify
+/// a passphrase, reset credentials, mint a recovery session - is a later slice;
 /// this route exists so the client can wire the plumbing and the seam is
 /// visible in the router.
 pub async fn recover() -> Json<serde_json::Value> {

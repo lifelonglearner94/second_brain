@@ -71,7 +71,7 @@ describe('apiClient', () => {
 	});
 });
 
-describe('apiClient.getGraph — Global Topology Snapshot fetch (#16, backend #27)', () => {
+describe('apiClient.getGraph - Global Topology Snapshot fetch (#16, backend #27)', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	const SNAPSHOT: GlobalTopologySnapshot = {
@@ -150,7 +150,7 @@ describe('apiClient.getGraph — Global Topology Snapshot fetch (#16, backend #2
 	});
 });
 
-describe('apiClient.getGraphDelta — Delta Sync fetch (#18, backend #28)', () => {
+describe('apiClient.getGraphDelta - Delta Sync fetch (#18, backend #28)', () => {
 	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 	const DELTA: GraphDelta = {

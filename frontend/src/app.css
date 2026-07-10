@@ -1,5 +1,5 @@
 /* ──────────────────────────────────────────────────────────────────────
-   Second Brain — Global Design System
+   Second Brain - Global Design System
    Style: Modern Dark Cinema. Dark-only, hairline borders, frosted surfaces,
    expo-out motion, accent glow, visible focus rings, reduced-motion aware.
    ────────────────────────────────────────────────────────────────────── */
@@ -22,12 +22,12 @@
 	--border-accent: rgba(122, 183, 255, 0.32);
 
 	/* ── Color: text ─────────────────────────────────────────────────── */
-	--fg: #e6e8ec; /* primary text — 16.8:1 on bg-base                    */
-	--fg-muted: #9aa3b2; /* secondary text — 7.4:1 on bg-base              */
+	--fg: #e6e8ec; /* primary text - 16.8:1 on bg-base                    */
+	--fg-muted: #9aa3b2; /* secondary text - 7.4:1 on bg-base              */
 	--fg-subtle: #6b7280; /* tertiary / timestamps                          */
 
 	/* ── Color: semantic accents (brand-aligned, kept from existing) ── */
-	--accent: #7ab7ff; /* primary accent — graph nodes, citations, focus   */
+	--accent: #7ab7ff; /* primary accent - graph nodes, citations, focus   */
 	--accent-strong: #a5cdff; /* hover / emphasized accent                   */
 	--accent-glow: rgba(122, 183, 255, 0.18); /* primary CTA halo           */
 	--accent-soft: rgba(122, 183, 255, 0.12); /* chip / selected fill       */
@@ -150,7 +150,7 @@ body {
 }
 
 /* Ambient page backdrop: a deep, near-black canvas with two slow,
-   low-opacity accent orbs. Pure decoration — pointer-events: none,
+   low-opacity accent orbs. Pure decoration - pointer-events: none,
    and disabled under reduced-motion. */
 body::before {
 	content: '';
@@ -247,7 +247,7 @@ select:focus-visible {
 }
 
 /* ──────────────────────────────────────────────────────────────────────
-   Shared primitives — consumed across all routes/components.
+   Shared primitives - consumed across all routes/components.
    ────────────────────────────────────────────────────────────────────── */
 
 /* Buttons ────────────────────────────────────────────────────────────── */
@@ -440,7 +440,7 @@ select:focus-visible {
 	opacity: 0.5;
 }
 
-/* Glass panel (overlay chrome — graph status, selected node) ─────────── */
+/* Glass panel (overlay chrome - graph status, selected node) ─────────── */
 .glass {
 	background: rgba(11, 13, 18, 0.72);
 	border: 1px solid var(--border-hairline);
@@ -472,7 +472,7 @@ select:focus-visible {
 	border: 0;
 }
 
-/* Page surface — shared by inner routes ──────────────────────────────── */
+/* Page surface - shared by inner routes ──────────────────────────────── */
 .page {
 	max-inline-size: var(--page-max);
 	margin-inline: auto;

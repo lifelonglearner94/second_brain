@@ -61,7 +61,7 @@
 			</button>
 		</div>
 		<p class="tagline" data-testid="housekeeping-tagline">
-			Semantic housekeeping — confirm concept and type merges the system flagged
+			Semantic housekeeping - confirm concept and type merges the system flagged
 			as borderline.
 		</p>
 	</header>

@@ -12,7 +12,7 @@ const BRAINDUMP: Braindump = {
 
 const GROUNDED: ChatResponse = {
 	answer:
-		'Q3 launch is at risk because Maria is leaving [bd:42] [edge:Maria —endangers→ Q3 launch].',
+		'Q3 launch is at risk because Maria is leaving [bd:42] [edge:Maria -endangers→ Q3 launch].',
 	citations: [
 		{
 			id: 42,
@@ -72,7 +72,7 @@ async function submitQuery(
 	await fireEvent.click(getByTestId('chat-submit'));
 }
 
-describe('ChatSurface — conversational read surface (ADR-0005, backend #10)', () => {
+describe('ChatSurface - conversational read surface (ADR-0005, backend #10)', () => {
 	let chat: ReturnType<typeof vi.fn<ChatApi['chat']>>;
 	let getBraindump: ReturnType<typeof vi.fn<ChatApi['getBraindump']>>;
 
@@ -116,7 +116,7 @@ describe('ChatSurface — conversational read surface (ADR-0005, backend #10)', 
 		expect(getBraindump).toHaveBeenCalledWith(42);
 	});
 
-	it('a silent response renders Explicit Silence — distinct from blank, loading, and error', async () => {
+	it('a silent response renders Explicit Silence - distinct from blank, loading, and error', async () => {
 		chat.mockResolvedValue(SILENT);
 		getBraindump.mockResolvedValue(BRAINDUMP);
 		const { getByTestId, queryByTestId } = render(ChatSurface, {
@@ -138,7 +138,7 @@ describe('ChatSurface — conversational read surface (ADR-0005, backend #10)', 
 		);
 	});
 
-	it('hides the retrieval traversal path — only cited braindumps surface (no edge/path text rendered)', async () => {
+	it('hides the retrieval traversal path - only cited braindumps surface (no edge/path text rendered)', async () => {
 		chat.mockResolvedValue(GROUNDED);
 		getBraindump.mockResolvedValue(BRAINDUMP);
 		const { getByTestId, container, queryByTestId } = render(ChatSurface, {
@@ -148,7 +148,7 @@ describe('ChatSurface — conversational read surface (ADR-0005, backend #10)', 
 		await waitFor(() => expect(getByTestId('chat-answer')).toBeTruthy());
 		expect(queryByTestId('chat-path')).toBeNull();
 		expect(container.textContent).not.toContain('endangers');
-		expect(container.textContent).not.toContain('Maria —endangers');
+		expect(container.textContent).not.toContain('Maria -endangers');
 	});
 
 	it('renders a loading state while the chat endpoint is in flight', async () => {
@@ -173,7 +173,7 @@ describe('ChatSurface — conversational read surface (ADR-0005, backend #10)', 
 	});
 });
 
-describe('ChatSurface — chat is unavailable offline (ADR-0005, issue #21)', () => {
+describe('ChatSurface - chat is unavailable offline (ADR-0005, issue #21)', () => {
 	let chat: ReturnType<typeof vi.fn<ChatApi['chat']>>;
 	let getBraindump: ReturnType<typeof vi.fn<ChatApi['getBraindump']>>;
 

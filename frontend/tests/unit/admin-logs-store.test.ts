@@ -37,7 +37,7 @@ function apiStub(getAdminLogs: AdminLogApi['getAdminLogs']): AdminLogApi {
 	return { getAdminLogs };
 }
 
-describe('AdminLogStore — pull-based log surface over backend #4 GET /admin/logs', () => {
+describe('AdminLogStore - pull-based log surface over backend #4 GET /admin/logs', () => {
 	it('starts idle with an empty, bounded surface (no fabricated logs)', () => {
 		const store = new AdminLogStore(
 			apiStub(vi.fn<AdminLogApi['getAdminLogs']>())
@@ -87,7 +87,7 @@ describe('AdminLogStore — pull-based log surface over backend #4 GET /admin/lo
 		expect(store.logs).toEqual([]);
 	});
 
-	it('filtered is bounded by what the backend returned — nothing is synthesised client-side', async () => {
+	it('filtered is bounded by what the backend returned - nothing is synthesised client-side', async () => {
 		const getAdminLogs = vi
 			.fn<AdminLogApi['getAdminLogs']>()
 			.mockResolvedValue(LOGS);
@@ -215,7 +215,7 @@ describe('AdminLogStore — pull-based log surface over backend #4 GET /admin/lo
 
 	// Issue #80: the admin tab must show a full, recent tail newest-first and
 	// the search box must filter it live. The store is a thin filter over the
-	// backend's array — it must not synthesise, reorder, or collapse entries.
+	// backend's array - it must not synthesise, reorder, or collapse entries.
 	// The old bug (a handful of stale rows + dead search) lived in the page's
 	// `{#each}` key, which collided on (timestamp+message) because tracing
 	// timestamps are second-resolution and messages repeat; Svelte deduped the
@@ -279,7 +279,7 @@ describe('AdminLogStore — pull-based log surface over backend #4 GET /admin/lo
 			]);
 		});
 
-		it('retains every entry even when (timestamp, message) repeat — no client-side dedup', async () => {
+		it('retains every entry even when (timestamp, message) repeat - no client-side dedup', async () => {
 			// A burst of identical lines in the same second is exactly the case
 			// the old page key collapsed. The store must keep all of them so a
 			// positional `{#each}` key renders the full burst.

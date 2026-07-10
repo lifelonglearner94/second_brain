@@ -1,4 +1,4 @@
-//! Second Brain backend — the Rust/Axum orchestrator and graph engine.
+//! Second Brain backend - the Rust/Axum orchestrator and graph engine.
 //!
 //! Module layout is intentionally seam-first (per the skeleton issue):
 //! the HTTP layer, DB access, and the LLM/embedding clients are behind traits

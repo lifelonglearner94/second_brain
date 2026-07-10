@@ -1,5 +1,5 @@
 //! Integration tests for issue #11: chat write-back, structural mode
-//! (ADR-0006) — `POST /chat/inferences` (propose), `GET /chat/inferences`
+//! (ADR-0006) - `POST /chat/inferences` (propose), `GET /chat/inferences`
 //! (list), `POST /chat/inferences/{id}/endorse`, `POST
 //! /chat/inferences/{id}/reject`.
 //!
@@ -188,7 +188,7 @@ async fn do_request(
 }
 
 /// Seed the canonical structural path
-/// `Maria —[endangers]→ Q3 launch —[depends_on]→ Beta release` and return the
+/// `Maria -[endangers]→ Q3 launch -[depends_on]→ Beta release` and return the
 /// concept ids + the app/db/cookie the tests need.
 async fn seed() -> (axum::Router, Db, http::HeaderValue, i64, i64, i64) {
     let db = Db::open_in_memory().unwrap();
@@ -259,7 +259,7 @@ async fn propose_with_traversable_path_creates_pending_proposal() {
     assert_eq!(body["rationale"], "the graph supports this shortcut");
     let path = body["evidence_path"].as_array().expect("evidence_path");
     assert_eq!(path.len(), 2);
-    // No edge persisted yet — no auto-endorse.
+    // No edge persisted yet - no auto-endorse.
     assert!(
         graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
@@ -387,7 +387,7 @@ async fn reject_drops_the_proposal_and_persists_no_edge() {
 #[tokio::test]
 async fn propose_with_non_traversable_path_is_bad_request() {
     let (app, _db, cookie, maria, q3, beta) = seed().await;
-    // The hop Maria —[helps]→ Q3 does not exist (the real edge is `endangers`).
+    // The hop Maria -[helps]→ Q3 does not exist (the real edge is `endangers`).
     let (status, body) = do_request(
         &app,
         "POST",
@@ -530,7 +530,7 @@ async fn chat_inference_routes_require_a_session() {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "reject without session");
 }
 
-/// A second braindump cycle that extracts a direct edge Maria —[endangers]→
+/// A second braindump cycle that extracts a direct edge Maria -[endangers]→
 /// Beta, so the endorsed inference accretes onto a pre-existing edge.
 #[tokio::test]
 async fn endorse_accretes_onto_pre_existing_direct_edge() {
@@ -626,9 +626,9 @@ async fn endorse_accretes_onto_pre_existing_direct_edge() {
 // --- issue #13: thematic inference (ADR-0006 thematic mode + ADR-0009) ---
 
 /// Seed the canonical thematic cluster via the real submit→extract→accrete
-/// path: `Maria —[endangers]→ Q3 launch —[depends_on]→ Beta release`. Louvain
+/// path: `Maria -[endangers]→ Q3 launch -[depends_on]→ Beta release`. Louvain
 /// sees one connected component; the braindump that asserted the edges is the
-/// snapshot evidence. No direct Maria→Beta edge — the thematic gap.
+/// snapshot evidence. No direct Maria→Beta edge - the thematic gap.
 async fn seed_thematic_cluster() -> (axum::Router, Db, http::HeaderValue, i64, i64, i64) {
     let db = Db::open_in_memory().unwrap();
     let llm = Arc::new(ScriptedLlm {
@@ -714,7 +714,7 @@ async fn propose_thematic_creates_pending_proposal_with_snapshot() {
         3,
         "snapshot captured the cluster's 3 concepts"
     );
-    // No edge persisted yet — no auto-endorse.
+    // No edge persisted yet - no auto-endorse.
     assert!(
         graph::find_edge(&db, BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", beta)
             .await
@@ -778,7 +778,7 @@ async fn endorse_thematic_persists_edge_with_snapshot_in_provenance() {
 #[tokio::test]
 async fn propose_thematic_rejects_endpoints_not_in_cluster() {
     let (app, _db, cookie, maria, q3, beta) = seed_thematic_cluster().await;
-    // Cluster omits Beta — endpoints must be cluster-mates.
+    // Cluster omits Beta - endpoints must be cluster-mates.
     let (status, body) = do_request(
         &app,
         "POST",

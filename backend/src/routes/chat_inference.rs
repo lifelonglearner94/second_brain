@@ -1,16 +1,16 @@
 //! Chat write-back routes (issues #11 + #13, ADR-0006).
 //!
-//! `POST /chat/inferences` — propose a structural inference: a direct edge
+//! `POST /chat/inferences` - propose a structural inference: a direct edge
 //! summarizing a real, traversable multi-hop edge path. The proposal enters
 //! the queue `pending`; it is NEVER auto-endorsed.
-//! `POST /chat/inferences/thematic` — propose a thematic inference: a new
+//! `POST /chat/inferences/thematic` - propose a thematic inference: a new
 //! edge bridging Louvain cluster-mates with no connecting edge path. Not
 //! graph-backed (ADR-0006 thematic mode); carries a frozen Thematic Snapshot
 //! (ADR-0009). The proposal enters the queue `pending`; NEVER auto-endorsed.
-//! `GET /chat/inferences` — list the chat-inference proposal queue (both modes).
-//! `POST /chat/inferences/{id}/endorse` — endorse a pending proposal: persist
+//! `GET /chat/inferences` - list the chat-inference proposal queue (both modes).
+//! `POST /chat/inferences/{id}/endorse` - endorse a pending proposal: persist
 //! the edge with `asserted_by: [Chat_Inference_ID, mode: structural|thematic]`.
-//! `POST /chat/inferences/{id}/reject` — reject a pending proposal: the
+//! `POST /chat/inferences/{id}/reject` - reject a pending proposal: the
 //! inference never enters the graph.
 //!
 //! All five sit behind the auth middleware. The domain logic (path validation,
@@ -29,7 +29,7 @@ use crate::state::AppState;
 
 /// Body for `POST /chat/inferences`. `evidence_path` is the traversable
 /// multi-hop edge path that backs the structural inference; the proposed
-/// direct edge is `source_concept_id —[proposed_type]→ target_concept_id`.
+/// direct edge is `source_concept_id -[proposed_type]→ target_concept_id`.
 /// `rationale` is the LLM's optional one-line justification.
 #[derive(Debug, Deserialize)]
 pub struct ProposeRequest {
@@ -44,7 +44,7 @@ pub struct ProposeRequest {
 /// LLM's observation of the motivating cluster's composition (the concepts
 /// Louvain grouped together, ADR-0008); the backend computes the snapshot's
 /// `braindump_ids` from `edge_provenance` (ADR-0009). The proposed edge is
-/// `source_concept_id —[proposed_type]→ target_concept_id`, bridging two
+/// `source_concept_id -[proposed_type]→ target_concept_id`, bridging two
 /// cluster-mates with no connecting edge path.
 #[derive(Debug, Deserialize)]
 pub struct ProposeThematicRequest {
@@ -55,7 +55,7 @@ pub struct ProposeThematicRequest {
     pub rationale: Option<String>,
 }
 
-/// `POST /chat/inferences` — propose a structural inference for human review.
+/// `POST /chat/inferences` - propose a structural inference for human review.
 pub async fn propose(
     State(state): State<AppState>,
     Extension(session): Extension<SessionInfo>,
@@ -75,7 +75,7 @@ pub async fn propose(
     Ok(Json(proposal))
 }
 
-/// `POST /chat/inferences/thematic` — propose a thematic inference for human
+/// `POST /chat/inferences/thematic` - propose a thematic inference for human
 /// review. The proposal carries a frozen Thematic Snapshot (ADR-0009).
 pub async fn propose_thematic(
     State(state): State<AppState>,
@@ -96,7 +96,7 @@ pub async fn propose_thematic(
     Ok(Json(proposal))
 }
 
-/// `GET /chat/inferences` — the chat-inference proposal queue (both modes),
+/// `GET /chat/inferences` - the chat-inference proposal queue (both modes),
 /// oldest first.
 pub async fn list(
     State(state): State<AppState>,
@@ -106,7 +106,7 @@ pub async fn list(
     Ok(Json(proposals))
 }
 
-/// `POST /chat/inferences/{id}/endorse` — endorse a pending proposal: persist
+/// `POST /chat/inferences/{id}/endorse` - endorse a pending proposal: persist
 /// the edge with structural- or thematic-inference provenance (per the
 /// proposal's mode), plus the Thematic Snapshot for thematic proposals.
 pub async fn endorse(
@@ -120,7 +120,7 @@ pub async fn endorse(
     Ok(Json(proposal))
 }
 
-/// `POST /chat/inferences/{id}/reject` — reject a pending proposal: the
+/// `POST /chat/inferences/{id}/reject` - reject a pending proposal: the
 /// inference never enters the graph.
 pub async fn reject(
     State(state): State<AppState>,

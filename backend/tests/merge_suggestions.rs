@@ -1,5 +1,5 @@
 //! Integration tests for issue #7: the concept merge-suggestion queue
-//! (GET /merge-suggestions, POST approve/reject — ADR-0001/0002/0010).
+//! (GET /merge-suggestions, POST approve/reject - ADR-0001/0002/0010).
 //!
 //! Concepts are created via the real submit→extract→accrete path; the merge
 //! suggestion itself is seeded directly (its detection is covered by the graph

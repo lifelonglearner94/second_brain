@@ -48,7 +48,7 @@ async fn submit_braindump(app: &axum::Router, cookie: &http::HeaderValue, verbat
     value
 }
 
-/// GET /graph (topology snapshot) — decompress gzip and parse JSON.
+/// GET /graph (topology snapshot) - decompress gzip and parse JSON.
 async fn get_graph(app: &axum::Router, cookie: &http::HeaderValue) -> Value {
     let request = Request::builder()
         .uri("/graph")
@@ -315,7 +315,7 @@ async fn two_users_are_isolated() {
     let suggestions_a = get_merge_suggestions(&app, &cookie_a).await;
     let suggestions_b = get_merge_suggestions(&app, &cookie_b).await;
     // Both users have the same extraction → no merge suggestions (exact match
-    // → accretion, not suggestion). But the lists are separate — an empty list
+    // → accretion, not suggestion). But the lists are separate - an empty list
     // for one user doesn't mean the other's would leak.
     assert!(
         suggestions_a.as_array().is_some(),

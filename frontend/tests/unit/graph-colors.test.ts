@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { partitionColor, NO_PARTITION } from '../../src/lib/graph/colors';
 
-describe('partitionColor — Louvain cluster coloring (ADR-0008: IDs come from the backend)', () => {
+describe('partitionColor - Louvain cluster coloring (ADR-0008: IDs come from the backend)', () => {
 	it('is deterministic: the same partition_id always maps to the same color', () => {
 		expect(partitionColor(3)).toBe(partitionColor(3));
 	});

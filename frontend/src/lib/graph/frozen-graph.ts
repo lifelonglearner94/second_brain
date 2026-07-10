@@ -23,7 +23,7 @@ export function frozenGraphStatus(
 		const ts = fetchedAt ?? 'unknown';
 		return {
 			status: 'offline',
-			label: `Offline — showing graph as of ${ts} (Frozen Graph).`
+			label: `Offline - showing graph as of ${ts} (Frozen Graph).`
 		};
 	}
 	return { status: 'ready', label: null };

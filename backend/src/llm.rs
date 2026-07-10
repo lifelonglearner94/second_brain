@@ -2,8 +2,8 @@
 //! *cleaner* (ADR-0007), the ontology refactor's *pinned* generation
 //! (ADR-0003), the chat *synthesizer* (ADR-0005), the *extractor*
 //! (ADR-0001 / ADR-0002 / ADR-0010), and the *embedding client*
-//! (ADR-0001 / ADR-0004). The seam is real — Gemini is a true-external
-//! dependency — but the split across three near-identical traits was
+//! (ADR-0001 / ADR-0004). The seam is real - Gemini is a true-external
+//! dependency - but the split across three near-identical traits was
 //! over-decomposition (issue #39): `GeminiClient` implemented all three,
 //! `AppState` held three `Arc`s cloning one client, and every test
 //! substitution re-implemented the trio. They collapse to this single
@@ -18,7 +18,7 @@ use crate::extractor::ExtractionResult;
 
 /// The single LLM/embedding seam. One hosted model (Gemini) serves cleaning,
 /// pinned generation, grounded synthesis, structured-output extraction, and
-/// embeddings — so this is one trait, not three (issue #39). The real
+/// embeddings - so this is one trait, not three (issue #39). The real
 /// implementation is [`crate::gemini::GeminiClient`]; tests swap in
 /// [`FakeLlm`] or a scripted stand-in.
 #[async_trait]
@@ -27,7 +27,7 @@ pub trait Llm: Send + Sync {
     /// (ADR-0007). Shown by default in the UI.
     async fn clean(&self, verbatim: &str) -> Result<String>;
 
-    /// Temperature-0 generation against a *pinned* model snapshot — used by the
+    /// Temperature-0 generation against a *pinned* model snapshot - used by the
     /// ontology refactor job (ADR-0003) so retagging stays deterministic across
     /// API model bumps. Returns the raw text response.
     async fn generate_pinned(&self, system: &str, user: &str) -> Result<String>;
@@ -46,11 +46,11 @@ pub trait Llm: Send + Sync {
     /// [`crate::graph`].
     async fn extract(&self, verbatim: &str, ontology_slugs: &[String]) -> Result<ExtractionResult>;
 
-    /// Embed text for storage (braindump / concept / type) — the *document*
+    /// Embed text for storage (braindump / concept / type) - the *document*
     /// task type (ADR-0001 / ADR-0004).
     async fn embed_document(&self, text: &str) -> Result<Vec<f32>>;
 
-    /// Embed a query used to seed retrieval — the *query* task type
+    /// Embed a query used to seed retrieval - the *query* task type
     /// (ADR-0004).
     async fn embed_query(&self, text: &str) -> Result<Vec<f32>>;
 
@@ -85,7 +85,7 @@ impl Llm for FakeLlm {
         Ok(user.to_string())
     }
     async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
-        Ok("FakeLlm::synthesize called — script an Llm in tests".to_string())
+        Ok("FakeLlm::synthesize called - script an Llm in tests".to_string())
     }
     async fn extract(
         &self,

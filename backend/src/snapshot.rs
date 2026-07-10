@@ -1,9 +1,9 @@
-//! The Global Topology Snapshot (issue #27) — the primary read surface for
-//! visualization: a single payload returning the full graph topology — all
+//! The Global Topology Snapshot (issue #27) - the primary read surface for
+//! visualization: a single payload returning the full graph topology - all
 //! concepts, all typed edges with their projected current type (ADR-0003), and
 //! the current Louvain partition IDs (ADR-0008). The frontend fetches this
 //! wholesale on app load and caches it in IndexedDB for offline rendering; the
-//! backend owns all graph computation, including the partition IDs (ADR-0008 —
+//! backend owns all graph computation, including the partition IDs (ADR-0008 -
 //! the frontend never runs Louvain). This is the full read; the incremental
 //! read is `GET /graph/delta` (issue #28).
 
@@ -17,7 +17,7 @@ use crate::thematic;
 
 /// The Global Topology Snapshot: every concept, every typed edge with its
 /// projected current type, and the current Louvain partition assignment for
-/// every concept — the one payload the frontend fetches to render the full
+/// every concept - the one payload the frontend fetches to render the full
 /// graph.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct TopologySnapshot {
@@ -44,7 +44,7 @@ pub struct PartitionAssignment {
 /// Issue #45 routed the graph reads through the [`GraphRepo`] trait so the
 /// snapshot builder depends on the interface, not the storage adapter. The
 /// partition computation still touches `Db` directly (`thematic::partition`
-/// builds the graph from a `Db::with_conn` closure — #47's scope to migrate); the
+/// builds the graph from a `Db::with_conn` closure - #47's scope to migrate); the
 /// concept + edge reads go through `repo`.
 pub async fn topology_snapshot(
     repo: &dyn GraphRepo,
@@ -152,7 +152,7 @@ mod tests {
             .expect("concept has a partition assignment")
     }
 
-    /// Append a retag entry (seq_index = max+1) to an edge's type history —
+    /// Append a retag entry (seq_index = max+1) to an edge's type history -
     /// simulates the async ontology refactor (ADR-0003) without standing up
     /// the governance pipeline.
     async fn append_retag(db: &Db, edge_id: i64, type_slug: &str) {

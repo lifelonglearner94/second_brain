@@ -4,14 +4,14 @@
 //! so call sites depend on the interface, not the storage adapter. Production
 //! wires [`SqliteGraphRepo`] (delegating to [`Db::with_conn`](crate::db::Db)); tests
 //! wire [`InMemoryGraphRepo`] so every read and write can be exercised without
-//! a SQLite connection — the graph becomes hermetic.
+//! a SQLite connection - the graph becomes hermetic.
 //!
 //! After #45 the SQL that defines "the current type is the projected state of
 //! the type history" (ADR-0003) and the byte layout sqlite-vec expects both
-//! live here — in the Sqlite adapter — instead of being copy-pasted across
+//! live here - in the Sqlite adapter - instead of being copy-pasted across
 //! `graph`, `ontology`, `retrieval`, and `snapshot`. After #46 the write paths
-//! — Braindump ingest, Concept/Edge accretion, the deletion cascade, and the
-//! merge queue — also live here: the Sqlite adapter owns every
+//! - Braindump ingest, Concept/Edge accretion, the deletion cascade, and the
+//! merge queue - also live here: the Sqlite adapter owns every
 //! INSERT/UPDATE/DELETE and the BEGIN/COMMIT/ROLLBACK shape (one [`run_txn`]
 //! helper), and the in-memory adapter mutates HashMaps. The free-function read
 //! and write helpers in `graph.rs` / `ontology.rs` / `braindump.rs` remain as
@@ -51,7 +51,7 @@ use crate::retrieval::{
 /// `edge_type_history` entry, correlated on the outer edges alias `e`.
 ///
 /// Lives in the Sqlite adapter's home so the projection lives in one place.
-/// Private after #48 — no domain module calls it directly anymore.
+/// Private after #48 - no domain module calls it directly anymore.
 fn current_type_subquery() -> &'static str {
     "SELECT type_slug FROM edge_type_history WHERE edge_id = e.id ORDER BY seq_index DESC LIMIT 1"
 }
@@ -59,7 +59,7 @@ fn current_type_subquery() -> &'static str {
 /// f32 slice → little-endian byte blob, the on-disk format sqlite-vec expects.
 ///
 /// Lives in the Sqlite adapter's home so the byte layout is defined once.
-/// Private after #48 — no domain module calls it directly anymore.
+/// Private after #48 - no domain module calls it directly anymore.
 fn vec_to_blob(v: &[f32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(v.len() * 4);
     for f in v {
@@ -93,7 +93,7 @@ fn knn_concept_conn(
 // --- write-path `*_conn` helpers (moved from `graph.rs` in issue #46) ---
 //
 // These synchronous helpers run inside the Sqlite adapter's `run_txn`
-// closures. Private after #48 — no domain module calls them.
+// closures. Private after #48 - no domain module calls them.
 
 /// Insert an edge row and return its surrogate id (ADR-0002). Issue #72:
 /// scoped to `user_id`.
@@ -149,8 +149,8 @@ fn find_edge_id_conn(
     Ok(id)
 }
 
-/// Whether `source —[type]→ target` exists wearing `type` as its current
-/// projected type (ADR-0003) — the structural-inference traversability check.
+/// Whether `source -[type]→ target` exists wearing `type` as its current
+/// projected type (ADR-0003) - the structural-inference traversability check.
 /// Issue #72: scoped to `user_id`.
 fn edge_exists_with_current_type_conn(
     conn: &rusqlite::Connection,
@@ -198,7 +198,7 @@ fn ontology_slugs_conn(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec
 /// Fold `fold_id` into `keep_id` (the survivor) inside an open transaction:
 /// repoint/merge edges touching the fold concept, union extraction provenance,
 /// drop the fold concept's embedding (vec0 has no FK cascade), then delete the
-/// fold concept — its remaining provenance and any merge suggestions
+/// fold concept - its remaining provenance and any merge suggestions
 /// referencing it cascade away (ADR-0001 / ADR-0010). Issue #72: scoped to
 /// `user_id` so edges don't get repointed across users.
 fn merge_concepts_conn(
@@ -259,27 +259,27 @@ fn merge_concepts_conn(
          SELECT ?1, braindump_id FROM concept_provenance WHERE concept_id = ?2",
         params![keep_id, fold_id],
     )?;
-    // The vec0 concept_embeddings table has no FK cascade — clean manually.
+    // The vec0 concept_embeddings table has no FK cascade - clean manually.
     // Issue #72: scoped to user_id.
     conn.execute(
         "DELETE FROM concept_embeddings WHERE user_id = ?1 AND concept_id = ?2",
         params![user_id, fold_id],
     )?;
     // Delete the fold concept; cascades drop its remaining provenance, any
-    // edges still referencing it (none — all repointed above), and merge
+    // edges still referencing it (none - all repointed above), and merge
     // suggestions that reference it as new/existing (the approved one included).
     conn.execute("DELETE FROM concepts WHERE id = ?1", params![fold_id])?;
     Ok(())
 }
 
-/// Transition a row's `status` + `resolved_at` inside an open transaction —
+/// Transition a row's `status` + `resolved_at` inside an open transaction -
 /// the canonical HITL resolution pattern shared by ontology governance
 /// (ADR-0003 `type_proposals`) and chat-inference endorse/reject (ADR-0006
 /// `chat_inference_proposals`). Maps 0 rows updated to `NotFound` (row
 /// missing) or `Conflict` (row exists but is not `pending`). When
 /// `pending_guard` is `true` the UPDATE includes `AND status = 'pending'` so
 /// a non-pending row yields 0 rows; when `false` the UPDATE is unguarded (for
-/// sites that pre-check status before the transaction — approve / endorse).
+/// sites that pre-check status before the transaction - approve / endorse).
 /// Applied in #47 at the ontology approve/reject and chat-inference
 /// endorse/reject sites; the merge-queue sites use DELETE semantics (not
 /// UPDATE) and so do not route through this helper.
@@ -318,7 +318,7 @@ fn transition_status_conn(
 
 // --- chat-inference `*_conn` helpers (moved from `chat_inference.rs` in #47) ---
 //
-// Private to the adapter — no domain module calls them after #47; the trait
+// Private to the adapter - no domain module calls them after #47; the trait
 // methods own the propose/endorse/reject flows.
 
 /// Insert a chat-inference provenance row (ADR-0006 origin-typed). The `mode`
@@ -426,7 +426,7 @@ struct RetrievalEdgeInfo {
 /// Build the typed-edge graph and BFS from the seed concepts up to
 /// [`EXPAND_DEPTH`] hops (undirected: incoming + outgoing). Returns each visited
 /// concept's minimum hop distance from a seed, and the edges in the traversed
-/// subgraph. petgraph is private to this function — no other module imports it.
+/// subgraph. petgraph is private to this function - no other module imports it.
 fn bfs_expand(
     concept_labels: &HashMap<i64, String>,
     edges: &[RetrievalEdgeInfo],
@@ -509,7 +509,7 @@ fn bfs_expand(
 }
 
 /// Load a braindump row by id from a SQLite connection. Issue #72: scoped to
-/// `user_id` — a request by user A for user B's braindump by id returns `None`
+/// `user_id` - a request by user A for user B's braindump by id returns `None`
 /// (the route maps that to 404). Used by the retrieval subgraph-collection,
 /// backfill, and no-seed-fallback paths.
 fn load_braindump_row_conn(
@@ -541,12 +541,12 @@ fn load_braindump_row_conn(
 /// Production wires [`SqliteGraphRepo`]; tests wire [`InMemoryGraphRepo`] so
 /// every read can be exercised without opening a SQLite connection. The trait
 /// started small (issue #44: the braindump-embedding check) and widened in
-/// #45 to cover every scattered read helper — single-row reads, list reads,
+/// #45 to cover every scattered read helper - single-row reads, list reads,
 /// provenance reads, and the vec0 KNN sites in the graph, ontology, and
 /// retrieval paths.
 ///
 /// Issue #72: every method takes `user_id` so the graph is multi-user-capable
-/// — each user's Braindumps, Concepts, Edges, Provenance, and inference
+/// - each user's Braindumps, Concepts, Edges, Provenance, and inference
 /// proposals are isolated from every other user's. The vec0 KNN methods
 /// scope by `user_id` via the vec0 partition key (ADR-0004).
 #[async_trait]
@@ -770,7 +770,7 @@ impl SqliteGraphRepo {
     /// single shared connection (ADR-0001). The connection is locked for the
     /// duration of `f` via [`Db::with_conn`](crate::db::Db); `COMMIT` on `Ok`, `ROLLBACK` on `Err`.
     /// Every write trait method calls this instead of each inlining the
-    /// transaction boilerplate — the 6× pattern (ingest, delete, approve-merge,
+    /// transaction boilerplate - the 6× pattern (ingest, delete, approve-merge,
     /// ontology approve, ontology refactor, chat endorse) collapses to one
     /// helper. (#46 routes the first three through this; #47 will route the
     /// rest.)
@@ -1344,7 +1344,7 @@ impl GraphRepo for SqliteGraphRepo {
                         hop.target_concept_id,
                     )? {
                         return Err(Error::BadRequest(format!(
-                            "evidence path hop {} —[{}]→ {} is not a traversable edge in the graph",
+                            "evidence path hop {} -[{}]→ {} is not a traversable edge in the graph",
                             hop.source_concept_id, hop.edge_type, hop.target_concept_id
                         )));
                     }
@@ -1421,7 +1421,7 @@ impl GraphRepo for SqliteGraphRepo {
                 if braindump_ids.is_empty() {
                     return Err(Error::BadRequest(
                         "the motivating cluster has no braindump-backed edges between \
-                         its concepts — no thematic density from user thoughts"
+                         its concepts - no thematic density from user thoughts"
                             .into(),
                     ));
                 }
@@ -1488,7 +1488,7 @@ impl GraphRepo for SqliteGraphRepo {
             .ok_or_else(|| Error::NotFound(format!("chat inference proposal {id} not found")))?;
         if proposal.status != STATUS_PENDING {
             return Err(Error::Conflict(format!(
-                "proposal {id} is `{}`, not `pending` — cannot endorse",
+                "proposal {id} is `{}`, not `pending` - cannot endorse",
                 proposal.status
             )));
         }
@@ -1858,7 +1858,7 @@ impl GraphRepo for SqliteGraphRepo {
             let (source_label, target_label, current_type) =
                 self.edge_endpoints_and_type(user_id, edge_id).await?;
             let user = format!(
-                "Edge: {source_label} —[{current_type}]→ {target_label}\n\
+                "Edge: {source_label} -[{current_type}]→ {target_label}\n\
                  The type `{merge_of_for_prompt}` has been merged into `{new_slug}` \
                  (label: {label_for_prompt}; description: {description_for_prompt}).\n\
                  Re-classify this edge. Respond with exactly one slug from: [{}].",
@@ -2057,7 +2057,7 @@ impl GraphRepo for SqliteGraphRepo {
 // --- issue #48: delta-sync helpers (migrated from delta.rs) ---
 //
 // These synchronous helpers run inside the `graph_delta` trait method's
-// `with_conn` closure. Private — no domain module calls them.
+// `with_conn` closure. Private - no domain module calls them.
 
 fn delta_added_concepts_conn(
     conn: &rusqlite::Connection,
@@ -2322,7 +2322,7 @@ impl SqliteGraphRepo {
 // --- private accretion helpers (Sqlite adapter) ---
 //
 // Moved from `graph.rs` in issue #46. These run inside `run_txn` closures;
-// the domain module `graph.rs` no longer calls them — its free-function
+// the domain module `graph.rs` no longer calls them - its free-function
 // `ingest_extraction` / `delete_braindump` wrappers delegate to the trait.
 
 /// Run the full accretion for one braindump inside an open transaction.
@@ -2470,7 +2470,7 @@ fn resolve_concept_conn(
 
 /// Create a concept, store its embedding (identity + retrieval seed), and
 /// record this braindump as its first extractor (ADR-0010). Issue #72: scoped
-/// to `user_id` — the concept and its embedding carry the user's id.
+/// to `user_id` - the concept and its embedding carry the user's id.
 fn create_concept_conn(
     conn: &rusqlite::Connection,
     user_id: &str,
@@ -2559,7 +2559,7 @@ fn insert_merge_suggestion_conn(
 
 /// Retract a braindump's prior extraction (idempotent over a braindump, so
 /// submit retracts nothing and edit retracts the stale extraction before
-/// re-accreting — ADR-0007). Concepts/edges that lose their last asserter
+/// re-accreting - ADR-0007). Concepts/edges that lose their last asserter
 /// vanish (ADR-0002 / ADR-0010); type-history and suggestions cascade. Vanished
 /// concepts/edges are tombstoned into `graph_tombstones` before the row DELETEs
 /// so delta sync can report what disappeared (issue #28). Issue #72: scoped to
@@ -2588,7 +2588,7 @@ fn retract_extraction_conn(
     // Tombstone orphan edges (no asserter left) before the row DELETE so delta
     // sync can report the deletion (issue #28). An edge's asserter list is the
     // union of braindump provenance (`edge_provenance`, ADR-0002) and
-    // chat-inference provenance (`edge_inference_provenance`, ADR-0006) — so an
+    // chat-inference provenance (`edge_inference_provenance`, ADR-0006) - so an
     // edge backed only by a chat inference is NOT orphaned by a braindump
     // deletion (the inference is its own origin).
     tombstone_orphan_edges_conn(conn, user_id)?;
@@ -2601,7 +2601,7 @@ fn retract_extraction_conn(
             (SELECT 1 FROM edge_inference_provenance WHERE edge_id = edges.id)",
         params![user_id],
     )?;
-    // The vec0 concept_embeddings table has no FK cascade — clean embeddings for
+    // The vec0 concept_embeddings table has no FK cascade - clean embeddings for
     // concepts about to vanish, so KNN never returns a deleted concept's vector.
     conn.execute(
         "DELETE FROM concept_embeddings WHERE user_id = ?1 AND concept_id IN
@@ -2620,7 +2620,7 @@ fn retract_extraction_conn(
 }
 
 /// Append 'edge' tombstone rows for every edge about to vanish (no asserter
-/// remains) in the current transaction. A single `INSERT ... SELECT` — no Rust
+/// remains) in the current transaction. A single `INSERT ... SELECT` - no Rust
 /// loop. Issue #72: scoped to `user_id`.
 fn tombstone_orphan_edges_conn(conn: &rusqlite::Connection, user_id: &str) -> Result<()> {
     let now = now_seconds();
@@ -2685,7 +2685,7 @@ pub struct InMemoryGraphRepo {
     edge_type_history: std::sync::Mutex<std::collections::HashMap<i64, Vec<TypeHistoryEntry>>>,
     /// The pending + resolved merge suggestions (ADR-0001), ordered by id.
     merge_suggestions: std::sync::Mutex<Vec<MergeSuggestion>>,
-    /// `(slug, label, description)` tuples ordered by `id` — the governed
+    /// `(slug, label, description)` tuples ordered by `id` - the governed
     /// edge-type vocabulary.
     ontology: std::sync::Mutex<Vec<(String, String, String)>>,
     /// `concept_id → embedding` for KNN (ADR-0001 identity / ADR-0004 seed).
@@ -2745,7 +2745,7 @@ impl InMemoryGraphRepo {
 
     /// Mark a braindump's embedding as stored so a subsequent
     /// [`GraphRepo::braindump_embedding_stored`] returns `true`. Stores an
-    /// empty vector — sufficient for the "is it stored?" check; for KNN use
+    /// empty vector - sufficient for the "is it stored?" check; for KNN use
     /// [`set_braindump_embedding`](Self::set_braindump_embedding).
     pub fn mark_braindump_embedding_stored(&self, braindump_id: i64) {
         self.braindump_embeddings
@@ -3338,7 +3338,7 @@ impl GraphRepo for InMemoryGraphRepo {
                 hop.target_concept_id,
             ) {
                 return Err(Error::BadRequest(format!(
-                    "evidence path hop {} —[{}]→ {} is not a traversable edge in the graph",
+                    "evidence path hop {} -[{}]→ {} is not a traversable edge in the graph",
                     hop.source_concept_id, hop.edge_type, hop.target_concept_id
                 )));
             }
@@ -3420,7 +3420,7 @@ impl GraphRepo for InMemoryGraphRepo {
         if braindump_ids.is_empty() {
             return Err(Error::BadRequest(
                 "the motivating cluster has no braindump-backed edges between \
-                 its concepts — no thematic density from user thoughts"
+                 its concepts - no thematic density from user thoughts"
                     .into(),
             ));
         }
@@ -3468,7 +3468,7 @@ impl GraphRepo for InMemoryGraphRepo {
             .ok_or_else(|| Error::NotFound(format!("chat inference proposal {id} not found")))?;
         if proposal.status != STATUS_PENDING {
             return Err(Error::Conflict(format!(
-                "proposal {id} is `{}`, not `pending` — cannot endorse",
+                "proposal {id} is `{}`, not `pending` - cannot endorse",
                 proposal.status
             )));
         }
@@ -3533,7 +3533,7 @@ impl GraphRepo for InMemoryGraphRepo {
                 }
                 Some(p) if p.status != STATUS_PENDING => {
                     return Err(Error::Conflict(format!(
-                        "proposal {id} is `{}`, not `pending` — cannot reject",
+                        "proposal {id} is `{}`, not `pending` - cannot reject",
                         p.status
                     )));
                 }
@@ -3655,7 +3655,7 @@ impl GraphRepo for InMemoryGraphRepo {
                 }
                 Some(p) if p.status != "pending" => {
                     return Err(Error::Conflict(format!(
-                        "proposal {id} is `{}`, not `pending` — cannot approve",
+                        "proposal {id} is `{}`, not `pending` - cannot approve",
                         p.status
                     )));
                 }
@@ -3694,7 +3694,7 @@ impl GraphRepo for InMemoryGraphRepo {
                 }
                 Some(p) if p.status != "pending" => {
                     return Err(Error::Conflict(format!(
-                        "proposal {id} is `{}`, not `pending` — cannot reject",
+                        "proposal {id} is `{}`, not `pending` - cannot reject",
                         p.status
                     )));
                 }
@@ -3819,7 +3819,7 @@ impl GraphRepo for InMemoryGraphRepo {
             let (source_label, target_label, current_type) =
                 self.edge_endpoints_and_type(_user_id, edge_id).await?;
             let user = format!(
-                "Edge: {source_label} —[{current_type}]→ {target_label}\n\
+                "Edge: {source_label} -[{current_type}]→ {target_label}\n\
                  The type `{merge_of_for_prompt}` has been merged into `{new_slug}` \
                  (label: {label_for_prompt}; description: {description_for_prompt}).\n\
                  Re-classify this edge. Respond with exactly one slug from: [{}].",
@@ -3977,7 +3977,7 @@ impl GraphRepo for InMemoryGraphRepo {
                 created_at: e.created_at,
             })
             .collect();
-        // InMemoryGraphRepo does not track tombstones — deletions are empty.
+        // InMemoryGraphRepo does not track tombstones - deletions are empty.
         let deleted_concept_ids = Vec::new();
         let deleted_edge_ids = Vec::new();
         let retagged_edges = self.compute_retagged_edges_in_memory(since).await;
@@ -4287,7 +4287,7 @@ impl InMemoryGraphRepo {
     /// Fold `fold_id` into `keep_id` (the survivor), mirroring
     /// [`merge_concepts_conn`] in the Sqlite adapter: repoint/merge edges
     /// touching the fold concept, union extraction provenance, drop the fold
-    /// concept's embedding, then delete the fold concept — its remaining
+    /// concept's embedding, then delete the fold concept - its remaining
     /// provenance and merge suggestions referencing it are cleaned up
     /// (ADR-0001 / ADR-0010).
     fn merge_concepts_in_memory(&self, keep_id: i64, fold_id: i64) {
@@ -4375,7 +4375,7 @@ impl InMemoryGraphRepo {
 
         // Clean fold concept's embedding + delete the fold concept + its
         // provenance. Merge suggestions referencing it are removed (the
-        // approved one + any others — FK cascade in Sqlite).
+        // approved one + any others - FK cascade in Sqlite).
         self.concept_embeddings
             .lock()
             .expect("InMemoryGraphRepo mutex poisoned")
@@ -4396,8 +4396,8 @@ impl InMemoryGraphRepo {
 
     // --- issue #47: chat write-back + ontology + retrieval helpers ---
 
-    /// Whether `source —[type]→ target` exists wearing `type` as its current
-    /// projected type (ADR-0003) — the structural-inference traversability
+    /// Whether `source -[type]→ target` exists wearing `type` as its current
+    /// projected type (ADR-0003) - the structural-inference traversability
     /// check, in-memory.
     fn edge_exists_with_current_type_in_memory(
         &self,
@@ -4428,7 +4428,7 @@ impl InMemoryGraphRepo {
     /// Compute retagged edges for the delta-sync read (issue #48): edges
     /// created before `since` that have a type-history entry with
     /// `seq_index > 0` and `created_at > since`. The InMemoryGraphRepo does
-    /// not track tombstones, so deletions are always empty — only additions
+    /// not track tombstones, so deletions are always empty - only additions
     /// and retags are computed here.
     async fn compute_retagged_edges_in_memory(&self, since: i64) -> Vec<RetaggedEdge> {
         let edges = self
@@ -4633,7 +4633,7 @@ impl InMemoryGraphRepo {
     }
 }
 
-/// The in-memory analogue of [`ConceptResolution`] — how the accretion
+/// The in-memory analogue of [`ConceptResolution`] - how the accretion
 /// pipeline resolved one extracted concept.
 #[cfg(any(test, feature = "test-support"))]
 enum InMemoryResolution {
@@ -4677,7 +4677,7 @@ mod tests {
     #[tokio::test]
     async fn in_memory_all_concepts_and_edges_with_current_type_after_population() {
         let repo = InMemoryGraphRepo::new();
-        // Seed two concepts + one edge (the canonical Maria —[endangers]→ Q3
+        // Seed two concepts + one edge (the canonical Maria -[endangers]→ Q3
         // pair). The edge wears its original type as current.
         repo.add_concept(Concept {
             id: 1,
@@ -4734,7 +4734,7 @@ mod tests {
         );
 
         // `find_edge` looks up by (source, original_type, target) and returns
-        // the immutable Edge (no current_type — that's a projection).
+        // the immutable Edge (no current_type - that's a projection).
         let found = repo
             .find_edge(BOOTSTRAP_ADMIN_USER_ID, 1, "endangers", 2)
             .await
@@ -4850,7 +4850,7 @@ mod tests {
 
     /// Ingest an extraction through the write trait method and verify the
     /// resulting read state: concepts created, edge created with type history
-    /// at index 0, provenance recorded, and braindump embedding stored —
+    /// at index 0, provenance recorded, and braindump embedding stored -
     /// mirroring the Sqlite-backed `new_concept_created_with_provenance_and_
     /// embedding` + `edge_accretes_provenance_and_inits_type_history_at_index_
     /// zero` tests in `graph.rs`.
@@ -5323,7 +5323,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Maria —[endangers]→ Q3, extracted by bd1.
+        // Maria -[endangers]→ Q3, extracted by bd1.
         repo.ingest_extraction(
             BOOTSTRAP_ADMIN_USER_ID,
             bd1.id,
@@ -5333,8 +5333,8 @@ mod tests {
         )
         .await
         .unwrap();
-        // Beta —[helps]→ Q3, extracted by bd2. Beta's vector is unit-length at
-        // cosine 0.9 to Maria — inside the suggestion band [0.80, 0.95) — so a
+        // Beta -[helps]→ Q3, extracted by bd2. Beta's vector is unit-length at
+        // cosine 0.9 to Maria - inside the suggestion band [0.80, 0.95) - so a
         // borderline concept + suggestion is created. Q3's vector is identical
         // to bd1's → accretes.
         let beta_vec = vec![0.9, (1.0_f32 - 0.9 * 0.9).sqrt()];
@@ -5409,7 +5409,7 @@ mod tests {
                 .unwrap(),
             vec![bd2.id]
         );
-        // Maria's own edge (endangers) still present — contradictory edges coexist.
+        // Maria's own edge (endangers) still present - contradictory edges coexist.
         assert!(
             repo.find_edge(BOOTSTRAP_ADMIN_USER_ID, maria, "endangers", q3)
                 .await
@@ -5654,7 +5654,7 @@ mod tests {
     }
 
     /// ADR-0006: a structural proposal enters the queue pending. No
-    /// auto-endorse — no edge is persisted. Mirrors `propose_with_traversable_
+    /// auto-endorse - no edge is persisted. Mirrors `propose_with_traversable_
     /// path_creates_pending_proposal_and_no_edge`.
     #[tokio::test]
     async fn in_memory_propose_structural_stores_pending_proposal_and_no_edge() {
@@ -5670,7 +5670,7 @@ mod tests {
             label: "B".into(),
             created_at: 0,
         });
-        // Seed edge 1 —[causes]→ 2 so the single-hop evidence path is traversable.
+        // Seed edge 1 -[causes]→ 2 so the single-hop evidence path is traversable.
         repo.add_edge(Edge {
             id: 10,
             source_concept_id: 1,
@@ -5712,7 +5712,7 @@ mod tests {
             1,
             "exactly one proposal queued"
         );
-        // No new edge persisted — the only edge is the seed 1 —[causes]→ 2.
+        // No new edge persisted - the only edge is the seed 1 -[causes]→ 2.
         assert_eq!(
             repo.all_edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID)
                 .await
@@ -5782,8 +5782,8 @@ mod tests {
     }
 
     /// ADR-0006 thematic mode + ADR-0009: a thematic proposal carries a frozen
-    /// Thematic Snapshot — the braindump ids whose edges formed the cluster's
-    /// density, plus the cluster's concept composition. Pending — no auto-
+    /// Thematic Snapshot - the braindump ids whose edges formed the cluster's
+    /// density, plus the cluster's concept composition. Pending - no auto-
     /// endorse. Mirrors `propose_thematic_inference_creates_pending_proposal_
     /// with_frozen_snapshot`.
     #[tokio::test]
@@ -5843,7 +5843,7 @@ mod tests {
         assert_eq!(proposal.proposed_type, "endangers");
         assert!(
             proposal.evidence_path.is_empty(),
-            "thematic mode has no evidence path — not graph-backed"
+            "thematic mode has no evidence path - not graph-backed"
         );
         assert_eq!(proposal.rationale.as_deref(), Some("bridge"));
         assert!(proposal.resolved_at.is_none());
@@ -5862,7 +5862,7 @@ mod tests {
             vec![bd.id],
             "snapshot captured the cluster's braindump evidence"
         );
-        // No edge persisted yet — no auto-endorse.
+        // No edge persisted yet - no auto-endorse.
         assert!(
             repo.find_edge(BOOTSTRAP_ADMIN_USER_ID, 1, "endangers", 3)
                 .await
@@ -5917,7 +5917,7 @@ mod tests {
         assert_eq!(endorsed.status, STATUS_ENDORSED);
         assert!(endorsed.resolved_at.is_some());
 
-        // The seed edge accretes the inference provenance — no duplicate edge.
+        // The seed edge accretes the inference provenance - no duplicate edge.
         assert_eq!(
             repo.all_edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID)
                 .await
@@ -5994,7 +5994,7 @@ mod tests {
             created_at: 0,
         });
         repo.add_edge_provenance(11, bd_path.id);
-        // Separately assert the direct edge Maria —[endangers]→ Beta with a
+        // Separately assert the direct edge Maria -[endangers]→ Beta with a
         // second braindump.
         let bd_direct = repo
             .insert_braindump(
@@ -6094,7 +6094,7 @@ mod tests {
         assert_eq!(rejected.status, STATUS_REJECTED);
         assert!(rejected.resolved_at.is_some());
 
-        // No new edge — only the seed remains.
+        // No new edge - only the seed remains.
         assert_eq!(
             repo.all_edges_with_current_type(BOOTSTRAP_ADMIN_USER_ID)
                 .await
@@ -6222,7 +6222,7 @@ mod tests {
     /// ADR-0003: approving a `merge_of` proposal adds the new type to the
     /// ontology, then `run_refactor` re-classifies each edge wearing the merged
     /// type and appends the LLM's chosen slug to its type history. With FakeLlm
-    /// (which echoes the prompt — not a valid slug) the refactor falls back to
+    /// (which echoes the prompt - not a valid slug) the refactor falls back to
     /// the new slug. Mirrors `run_refactor_with_merge_of_and_no_edges_is_noop`
     /// (the non-noop case) + the `approve_*` governance tests.
     #[tokio::test]
@@ -6326,7 +6326,7 @@ mod tests {
     }
 
     /// ADR-0003: rejecting a proposal marks it rejected, no ontology change,
-    /// no retag — edges keep wearing their current type. Missing id is
+    /// no retag - edges keep wearing their current type. Missing id is
     /// `NotFound`. Mirrors `reject_marks_pending_proposal_rejected` +
     /// `reject_missing_proposal_is_not_found`.
     #[tokio::test]
@@ -6374,7 +6374,7 @@ mod tests {
         assert_eq!(rejected.status, "rejected");
         assert!(rejected.resolved_at.is_some());
 
-        // No retag — the edge still wears `causes`.
+        // No retag - the edge still wears `causes`.
         assert_eq!(
             repo.current_edge_type(BOOTSTRAP_ADMIN_USER_ID, 10)
                 .await
@@ -6407,7 +6407,7 @@ mod tests {
     }
 
     /// THE #47 acceptance test: `RefactorRunner` runs the refactor against
-    /// `InMemoryGraphRepo` — no real SQLite, no real LLM. Proves the runner's
+    /// `InMemoryGraphRepo` - no real SQLite, no real LLM. Proves the runner's
     /// `spawn(repo: Arc<dyn GraphRepo>, llm: Arc<dyn Llm>, proposal)` +
     /// `await_all` seam works against any adapter. Mirrors the shape of
     /// `run_refactor_with_merge_of_and_no_edges_is_noop` but with edges +
@@ -6526,7 +6526,7 @@ mod tests {
             created_at: 0,
         });
         // A braindump that extracted Q3 (the expansion target), not the seed.
-        // It does not lexically contain the query vector's "concept" — the
+        // It does not lexically contain the query vector's "concept" - the
         // graph link is what surfaces it.
         let bd = repo
             .insert_braindump(
@@ -6609,7 +6609,7 @@ mod tests {
     }
 
     /// ADR-0004 no-seed fallback: an empty graph has no concept seeds, so
-    /// retrieval falls back to braindump-vector-direct — which is also empty.
+    /// retrieval falls back to braindump-vector-direct - which is also empty.
     /// `mode` is `NoSeedFallback` and no paths are traversed.
     #[tokio::test]
     async fn in_memory_retrieve_returns_empty_on_empty_graph() {

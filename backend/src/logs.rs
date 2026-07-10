@@ -1,11 +1,11 @@
 //! In-memory bounded ring buffer of recent structured log events, plus a
 //! `tracing_subscriber::Layer` that feeds it. The `/admin/logs` endpoint reads
 //! this buffer so the hidden admin tab can surface backend errors (e.g. Gemini
-//! generation failures) on the phone — the backend reading its own logs.
+//! generation failures) on the phone - the backend reading its own logs.
 //!
 //! Bounded by capacity: fixed memory, VPS-safe for the 8 GB box.
 //! Logs are operational, not epistemic state, so they live in RAM (never the
-//! Brain File) and are lost on restart — the admin tab is a live tail, not an
+//! Brain File) and are lost on restart - the admin tab is a live tail, not an
 //! audit log.
 
 use std::collections::VecDeque;
@@ -84,7 +84,7 @@ impl LogBuffer {
 /// A `tracing_subscriber::Layer` that appends every observed event (that
 /// survives the subscriber's filter) into a [`LogBuffer`]. Install it
 /// alongside the fmt layer so the admin tab sees exactly what the operator's
-/// `RUST_LOG` lets through — no more, no less.
+/// `RUST_LOG` lets through - no more, no less.
 pub struct LogBufferLayer {
     buffer: LogBuffer,
 }

@@ -148,7 +148,7 @@ const TYPE_PROPOSAL: OntologyTypeProposal = {
 	near_match_similarity: 0.88
 };
 
-describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002 store-held)', () => {
+describe('GraphStore - the canonical Global Topology Snapshot holder (ADR-0002 store-held)', () => {
 	describe('initial state', () => {
 		it('starts idle with no snapshot, cursor 0, and an empty view-graph', () => {
 			const store = new GraphStore();
@@ -162,7 +162,7 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 		});
 	});
 
-	describe('loadFromNetworkOrCache — bootstrap the canonical snapshot (network-first, IDB Frozen Graph fallback)', () => {
+	describe('loadFromNetworkOrCache - bootstrap the canonical snapshot (network-first, IDB Frozen Graph fallback)', () => {
 		let idb: IdbStore;
 
 		beforeEach(async () => {
@@ -226,7 +226,7 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 			expect(store.snapshot).toBeNull();
 		});
 
-		it('is idempotent — a second call does NOT re-fetch (no re-fetch of the Global Topology Snapshot)', async () => {
+		it('is idempotent - a second call does NOT re-fetch (no re-fetch of the Global Topology Snapshot)', async () => {
 			const store = new GraphStore();
 			const api = graphApiReturning(SNAPSHOT);
 			await store.loadFromNetworkOrCache(api, idb, () => FIXED_NOW);
@@ -247,7 +247,7 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 		});
 	});
 
-	describe('syncDelta — pull-on-focus reconciliation of the canonical snapshot', () => {
+	describe('syncDelta - pull-on-focus reconciliation of the canonical snapshot', () => {
 		it('fetches changes since the cursor, reconciles the snapshot, advances the cursor, and rebuilds the view-graph', async () => {
 			const store = new GraphStore();
 			store.loadSnapshot(SNAPSHOT);
@@ -333,7 +333,7 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 		});
 	});
 
-	describe('mergeIngest — optimistic-merge of a braindump ingestion response (applyDelta with empty deletes/retags)', () => {
+	describe('mergeIngest - optimistic-merge of a braindump ingestion response (applyDelta with empty deletes/retags)', () => {
 		it('appends newly-extracted concepts and edges, advances the cursor, and rebuilds the view-graph', () => {
 			const store = new GraphStore();
 			store.loadSnapshot(SNAPSHOT);
@@ -358,7 +358,7 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 			]);
 		});
 
-		it('leaves the Louvain partitions untouched — new concepts get NO_PARTITION until the next sync', () => {
+		it('leaves the Louvain partitions untouched - new concepts get NO_PARTITION until the next sync', () => {
 			const store = new GraphStore();
 			store.loadSnapshot(SNAPSHOT);
 			store.mergeIngest(ingestResponse());
@@ -375,7 +375,7 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 			expect(store.cursor).toBe(0);
 		});
 
-		it('does not mutate the prior snapshot reference (pure merge — the next Delta Sync overwrites the view)', () => {
+		it('does not mutate the prior snapshot reference (pure merge - the next Delta Sync overwrites the view)', () => {
 			const store = new GraphStore();
 			store.loadSnapshot(SNAPSHOT);
 			const before = JSON.parse(
@@ -387,7 +387,7 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 		});
 	});
 
-	describe('mergeEndorsedEdge — action-driven optimistic merge of an endorsed chat-inference edge', () => {
+	describe('mergeEndorsedEdge - action-driven optimistic merge of an endorsed chat-inference edge', () => {
 		it('optimistically merges an endorsed edge into the view-graph', () => {
 			const store = new GraphStore();
 			store.loadSnapshot(MERGE_SNAPSHOT);
@@ -429,7 +429,7 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 		});
 	});
 
-	describe('applyConceptMerge — fold a duplicate concept into the survivor (housekeeping)', () => {
+	describe('applyConceptMerge - fold a duplicate concept into the survivor (housekeeping)', () => {
 		it('folds new_concept_id into existing_concept_id and rebuilds the view-graph', () => {
 			const store = new GraphStore();
 			store.loadSnapshot(MERGE_SNAPSHOT);
@@ -482,7 +482,7 @@ describe('GraphStore — the canonical Global Topology Snapshot holder (ADR-0002
 		});
 	});
 
-	describe('applyTypeMerge — retag edges of a merged ontology type to the new slug (housekeeping)', () => {
+	describe('applyTypeMerge - retag edges of a merged ontology type to the new slug (housekeeping)', () => {
 		it('retags every edge of the merge_of type to the new slug and rebuilds the view-graph', () => {
 			const store = new GraphStore();
 			store.loadSnapshot(SNAPSHOT);

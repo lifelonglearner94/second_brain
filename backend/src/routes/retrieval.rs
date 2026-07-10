@@ -1,4 +1,4 @@
-//! `POST /retrieve` — the retrieval read path (issue #8, ADR-0004).
+//! `POST /retrieve` - the retrieval read path (issue #8, ADR-0004).
 //!
 //! Seed-then-expand: the query is Gemini-embedded (query task type),
 //! concept-embedding KNN seeds the entry concept(s), typed-edge graph traversal
@@ -19,14 +19,14 @@ use crate::error::{Error, Result};
 use crate::retrieval::{self, RetrievalResult};
 use crate::state::AppState;
 
-/// Body for `POST /retrieve`: the query text. Empty queries are rejected — a
+/// Body for `POST /retrieve`: the query text. Empty queries are rejected - a
 /// retrieval with no query is a no-op.
 #[derive(Debug, Deserialize)]
 pub struct RetrieveRequest {
     pub query: String,
 }
 
-/// `POST /retrieve` — run seed-then-expand retrieval (or the no-seed fallback)
+/// `POST /retrieve` - run seed-then-expand retrieval (or the no-seed fallback)
 /// for the query and return ranked braindumps plus the traversed edge paths.
 pub async fn retrieve(
     State(state): State<AppState>,

@@ -32,7 +32,7 @@ function apiStub(getSystem: AdminSystemApi['getSystem']): AdminSystemApi {
 	return { getSystem };
 }
 
-describe('AdminSystemStore — host load surface over backend #81 GET /admin/system', () => {
+describe('AdminSystemStore - host load surface over backend #81 GET /admin/system', () => {
 	it('starts idle with no metrics', () => {
 		const store = new AdminSystemStore(
 			apiStub(vi.fn<AdminSystemApi['getSystem']>())

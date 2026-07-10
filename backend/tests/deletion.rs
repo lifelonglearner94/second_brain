@@ -249,7 +249,7 @@ async fn delete_braindump_cascade_deletes_edge_when_endpoint_vanishes() {
                 concepts: concepts(&["Maria", "Q3 launch"]),
                 edges: vec![edge("Maria", "endangers", "Q3 launch")],
             },
-            // bd2 extracts only Maria — so Q3's sole extractor is bd1.
+            // bd2 extracts only Maria - so Q3's sole extractor is bd1.
             ExtractionResult {
                 concepts: concepts(&["Maria"]),
                 edges: vec![],

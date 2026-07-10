@@ -53,7 +53,7 @@
 			</svg>
 		</div>
 		<p>
-			No pending captures — offline submissions will appear here for review when
+			No pending captures - offline submissions will appear here for review when
 			back online.
 		</p>
 	</div>

@@ -97,7 +97,7 @@
 			</svg>
 			Back to the app
 		</a>
-		<h1>Admin — invitations</h1>
+		<h1>Admin - invitations</h1>
 		<p class="tagline" data-testid="admin-invites-summary">
 			Mint single-use invitations to gate new passkey registrations.
 			<code class="mono" data-testid="admin-invites-pending-count"
@@ -114,7 +114,7 @@
 	<section class="mint rise" aria-labelledby="mint-heading">
 		<h2 id="mint-heading">Mint an invitation</h2>
 		<p class="hint">
-			The token is a one-time bearer — share it out-of-band with the invitee.
+			The token is a one-time bearer - share it out-of-band with the invitee.
 			It is shown once below; copy it now.
 		</p>
 		<button
