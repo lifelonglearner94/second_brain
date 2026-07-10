@@ -58,6 +58,7 @@ const CONCEPT_SUGGESTION: ConceptMergeSuggestion = {
 	new_concept_label: 'Apples',
 	new_concept_id: 2,
 	existing_concept_id: 1,
+	existing_concept_label: 'sleep',
 	similarity: 0.92,
 	status: 'pending',
 	created_at: 1_700_000_000
@@ -140,7 +141,7 @@ describe('HousekeepingStore - the low-epistemic-weight HITL surface (ADR-0004)',
 			expect(concept.similarity).toBe(0.92);
 		});
 
-		it('resolves the existing concept label from the shared GraphStore (the suggestion carries only an id)', async () => {
+		it('shows the existing concept label carried by the suggestion (joined server-side, not resolved from the GraphStore)', async () => {
 			const store = new HousekeepingStore(api, graphWithSnapshot());
 			await store.load();
 			const concept = store.items.find(

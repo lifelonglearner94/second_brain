@@ -67,9 +67,6 @@ export class HousekeepingStore {
 	}
 
 	items = $derived.by<HousekeepingItem[]>(() => {
-		const labelById = new Map<string, string>();
-		for (const c of this.graph.snapshot?.concepts ?? [])
-			labelById.set(c.id, c.label);
 		const labelBySlug = new Map<string, string>();
 		for (const t of this.ontology?.edge_types ?? [])
 			labelBySlug.set(t.slug, t.label);
@@ -78,9 +75,7 @@ export class HousekeepingStore {
 			id: s.id,
 			kind: 'concept',
 			leftLabel: s.new_concept_label,
-			rightLabel:
-				labelById.get(String(s.existing_concept_id)) ??
-				String(s.existing_concept_id),
+			rightLabel: s.existing_concept_label,
 			similarity: s.similarity
 		}));
 		const types: HousekeepingItem[] = this.typeProposals

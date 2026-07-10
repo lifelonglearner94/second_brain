@@ -44,6 +44,7 @@ const CONCEPT_SUGGESTION: ConceptMergeSuggestion = {
 	new_concept_label: 'Apples',
 	new_concept_id: 2,
 	existing_concept_id: 1,
+	existing_concept_label: 'sleep',
 	similarity: 0.92,
 	status: 'pending',
 	created_at: 1_700_000_000

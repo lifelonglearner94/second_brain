@@ -210,6 +210,7 @@ export type ConceptMergeSuggestion = {
 	new_concept_label: string;
 	new_concept_id: number;
 	existing_concept_id: number;
+	existing_concept_label: string;
 	similarity: number;
 	status: string;
 	created_at: number;

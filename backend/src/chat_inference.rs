@@ -34,7 +34,7 @@
 //! always present, recorded in `evidence_path`. Thematic inferences carry a
 //! Thematic Snapshot - a frozen capture of the motivating cluster's braindumps
 //! - because the ephemeral evidence must be preserved as an audit trail even
-//! after the cluster dissolves.
+//!   after the cluster dissolves.
 //!
 //! After #47 the full propose→HITL→endorse/reject storage flow is behind the
 //! [`GraphRepo`] trait. The free functions here are thin delegating wrappers:

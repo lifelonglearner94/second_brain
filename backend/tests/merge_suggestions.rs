@@ -243,6 +243,11 @@ async fn get_merge_suggestions_lists_pending_pairs() {
     assert_eq!(s["braindump_id"].as_i64().unwrap(), bd2);
     assert_eq!(s["new_concept_id"].as_i64().unwrap(), beta);
     assert_eq!(s["existing_concept_id"].as_i64().unwrap(), maria);
+    assert_eq!(
+        s["existing_concept_label"].as_str().unwrap(),
+        "Maria",
+        "existing_concept_label is joined from the concepts table"
+    );
 }
 
 #[tokio::test]

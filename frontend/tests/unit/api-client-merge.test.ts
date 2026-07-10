@@ -29,6 +29,7 @@ describe('apiClient.getMergeSuggestions - backend #7 GET /merge-suggestions (con
 			new_concept_label: 'Apples',
 			new_concept_id: 42,
 			existing_concept_id: 7,
+			existing_concept_label: 'Existing Concept',
 			similarity: 0.92,
 			status: 'pending',
 			created_at: 1_700_000_000

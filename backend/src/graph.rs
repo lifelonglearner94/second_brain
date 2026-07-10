@@ -92,6 +92,7 @@ pub struct MergeSuggestion {
     pub new_concept_label: String,
     pub new_concept_id: i64,
     pub existing_concept_id: i64,
+    pub existing_concept_label: String,
     pub similarity: f32,
     pub status: String,
     pub created_at: i64,

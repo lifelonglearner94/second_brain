@@ -11,13 +11,13 @@
 //! live here - in the Sqlite adapter - instead of being copy-pasted across
 //! `graph`, `ontology`, `retrieval`, and `snapshot`. After #46 the write paths
 //! - Braindump ingest, Concept/Edge accretion, the deletion cascade, and the
-//! merge queue - also live here: the Sqlite adapter owns every
-//! INSERT/UPDATE/DELETE and the BEGIN/COMMIT/ROLLBACK shape (one [`run_txn`]
-//! helper), and the in-memory adapter mutates HashMaps. The free-function read
-//! and write helpers in `graph.rs` / `ontology.rs` / `braindump.rs` remain as
-//! one-line delegators to this trait so existing callers (including the
-//! integration tests under `backend/tests/`) keep compiling; #48 removes them
-//! once every caller is migrated to take a `&dyn GraphRepo` directly.
+//! - merge queue - also live here: the Sqlite adapter owns every
+//!   INSERT/UPDATE/DELETE and the BEGIN/COMMIT/ROLLBACK shape (one [`run_txn`]
+//!   helper), and the in-memory adapter mutates HashMaps. The free-function read
+//!   and write helpers in `graph.rs` / `ontology.rs` / `braindump.rs` remain as
+//!   one-line delegators to this trait so existing callers (including the
+//!   integration tests under `backend/tests/`) keep compiling; #48 removes them
+//!   once every caller is migrated to take a `&dyn GraphRepo` directly.
 //!
 //! [`run_txn`]: SqliteGraphRepo::run_txn
 
@@ -958,9 +958,14 @@ impl GraphRepo for SqliteGraphRepo {
         self.db
             .with_conn(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, kind, braindump_id, new_concept_label, new_concept_id,
-                            existing_concept_id, similarity, status, created_at
-                     FROM merge_suggestions WHERE user_id = ?1 ORDER BY id",
+                    "SELECT ms.id, ms.kind, ms.braindump_id, ms.new_concept_label,
+                            ms.new_concept_id, ms.existing_concept_id,
+                            c.label AS existing_concept_label,
+                            ms.similarity, ms.status, ms.created_at
+                     FROM merge_suggestions ms
+                     LEFT JOIN concepts c
+                       ON c.id = ms.existing_concept_id AND c.user_id = ?1
+                     WHERE ms.user_id = ?1 ORDER BY ms.id",
                 )?;
                 let rows = stmt
                     .query_map(params![user_id], |r| {
@@ -971,9 +976,12 @@ impl GraphRepo for SqliteGraphRepo {
                             new_concept_label: r.get(3)?,
                             new_concept_id: r.get(4)?,
                             existing_concept_id: r.get(5)?,
-                            similarity: r.get::<_, f64>(6)? as f32,
-                            status: r.get(7)?,
-                            created_at: r.get(8)?,
+                            existing_concept_label: r
+                                .get::<_, Option<String>>(6)?
+                                .unwrap_or_default(),
+                            similarity: r.get::<_, f64>(7)? as f32,
+                            status: r.get(8)?,
+                            created_at: r.get(9)?,
                         })
                     })?
                     .collect::<rusqlite::Result<_>>()?;
@@ -4268,6 +4276,13 @@ impl InMemoryGraphRepo {
     ) {
         let id = Self::next_id(&self.next_suggestion_id);
         let created_at = now_seconds();
+        let existing_concept_label = self
+            .concepts
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .get(&existing_concept_id)
+            .map(|c| c.label.clone())
+            .unwrap_or_default();
         self.merge_suggestions
             .lock()
             .expect("InMemoryGraphRepo mutex poisoned")
@@ -4278,6 +4293,7 @@ impl InMemoryGraphRepo {
                 new_concept_label: new_label.to_string(),
                 new_concept_id,
                 existing_concept_id,
+                existing_concept_label,
                 similarity,
                 status: "pending".to_string(),
                 created_at,
@@ -5373,6 +5389,7 @@ mod tests {
             new_concept_label: "Beta".into(),
             new_concept_id: beta,
             existing_concept_id: maria,
+            existing_concept_label: "Maria".into(),
             similarity: 0.9,
             status: "pending".into(),
             created_at: 0,
@@ -5488,6 +5505,7 @@ mod tests {
             new_concept_label: "Beta".into(),
             new_concept_id: beta,
             existing_concept_id: maria,
+            existing_concept_label: "Maria".into(),
             similarity: 0.9,
             status: "pending".into(),
             created_at: 0,
@@ -5580,6 +5598,7 @@ mod tests {
             new_concept_label: "Beta".into(),
             new_concept_id: beta,
             existing_concept_id: maria,
+            existing_concept_label: "Maria".into(),
             similarity: 0.9,
             status: "pending".into(),
             created_at: 0,
