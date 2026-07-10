@@ -211,6 +211,7 @@ export type ConceptMergeSuggestion = {
 	new_concept_id: number;
 	existing_concept_id: number;
 	existing_concept_label: string;
+	braindump_snippet: string;
 	similarity: number;
 	status: string;
 	created_at: number;

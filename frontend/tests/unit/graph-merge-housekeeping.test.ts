@@ -45,6 +45,7 @@ const CONCEPT_SUGGESTION: ConceptMergeSuggestion = {
 	new_concept_id: 2,
 	existing_concept_id: 1,
 	existing_concept_label: 'sleep',
+	braindump_snippet: 'I had apples today and they affected my sleep.',
 	similarity: 0.92,
 	status: 'pending',
 	created_at: 1_700_000_000

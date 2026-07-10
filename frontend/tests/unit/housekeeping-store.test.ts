@@ -59,6 +59,7 @@ const CONCEPT_SUGGESTION: ConceptMergeSuggestion = {
 	new_concept_id: 2,
 	existing_concept_id: 1,
 	existing_concept_label: 'sleep',
+	braindump_snippet: 'I had apples today and they affected my sleep.',
 	similarity: 0.92,
 	status: 'pending',
 	created_at: 1_700_000_000
@@ -79,6 +80,7 @@ function apiStub(overrides: Partial<HousekeepingApi> = {}): HousekeepingApi {
 	return {
 		getMergeSuggestions: vi.fn(async () => [CONCEPT_SUGGESTION]),
 		approveMergeSuggestion: vi.fn(async () => undefined),
+		rejectMergeSuggestion: vi.fn(async () => undefined),
 		getOntology: vi.fn(async () => ONTOLOGY),
 		getOntologyProposals: vi.fn(
 			async () =>
@@ -87,6 +89,10 @@ function apiStub(overrides: Partial<HousekeepingApi> = {}): HousekeepingApi {
 		approveOntologyProposal: vi.fn(async () => ({
 			...TYPE_PROPOSAL,
 			status: 'approved'
+		})),
+		rejectOntologyProposal: vi.fn(async () => ({
+			...TYPE_PROPOSAL,
+			status: 'rejected'
 		})),
 		...overrides
 	};
@@ -294,6 +300,47 @@ describe('HousekeepingStore - the low-epistemic-weight HITL surface (ADR-0004)',
 			const apiAny = api as unknown as Record<string, unknown>;
 			expect(apiAny.getInferenceProposals).toBeUndefined();
 			expect(apiAny.endorseInferenceProposal).toBeUndefined();
+		});
+	});
+
+	describe('rejectMerge - POST the keep-separate action and drop the item without merging', () => {
+		it('POSTs the concept-merge reject and removes the suggestion from the queue', async () => {
+			const store = new HousekeepingStore(api, graphWithSnapshot());
+			await store.load();
+			expect(store.items.find((i) => i.id === 11 && i.kind === 'concept')).toBeDefined();
+
+			await store.rejectMerge(11, 'concept');
+
+			expect(api.rejectMergeSuggestion).toHaveBeenCalledWith(11);
+			expect(
+				store.items.find((i) => i.id === 11 && i.kind === 'concept')
+			).toBeUndefined();
+		});
+
+		it('does not mutate the Spatial View-Graph (the concepts stay separate)', async () => {
+			const graph = graphWithSnapshot();
+			const store = new HousekeepingStore(api, graph);
+			await store.load();
+			const before = store.snapshot!;
+			expect(before.concepts).toHaveLength(3);
+
+			await store.rejectMerge(11, 'concept');
+
+			const after = store.snapshot!;
+			expect(after.concepts.map((c) => c.id).sort()).toEqual(['1', '2', '3']);
+			expect(after.edges).toHaveLength(2);
+		});
+
+		it('is resilient to network failure - the item stays in the queue on error', async () => {
+			api = apiStub({
+				rejectMergeSuggestion: vi.fn(async () => {
+					throw new Error('POST /merge-suggestions/reject failed: 500');
+				})
+			});
+			const store = new HousekeepingStore(api, graphWithSnapshot());
+			await store.load();
+			await expect(store.rejectMerge(11, 'concept')).rejects.toThrow(/500/);
+			expect(store.items.find((i) => i.id === 11)).toBeDefined();
 		});
 	});
 });

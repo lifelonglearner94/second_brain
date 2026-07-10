@@ -14,9 +14,11 @@ export type HousekeepingStatus = 'idle' | 'loading' | 'loaded' | 'error';
 export type HousekeepingApi = {
 	getMergeSuggestions(): Promise<ConceptMergeSuggestion[]>;
 	approveMergeSuggestion(id: number): Promise<void>;
+	rejectMergeSuggestion(id: number): Promise<void>;
 	getOntology(): Promise<Ontology>;
 	getOntologyProposals(): Promise<OntologyProposalsResponse>;
 	approveOntologyProposal(id: number): Promise<OntologyTypeProposal>;
+	rejectOntologyProposal(id: number): Promise<OntologyTypeProposal>;
 };
 
 export type HousekeepingItemKind = 'concept' | 'type';
@@ -27,6 +29,7 @@ export type HousekeepingItem = {
 	leftLabel: string;
 	rightLabel: string;
 	similarity: number;
+	braindumpSnippet: string | null;
 };
 
 export class HousekeepingStore {
@@ -76,7 +79,8 @@ export class HousekeepingStore {
 			kind: 'concept',
 			leftLabel: s.new_concept_label,
 			rightLabel: s.existing_concept_label,
-			similarity: s.similarity
+			similarity: s.similarity,
+			braindumpSnippet: s.braindump_snippet
 		}));
 		const types: HousekeepingItem[] = this.typeProposals
 			.filter((p) => p.near_match_slug !== null)
@@ -85,7 +89,8 @@ export class HousekeepingStore {
 				kind: 'type',
 				leftLabel: p.label,
 				rightLabel: labelBySlug.get(p.near_match_slug!) ?? p.near_match_slug!,
-				similarity: p.near_match_similarity ?? 0
+				similarity: p.near_match_similarity ?? 0,
+				braindumpSnippet: null
 			}));
 		return [...concepts, ...types];
 	});
@@ -105,6 +110,18 @@ export class HousekeepingStore {
 			const approved = await this.api.approveOntologyProposal(id);
 			this.graph.applyTypeMerge(approved);
 			this.ontology = this.addTypeToOntology(this.ontology, approved);
+			this.typeProposals = this.typeProposals.filter((p) => p.id !== id);
+		}
+	}
+
+	async rejectMerge(id: number, kind: HousekeepingItemKind): Promise<void> {
+		if (kind === 'concept') {
+			await this.api.rejectMergeSuggestion(id);
+			this.conceptSuggestions = this.conceptSuggestions.filter(
+				(s) => s.id !== id
+			);
+		} else {
+			await this.api.rejectOntologyProposal(id);
 			this.typeProposals = this.typeProposals.filter((p) => p.id !== id);
 		}
 	}

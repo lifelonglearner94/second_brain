@@ -961,10 +961,13 @@ impl GraphRepo for SqliteGraphRepo {
                     "SELECT ms.id, ms.kind, ms.braindump_id, ms.new_concept_label,
                             ms.new_concept_id, ms.existing_concept_id,
                             c.label AS existing_concept_label,
+                            b.cleaned AS braindump_snippet,
                             ms.similarity, ms.status, ms.created_at
                      FROM merge_suggestions ms
                      LEFT JOIN concepts c
                        ON c.id = ms.existing_concept_id AND c.user_id = ?1
+                     LEFT JOIN braindumps b
+                       ON b.id = ms.braindump_id AND b.user_id = ?1
                      WHERE ms.user_id = ?1 ORDER BY ms.id",
                 )?;
                 let rows = stmt
@@ -979,9 +982,15 @@ impl GraphRepo for SqliteGraphRepo {
                             existing_concept_label: r
                                 .get::<_, Option<String>>(6)?
                                 .unwrap_or_default(),
-                            similarity: r.get::<_, f64>(7)? as f32,
-                            status: r.get(8)?,
-                            created_at: r.get(9)?,
+                            braindump_snippet: r
+                                .get::<_, Option<String>>(7)?
+                                .unwrap_or_default()
+                                .chars()
+                                .take(300)
+                                .collect::<String>(),
+                            similarity: r.get::<_, f64>(8)? as f32,
+                            status: r.get(9)?,
+                            created_at: r.get(10)?,
                         })
                     })?
                     .collect::<rusqlite::Result<_>>()?;
@@ -4283,6 +4292,13 @@ impl InMemoryGraphRepo {
             .get(&existing_concept_id)
             .map(|c| c.label.clone())
             .unwrap_or_default();
+        let braindump_snippet = self
+            .braindumps
+            .lock()
+            .expect("InMemoryGraphRepo mutex poisoned")
+            .get(&braindump_id)
+            .map(|b| b.cleaned.chars().take(300).collect::<String>())
+            .unwrap_or_default();
         self.merge_suggestions
             .lock()
             .expect("InMemoryGraphRepo mutex poisoned")
@@ -4294,6 +4310,7 @@ impl InMemoryGraphRepo {
                 new_concept_id,
                 existing_concept_id,
                 existing_concept_label,
+                braindump_snippet,
                 similarity,
                 status: "pending".to_string(),
                 created_at,
@@ -5390,6 +5407,7 @@ mod tests {
             new_concept_id: beta,
             existing_concept_id: maria,
             existing_concept_label: "Maria".into(),
+            braindump_snippet: "Test braindump text".into(),
             similarity: 0.9,
             status: "pending".into(),
             created_at: 0,
@@ -5506,6 +5524,7 @@ mod tests {
             new_concept_id: beta,
             existing_concept_id: maria,
             existing_concept_label: "Maria".into(),
+            braindump_snippet: "Test braindump text".into(),
             similarity: 0.9,
             status: "pending".into(),
             created_at: 0,
@@ -5599,6 +5618,7 @@ mod tests {
             new_concept_id: beta,
             existing_concept_id: maria,
             existing_concept_label: "Maria".into(),
+            braindump_snippet: "Test braindump text".into(),
             similarity: 0.9,
             status: "pending".into(),
             created_at: 0,

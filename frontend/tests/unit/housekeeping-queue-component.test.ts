@@ -41,6 +41,7 @@ const CONCEPT_SUGGESTION: ConceptMergeSuggestion = {
 	new_concept_id: 2,
 	existing_concept_id: 1,
 	existing_concept_label: 'sleep',
+	braindump_snippet: 'I had apples today and they affected my sleep.',
 	similarity: 0.92,
 	status: 'pending',
 	created_at: 1_700_000_000
@@ -61,6 +62,7 @@ function apiStub(overrides: Partial<HousekeepingApi> = {}): HousekeepingApi {
 	return {
 		getMergeSuggestions: vi.fn(async () => [CONCEPT_SUGGESTION]),
 		approveMergeSuggestion: vi.fn(async () => undefined),
+		rejectMergeSuggestion: vi.fn(async () => undefined),
 		getOntology: vi.fn(async () => ONTOLOGY),
 		getOntologyProposals: vi.fn(
 			async () =>
@@ -69,6 +71,10 @@ function apiStub(overrides: Partial<HousekeepingApi> = {}): HousekeepingApi {
 		approveOntologyProposal: vi.fn(async () => ({
 			...TYPE_PROPOSAL,
 			status: 'approved'
+		})),
+		rejectOntologyProposal: vi.fn(async () => ({
+			...TYPE_PROPOSAL,
+			status: 'rejected'
 		})),
 		...overrides
 	};
@@ -209,5 +215,57 @@ describe('HousekeepingQueue.svelte - the low-epistemic-weight HITL surface (ADR-
 
 		expect(getByTestId('housekeeping-error')).toBeTruthy();
 		expect(queryByRole('button', { name: 'Merge' })).toBeNull();
+	});
+
+	describe('Keep separate - the low-epistemic-weight reject action (ADR-0004)', () => {
+		it('renders a "Keep separate" button for concept items', async () => {
+			const api = apiStub();
+			const store = await makeLoadedStore(api);
+			const { getByTestId } = render(HousekeepingQueue, {
+				props: { store }
+			});
+
+			expect(getByTestId('housekeeping-reject-11-concept')).toBeTruthy();
+		});
+
+		it('clicking "Keep separate" calls store.rejectMerge and removes the item', async () => {
+			const api = apiStub();
+			const store = await makeLoadedStore(api);
+			const { getByTestId, queryByText } = render(HousekeepingQueue, {
+				props: { store }
+			});
+
+			await fireEvent.click(getByTestId('housekeeping-reject-11-concept'));
+
+			expect(api.rejectMergeSuggestion).toHaveBeenCalledWith(11);
+			await waitFor(() => {
+				expect(queryByText('Apples')).toBeNull();
+			});
+		});
+	});
+
+	describe('provenance - the braindump snippet that triggered the suggestion', () => {
+		it('shows the provenance text when braindumpSnippet is present', async () => {
+			const api = apiStub();
+			const store = await makeLoadedStore(api);
+			const { getByTestId } = render(HousekeepingQueue, {
+				props: { store }
+			});
+
+			expect(getByTestId('housekeeping-provenance-11-concept')).toBeTruthy();
+			expect(
+				getByTestId('housekeeping-provenance-11-concept').textContent
+			).toContain('I had apples today and they affected my sleep.');
+		});
+
+		it('hides the provenance text when braindumpSnippet is null (type items)', async () => {
+			const api = apiStub();
+			const store = await makeLoadedStore(api);
+			const { queryByTestId } = render(HousekeepingQueue, {
+				props: { store }
+			});
+
+			expect(queryByTestId('housekeeping-provenance-33-type')).toBeNull();
+		});
 	});
 });

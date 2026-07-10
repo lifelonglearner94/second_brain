@@ -70,7 +70,17 @@
 								>Similarity {item.similarity.toFixed(2)}</span
 							>
 						</span>
+				</div>
+				{#if item.braindumpSnippet}
+					<div
+						class="provenance"
+						data-testid={`housekeeping-provenance-${item.id}-${item.kind}`}
+					>
+						<span class="provenance-label">From braindump:</span>
+						<p class="provenance-text">{item.braindumpSnippet}</p>
 					</div>
+				{/if}
+				<div class="actions">
 					<button
 						type="button"
 						class="btn btn-primary merge"
@@ -93,6 +103,15 @@
 						</svg>
 						Merge
 					</button>
+					<button
+						type="button"
+						class="btn btn-ghost keep-separate"
+						data-testid={`housekeeping-reject-${item.id}-${item.kind}`}
+						onclick={() => store.rejectMerge(item.id, item.kind)}
+					>
+						Keep separate
+					</button>
+				</div>
 				</li>
 			{/each}
 		</ol>
@@ -233,6 +252,35 @@
 	.merge svg {
 		inline-size: 1.05rem;
 		block-size: 1.05rem;
+	}
+	.actions {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.keep-separate {
+		color: var(--fg-muted);
+	}
+	.provenance {
+		display: grid;
+		gap: var(--space-1);
+		padding: var(--space-2) var(--space-3);
+		border-inline-start: 2px solid var(--border-hairline);
+		background: var(--surface-glass);
+		border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+	}
+	.provenance-label {
+		font-size: var(--fs-12);
+		text-transform: uppercase;
+		letter-spacing: var(--tracking-label);
+		color: var(--fg-subtle);
+		font-weight: 600;
+	}
+	.provenance-text {
+		margin: 0;
+		font-size: var(--fs-13);
+		color: var(--fg-muted);
+		line-height: 1.5;
 	}
 	.dot-pulse {
 		inline-size: 7px;

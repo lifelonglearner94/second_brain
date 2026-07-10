@@ -248,6 +248,11 @@ async fn get_merge_suggestions_lists_pending_pairs() {
         "Maria",
         "existing_concept_label is joined from the concepts table"
     );
+    assert_eq!(
+        s["braindump_snippet"].as_str().unwrap(),
+        "beta",
+        "braindump_snippet is the cleaned text of the triggering braindump"
+    );
 }
 
 #[tokio::test]

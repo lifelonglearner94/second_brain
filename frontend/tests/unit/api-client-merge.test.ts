@@ -30,6 +30,7 @@ describe('apiClient.getMergeSuggestions - backend #7 GET /merge-suggestions (con
 			new_concept_id: 42,
 			existing_concept_id: 7,
 			existing_concept_label: 'Existing Concept',
+			braindump_snippet: 'I had apples today and they affected my sleep.',
 			similarity: 0.92,
 			status: 'pending',
 			created_at: 1_700_000_000
