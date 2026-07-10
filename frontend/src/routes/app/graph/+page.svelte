@@ -21,6 +21,7 @@
 	} from '$lib/graph/render2d';
 	import { onWindowFocus } from '$lib/graph/delta-sync';
 	import { graphStore } from '$lib/state/graph.svelte';
+	import { housekeeping } from '$lib/state/housekeeping.svelte';
 
 	const HIGHLIGHT = '#ffffff';
 
@@ -120,6 +121,8 @@
 			}
 		})();
 
+		void housekeeping.load();
+
 		const stopFocusSync = onWindowFocus(globalThis, () => {
 			void reconcileOnFocus();
 		});
@@ -131,7 +134,9 @@
 		globalThis.addEventListener('offline', handleConnectivity);
 
 		async function reconcileOnFocus(): Promise<void> {
-			if (destroyed || !graphStore.snapshot) return;
+			if (destroyed) return;
+			void housekeeping.load();
+			if (!graphStore.snapshot) return;
 			const outcome = await graphStore.syncDelta(apiClient);
 			if (destroyed || !outcome.applied) return;
 			if (fg && outcome.delta && hasDeltaChanges(outcome.delta)) {
@@ -310,6 +315,28 @@
 				>
 			{/if}
 		</aside>
+
+		{#if housekeeping.status === 'loaded' && housekeeping.items.length > 0}
+			<aside
+				class="overlay overlay-housekeeping glass"
+				data-testid="housekeeping-banner"
+				aria-label="Housekeeping queue"
+			>
+				<span class="hk-dot" aria-hidden="true"></span>
+				<span class="hk-count">
+					{housekeeping.items.length} concept{housekeeping.items.length === 1
+						? ''
+						: 's'} to resolve
+				</span>
+				<a
+					href="/app/housekeeping"
+					class="btn btn-primary hk-link"
+					data-testid="housekeeping-banner-link"
+				>
+					Review
+				</a>
+			</aside>
+		{/if}
 	</section>
 </main>
 
@@ -414,5 +441,31 @@
 	}
 	.selected-label.muted {
 		color: var(--fg-muted);
+	}
+	.overlay-housekeeping {
+		top: var(--space-3);
+		right: var(--space-3);
+		pointer-events: auto;
+		color: var(--warn);
+		gap: var(--space-3);
+		max-inline-size: calc(100% - 1.5rem);
+	}
+	.hk-dot {
+		inline-size: 7px;
+		block-size: 7px;
+		border-radius: 50%;
+		background: var(--warn);
+		box-shadow: 0 0 10px -1px var(--warn-soft);
+		flex: 0 0 auto;
+	}
+	.hk-count {
+		font-size: var(--fs-13);
+		font-weight: 500;
+		white-space: nowrap;
+	}
+	.hk-link {
+		min-block-size: 32px;
+		padding: 0.3rem 0.7rem;
+		font-size: var(--fs-13);
 	}
 </style>
