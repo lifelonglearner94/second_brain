@@ -31,22 +31,12 @@ async fn handle_socket(mut client_ws: WebSocket, api_key: String) {
     info!("Client connected to Deepgram proxy");
 
     // Build Deepgram WebSocket URL with query parameters
-    let deepgram_url = "wss://api.deepgram.com/v1/listen?model=nova-3&language=de&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&smart_format=true";
+    let deepgram_url = format!(
+        "wss://api.deepgram.com/v1/listen?model=nova-3&language=de&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&smart_format=true&token={}",
+        api_key
+    );
 
-    // Connect to Deepgram
-    let deepgram_request = match tokio_tungstenite::tungstenite::http::Request::builder()
-        .uri(deepgram_url)
-        .header("Authorization", format!("Token {}", api_key))
-        .body(())
-    {
-        Ok(req) => req,
-        Err(e) => {
-            error!("Failed to build Deepgram request: {}", e);
-            return;
-        }
-    };
-
-    let (deepgram_ws, _) = match connect_async(deepgram_request).await {
+    let (deepgram_ws, _) = match connect_async(&deepgram_url).await {
         Ok(conn) => conn,
         Err(e) => {
             error!("Failed to connect to Deepgram: {}", e);
