@@ -1,6 +1,5 @@
 use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{Request, StatusCode};
-use http_body_util::BodyExt;
 use second_brain_backend::{db::Db, state::AppState};
 use std::net::SocketAddr;
 use tower::ServiceExt;
