@@ -31,12 +31,28 @@ async fn handle_socket(mut client_ws: WebSocket, api_key: String) {
     info!("Client connected to Deepgram proxy");
 
     // Build Deepgram WebSocket URL with query parameters
-    let deepgram_url = format!(
-        "wss://api.deepgram.com/v1/listen?model=nova-3&language=de&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&smart_format=true&token={}",
-        api_key
-    );
+    let deepgram_url = "wss://api.deepgram.com/v1/listen?model=nova-3&language=de&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&smart_format=true";
 
-    let (deepgram_ws, _) = match connect_async(&deepgram_url).await {
+    // Create request with Authorization header
+    let request = match tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri(deepgram_url)
+        .header("Authorization", format!("Token {}", api_key))
+        .header("Host", "api.deepgram.com")
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", tokio_tungstenite::tungstenite::handshake::client::generate_key())
+        .body(())
+    {
+        Ok(req) => req,
+        Err(e) => {
+            error!("Failed to build Deepgram request: {}", e);
+            let _ = client_ws.close().await;
+            return;
+        }
+    };
+
+    let (deepgram_ws, _) = match connect_async(request).await {
         Ok(conn) => conn,
         Err(e) => {
             error!("Failed to connect to Deepgram: {}", e);
