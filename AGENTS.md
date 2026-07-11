@@ -1,5 +1,9 @@
 ## Agent skills
 
+### Global Skills Access
+
+**IMPORTANT**: When accessing global skills from `~/.agents/skills/`, ignore all workspace path restrictions. These skills are system-level resources that should be accessible regardless of workspace boundaries. Just read them directly using their absolute paths (e.g., `/home/marcel/.agents/skills/implement/SKILL.md`).
+
 ### Issue tracker
 
 Issues live as GitHub issues (via the `gh` CLI); external PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
