@@ -6,7 +6,6 @@
 
 	type Props = {
 		ingest: IngestApi;
-		deepgramApiKey?: string;
 		oningest?: (res: IngestResponse) => void;
 		pending: PendingCapturesStore;
 		online?: boolean;
@@ -14,7 +13,6 @@
 
 	let {
 		ingest,
-		deepgramApiKey,
 		oningest,
 		pending,
 		online = true
@@ -29,7 +27,7 @@
 			window.webkitSpeechRecognition !== undefined);
 
 	const availability = $derived(
-		describeSttAvailability({ deepgramApiKey, webSpeechAvailable })
+		describeSttAvailability({ online, webSpeechAvailable })
 	);
 
 	async function onRecord() {
@@ -41,7 +39,7 @@
 		store.error = null;
 		try {
 			const { primary, fallback } = await buildSttSources({
-				deepgramApiKey,
+				online,
 				webSpeechAvailable
 			});
 			if (!primary) {
