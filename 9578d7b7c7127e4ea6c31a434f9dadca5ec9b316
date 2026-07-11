@@ -1,0 +1,6 @@
+{"id":"e9337b89-6f82-4101-b423-854a4d76d3e7","ts":"2026-07-11T19:45:30.633Z","path":"/home/marcel/code/second_brain/frontend/src/lib/capture/deepgram.ts","version":"1.0.0","taskID":"112f0757-fd04-4e0d-afbe-46576155bcb5"}
+{"id":"37b08a4b-ef69-45db-9fa0-c800cf42f3c5","ts":"2026-07-11T19:45:45.258Z","path":"/home/marcel/code/second_brain/frontend/src/lib/capture/stt.ts","version":"1.0.0","taskID":"112f0757-fd04-4e0d-afbe-46576155bcb5"}
+{"id":"955b8e03-dbb1-4775-91da-0c847d6c799f","ts":"2026-07-11T19:45:57.043Z","path":"/home/marcel/code/second_brain/frontend/src/routes/app/+page.svelte","version":"1.0.0","taskID":"112f0757-fd04-4e0d-afbe-46576155bcb5"}
+{"id":"c163ce3c-8d69-4eca-a0f4-243f3ed0fe03","ts":"2026-07-11T19:46:08.760Z","path":"/home/marcel/code/second_brain/frontend/src/lib/capture/ActiveCapture.svelte","version":"1.0.0","taskID":"112f0757-fd04-4e0d-afbe-46576155bcb5"}
+{"id":"e163b9ba-bbff-46a9-8adc-1d9299ff5234","ts":"2026-07-11T19:46:22.716Z","path":"/home/marcel/code/second_brain/frontend/src/vite-env.d.ts","version":"1.0.0","taskID":"112f0757-fd04-4e0d-afbe-46576155bcb5"}
+{"id":"9b2fc7eb-faa6-4066-8237-44816e0590cf","ts":"2026-07-11T19:47:11.879Z","path":"/home/marcel/code/second_brain/frontend/tests/unit/stt-choose.test.ts","version":"1.0.0","taskID":"112f0757-fd04-4e0d-afbe-46576155bcb5"}
