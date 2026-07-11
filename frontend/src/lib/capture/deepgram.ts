@@ -51,18 +51,26 @@ function audioContextCtor(): typeof AudioContext | null {
 
 /**
  * Build the WebSocket URL for the backend Deepgram proxy, respecting
- * VITE_BACKEND_BASE_URL when set (like the rest of the API client).
+ * VITE_BACKEND_BASE_URL when set (like the rest of the API client — see
+ * `src/lib/api/index.ts` which uses `VITE_BACKEND_BASE_URL ?? '/api'`).
+ *
+ * When the base is `/api` (default, Caddy-proxied), the URL is
+ * `wss://<host>/api/stt/deepgram` — Caddy strips the `/api/` prefix so the
+ * backend sees `/stt/deepgram`.
+ *
+ * When the base is an absolute URL (e.g. `http://127.0.0.1:8080` for local
+ * dev against a bare backend), the URL is `ws://127.0.0.1:8080/stt/deepgram`
+ * — no `/api/` prefix, because the backend routes are at the root.
  */
-function buildProxyUrl(): string {
-	const base = import.meta.env.VITE_BACKEND_BASE_URL || '';
-	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-	if (base) {
-		// VITE_BACKEND_BASE_URL is set (e.g., http://localhost:8080)
-		const url = new URL(base);
-		return `${protocol}//${url.host}/api/stt/deepgram`;
-	}
-	// Default: same-origin WebSocket
-	return `${protocol}//${window.location.host}/api/stt/deepgram`;
+export function buildProxyUrl(opts: {
+	backendBase?: string;
+	location: { protocol: string; host: string };
+}): string {
+	const base = opts.backendBase ?? '/api';
+	const httpUrl = new URL(base, `${opts.location.protocol}//${opts.location.host}`);
+	const protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+	const path = httpUrl.pathname.replace(/\/$/, '');
+	return `${protocol}//${httpUrl.host}${path}/stt/deepgram`;
 }
 
 export class DeepgramSttSource implements SttSource {
@@ -98,7 +106,12 @@ export class DeepgramSttSource implements SttSource {
 		});
 
 		try {
-			const socket = new WebSocket(buildProxyUrl());
+			const socket = new WebSocket(
+				buildProxyUrl({
+					backendBase: import.meta.env.VITE_BACKEND_BASE_URL,
+					location: window.location
+				})
+			);
 			this.socket = socket;
 
 			const opened = new Promise<void>((resolve, reject) => {

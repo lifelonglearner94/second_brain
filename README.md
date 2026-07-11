@@ -13,7 +13,7 @@ Speak or type a thought (a *braindump*); a hosted LLM extracts *concepts* and ty
 | Layer | Technology |
 |---|---|
 | **Frontend** | SvelteKit (Svelte 5, runes) + `adapter-static` PWA; `3d-force-graph`/Three.js (3D) with `sigma.js` (2D) fallback; `graphology` + ForceAtlas2 + Louvain; WebAuthn passkeys; Deepgram Nova-3 STT (Web Speech API offline fallback) |
-| **Backend** | Rust (edition 2021, MSRV 1.82) + Axum 0.8; `petgraph` (in-memory) + `rusqlite` (ACID); `sqlite-vec` (in-process vectors); `webauthn-rs` |
+| **Backend** | Rust (edition 2021, MSRV 1.82) + Axum 0.8; `petgraph` (in-memory) + `rusqlite` (ACID); `sqlite-vec` (in-process vectors); `webauthn-rs`; `tokio-tungstenite` (Deepgram STT WebSocket proxy, API key server-side) |
 | **AI** | Hosted **Gemini** for LLM (clean / extract / synthesize) and embeddings - no self-hosted models. One `Llm` trait seam; `FakeLlm` stands in for dev/CI |
 | **Infra** | Docker Compose: **Edge** (custom Caddy image: TLS, baked PWA, `/api` reverse-proxy) + **Backend** (Rust) + **Litestream** sidecar (WAL → Cloudflare R2) |
 | **CI/CD** | GitHub Actions → build on runners → push to GHCR → VPS pulls via command-restricted SSH key. SHA-pinned image tags, 30-second rollback |
@@ -255,7 +255,7 @@ npm run check           # svelte-check typecheck
 npm run lint            # ESLint
 ```
 
-The frontend calls `/api` by default (the Edge reverse-proxy). For local dev against a backend on another origin, set `VITE_BACKEND_BASE_URL` (see `frontend/.env.example`). Deepgram STT needs `VITE_DEEPGRAM_API_KEY`; without it, capture falls back to the Web Speech API.
+The frontend calls `/api` by default (the Edge reverse-proxy). For local dev against a backend on another origin, set `VITE_BACKEND_BASE_URL` (see `frontend/.env.example`). Deepgram STT goes through the backend WebSocket proxy (`/api/stt/deepgram`); the API key lives server-side as `DEEPGRAM_API_KEY` (ADR-0004). When the key is unset or the backend is unreachable, capture falls back to the Web Speech API.
 
 ---
 
@@ -264,10 +264,10 @@ The frontend calls `/api` by default (the Edge reverse-proxy). For local dev aga
 | Where | What |
 |---|---|
 | `infrastructure/.env.example` | The authoritative runtime-secret/config key list (committed, values blank). Copy to `infrastructure/.env` on the VPS and fill in. |
-| `frontend/.env.example` | `VITE_BACKEND_BASE_URL` (defaults to `/api`). `VITE_DEEPGRAM_API_KEY` is read inline for STT. |
+| `frontend/.env.example` | `VITE_BACKEND_BASE_URL` (defaults to `/api`). |
 | `backend/src/config.rs` | Env-driven backend config: `HOST`, `PORT`, `DATABASE_URL`, `RUST_LOG`, `LOG_FORMAT`, `WEBAUTHN_RP_ID/NAME/ORIGIN`. |
 
-Runtime secrets (never committed, GHA-blind): `GEMINI_API_KEY`, `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY`, `NTFY_WEBHOOK_URL`. Non-secret config: `LITESTREAM_ENDPOINT`/`LITESTREAM_BUCKET`, Gemini model ids, WebAuthn RP, backend bind/port. **`WEBAUTHN_RP_ID` must match the hostname in `Caddyfile.prod`.**
+Runtime secrets (never committed, GHA-blind): `GEMINI_API_KEY`, `DEEPGRAM_API_KEY`, `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY`, `NTFY_WEBHOOK_URL`. Non-secret config: `LITESTREAM_ENDPOINT`/`LITESTREAM_BUCKET`, Gemini model ids, WebAuthn RP, backend bind/port. **`WEBAUTHN_RP_ID` must match the hostname in `Caddyfile.prod`.**
 
 ---
 
