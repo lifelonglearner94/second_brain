@@ -21,9 +21,7 @@ use http::{Request, StatusCode};
 use serial_test::serial;
 use tokio::net::TcpListener;
 use tokio_tungstenite::{
-    accept_async,
-    connect_async,
-    tungstenite::handshake::client::generate_key,
+    accept_async, connect_async, tungstenite::handshake::client::generate_key,
     tungstenite::protocol::Message as TungsteniteMessage,
 };
 use tower::ServiceExt;
@@ -272,7 +270,9 @@ async fn deepgram_proxy_relays_audio_and_transcripts() {
 
     // The mock should have received at least one binary frame (the audio).
     assert!(
-        received.iter().any(|m| matches!(m, MockMsg::Binary(n) if *n > 0)),
+        received
+            .iter()
+            .any(|m| matches!(m, MockMsg::Binary(n) if *n > 0)),
         "mock Deepgram should have received binary audio, got: {received:?}"
     );
     // The mock should have received a CloseStream text message.

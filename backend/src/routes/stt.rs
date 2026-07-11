@@ -10,8 +10,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{
-    connect_async,
-    tungstenite::handshake::client::generate_key,
+    connect_async, tungstenite::handshake::client::generate_key,
     tungstenite::protocol::Message as TungsteniteMessage,
 };
 use tracing::{error, info, warn};
