@@ -15,7 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "macros"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "macros", "ws"] }
 axum-extra = { version = "0.12", default-features = false, features = ["cookie"] }
 base64 = "0.22"
 cookie = "0.18"
@@ -27,6 +27,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-native-roots", "connect"] }
+futures-util = "0.3"
 tower = { version = "0.5", default-features = false }
 tower-http = { version = "0.7", default-features = false, features = ["trace"] }
 tracing = "0.1"

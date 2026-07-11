@@ -19,6 +19,7 @@ mod merge;
 mod ontology;
 mod retrieval;
 mod snapshot;
+mod stt;
 mod thematic;
 
 /// Build the full router. State is threaded in here (rather than via
@@ -90,6 +91,7 @@ pub fn router(state: AppState) -> Router {
         .route("/thematic", get(thematic::thematic))
         .route("/graph", get(snapshot::topology_snapshot))
         .route("/graph/delta", get(delta::graph_delta))
+        .route("/stt/deepgram", get(stt::deepgram_proxy))
         .route("/admin/logs", get(admin::logs))
         .route("/admin/system", get(admin::system))
         .route("/ontology", get(ontology::ontology))

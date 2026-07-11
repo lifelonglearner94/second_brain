@@ -45,6 +45,10 @@ pub enum Error {
     /// they never terminal a braindump. Maps to 503 on the (rare) HTTP path.
     #[error("transient llm error: {0}")]
     TransientLlm(String),
+
+    /// Issue #90: service unavailable (e.g., Deepgram API key not configured)
+    #[error("service unavailable: {0}")]
+    ServiceUnavailable(String),
 }
 
 impl Error {
@@ -79,6 +83,7 @@ impl IntoResponse for Error {
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
             Error::Forbidden => StatusCode::FORBIDDEN,
             Error::TransientLlm(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Error::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let body = Json(json!({ "error": self.to_string() }));
