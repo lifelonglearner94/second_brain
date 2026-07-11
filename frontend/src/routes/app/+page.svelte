@@ -15,8 +15,6 @@
 		typeof navigator !== 'undefined' ? navigator.onLine : true
 	);
 
-	const deepgramApiKey = import.meta.env.VITE_DEEPGRAM_API_KEY as
-		string | undefined;
 	const ingestApi = createIngestApi(apiClient, () => graphStore.cursor);
 
 	function onHeaderTap() {
@@ -131,7 +129,6 @@
 	<section class="capture-section rise" data-testid="capture-section">
 		<ActiveCapture
 			ingest={ingestApi}
-			{deepgramApiKey}
 			oningest={onIngest}
 			pending={pendingCaptures}
 			{online}

@@ -39,7 +39,6 @@
 		"vitest": "^4.1.9"
 	},
 	"dependencies": {
-		"@deepgram/sdk": "^5.5.0",
 		"@simplewebauthn/browser": "^13.3.0",
 		"3d-force-graph": "^1.80.0",
 		"graphology": "^0.26.0",

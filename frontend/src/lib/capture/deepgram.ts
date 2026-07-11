@@ -1,26 +1,9 @@
 import type { SttSource } from './stt';
 
-export type DeepgramSttSourceOptions = {
-	apiKey: string;
-	model?: string;
-	language?: string;
-};
-
 type DeepgramMessage = {
 	is_final?: boolean;
 	channel?: { alternatives?: { transcript?: string }[] };
 };
-
-interface DeepgramLiveSocket {
-	on(event: 'open', cb: () => void): void;
-	on(event: 'message', cb: (msg: DeepgramMessage) => void): void;
-	on(event: 'error', cb: (err: unknown) => void): void;
-	on(event: 'close', cb: () => void): void;
-	connect(): void;
-	waitForOpen(): Promise<unknown>;
-	sendMedia(data: ArrayBuffer | ArrayBufferView | Blob): void;
-	close(): void;
-}
 
 /**
  * Resample a mono Float32 PCM buffer to 16 kHz. Pure and DOM-free so Vitest can
@@ -66,18 +49,32 @@ function audioContextCtor(): typeof AudioContext | null {
 	);
 }
 
+/**
+ * Build the WebSocket URL for the backend Deepgram proxy, respecting
+ * VITE_BACKEND_BASE_URL when set (like the rest of the API client).
+ */
+function buildProxyUrl(): string {
+	const base = import.meta.env.VITE_BACKEND_BASE_URL || '';
+	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+	if (base) {
+		// VITE_BACKEND_BASE_URL is set (e.g., http://localhost:8080)
+		const url = new URL(base);
+		return `${protocol}//${url.host}/api/stt/deepgram`;
+	}
+	// Default: same-origin WebSocket
+	return `${protocol}//${window.location.host}/api/stt/deepgram`;
+}
+
 export class DeepgramSttSource implements SttSource {
 	readonly label = 'deepgram' as const;
 
-	private socket: DeepgramLiveSocket | null = null;
+	private socket: WebSocket | null = null;
 	private mediaStream: MediaStream | null = null;
 	private audioCtx: AudioContext | null = null;
 	private sourceNode: MediaStreamAudioSourceNode | null = null;
 	private processor: ScriptProcessorNode | null = null;
 	private muteGain: GainNode | null = null;
 	private onChunk: ((chunk: string) => void) | null = null;
-
-	constructor(private opts: DeepgramSttSourceOptions) {}
 
 	async start(onChunk: (chunk: string) => void): Promise<void> {
 		this.onChunk = onChunk;
@@ -86,8 +83,8 @@ export class DeepgramSttSource implements SttSource {
 		// resume() is called within a user gesture. Create it and kick off
 		// resume() synchronously here - before any await - so the call happens
 		// inside the Record tap's transient activation window (the awaits below
-		// for the SDK import and the WebSocket open would otherwise leave the
-		// gesture and leave the context suspended, producing silence).
+		// for the WebSocket open would otherwise leave the gesture and leave the
+		// context suspended, producing silence).
 		const Ctor = audioContextCtor();
 		if (!Ctor) {
 			throw new Error('AudioContext unavailable in this browser');
@@ -101,39 +98,29 @@ export class DeepgramSttSource implements SttSource {
 		});
 
 		try {
-			const { DeepgramClient } = await import('@deepgram/sdk');
-			const client = new DeepgramClient({ apiKey: this.opts.apiKey });
-			const socket = (await client.listen.v1.connect({
-				model: this.opts.model ?? 'nova-3',
-				language: this.opts.language ?? 'de',
-				encoding: 'linear16',
-				sample_rate: 16000,
-				channels: 1,
-				interim_results: 'true',
-				smart_format: 'true',
-				Authorization: this.opts.apiKey
-			})) as unknown as DeepgramLiveSocket;
+			const socket = new WebSocket(buildProxyUrl());
+			this.socket = socket;
 
 			const opened = new Promise<void>((resolve, reject) => {
-				socket.on('open', () => resolve());
-				socket.on('error', (err: unknown) =>
-					reject(
-						err instanceof Error
-							? err
-							: new Error(`Deepgram unreachable: ${String(err)}`)
-					)
-				);
+				socket.onopen = () => resolve();
+				socket.onerror = () =>
+					reject(new Error('Failed to connect to Deepgram proxy'));
 			});
-			socket.on('message', (msg: DeepgramMessage) => {
-				if (!this.onChunk) return;
-				if (msg.is_final) {
-					const transcript =
-						msg.channel?.alternatives?.[0]?.transcript ?? '';
-					if (transcript) this.onChunk(transcript + ' ');
+
+			socket.onmessage = (event: MessageEvent) => {
+				if (!this.onChunk || typeof event.data !== 'string') return;
+				try {
+					const msg: DeepgramMessage = JSON.parse(event.data);
+					if (msg.is_final) {
+						const transcript =
+							msg.channel?.alternatives?.[0]?.transcript ?? '';
+						if (transcript) this.onChunk(transcript + ' ');
+					}
+				} catch {
+					// Ignore malformed JSON
 				}
-			});
-			this.socket = socket;
-			socket.connect();
+			};
+
 			await opened;
 			await this.beginMic();
 		} catch (e) {
@@ -181,7 +168,7 @@ export class DeepgramSttSource implements SttSource {
 
 		const inputRate = audioCtx.sampleRate;
 		processor.onaudioprocess = (e: AudioProcessingEvent) => {
-			if (!this.socket) return;
+			if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
 			const float32 = e.inputBuffer.getChannelData(0);
 			const resampled = resampleTo16kMono(float32, inputRate);
 			const int16 = new Int16Array(resampled.length);
@@ -189,7 +176,7 @@ export class DeepgramSttSource implements SttSource {
 				const s = Math.max(-1, Math.min(1, resampled[i] as number));
 				int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
 			}
-			this.socket.sendMedia(int16);
+			this.socket.send(int16.buffer);
 		};
 		sourceNode.connect(processor);
 		processor.connect(muteGain);
