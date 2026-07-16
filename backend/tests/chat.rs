@@ -19,8 +19,9 @@ use http_body_util::BodyExt;
 use second_brain_backend::auth::cookie::request_cookie_header_value;
 use second_brain_backend::auth::{mint_session, SessionId};
 use second_brain_backend::db::Db;
-use second_brain_backend::error::Result;
+use second_brain_backend::error::{Error, Result};
 use second_brain_backend::extractor::{ExtractedConcept, ExtractedEdge, ExtractionResult};
+use second_brain_backend::fallback::FallbackLlm;
 use second_brain_backend::llm::Llm;
 use second_brain_backend::routes;
 use second_brain_backend::state::AppState;
@@ -299,5 +300,117 @@ async fn chat_rejects_empty_query() {
         status,
         StatusCode::BAD_REQUEST,
         "empty query rejected: {body}"
+    );
+}
+
+/// Issue #94: a primary LLM whose `synthesize` fails transiently (429 / 5xx /
+/// transport) but whose `clean` / `extract` / `embed_*` succeed, so the ingest
+/// pipeline builds a real graph for retrieval while chat synthesis is the only
+/// transient failure. Used to wire a [`FallbackLlm`] whose fallback serves the
+/// eager per-call failover.
+struct PrimaryTransientSynthLlm {
+    extraction: ExtractionResult,
+    synthesize_calls: Arc<Mutex<usize>>,
+}
+
+#[async_trait]
+impl Llm for PrimaryTransientSynthLlm {
+    async fn clean(&self, verbatim: &str) -> Result<String> {
+        Ok(verbatim.trim().to_string())
+    }
+    async fn generate_pinned(&self, _system: &str, user: &str) -> Result<String> {
+        Ok(user.to_string())
+    }
+    async fn synthesize(&self, _system: &str, _user: &str) -> Result<String> {
+        *self.synthesize_calls.lock().unwrap() += 1;
+        Err(Error::TransientLlm(
+            "primary 429: quota exceeded (simulated)".into(),
+        ))
+    }
+    async fn extract(
+        &self,
+        _verbatim: &str,
+        _ontology_slugs: &[String],
+    ) -> Result<ExtractionResult> {
+        Ok(self.extraction.clone())
+    }
+    async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(
+            text, 64,
+        ))
+    }
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(second_brain_backend::embedding::deterministic_vector(
+            text, 64,
+        ))
+    }
+    fn dim(&self) -> usize {
+        64
+    }
+}
+
+/// Issue #94: when the primary `synthesize` fails transiently on a closed
+/// circuit, POST /chat eagerly failovers to the fallback model and returns the
+/// fallback's answer (200) rather than surfacing a raw 503 to the user. The
+/// transient failure still counts toward the circuit's consecutive-failure
+/// counter, but per-call the user never sees the error.
+#[tokio::test]
+async fn chat_failovers_to_fallback_when_primary_synthesize_fails_transiently() {
+    let db = Db::open_in_memory().unwrap();
+    let extraction = ExtractionResult {
+        concepts: concepts(&["Maria", "Q3 launch"]),
+        edges: vec![edge("Maria", "endangers", "Q3 launch")],
+    };
+    let synthesize_calls = Arc::new(Mutex::new(0usize));
+    let primary = Arc::new(PrimaryTransientSynthLlm {
+        extraction: extraction.clone(),
+        synthesize_calls: synthesize_calls.clone(),
+    });
+    let fallback_calls = Arc::new(Mutex::new(0usize));
+    let fallback = Arc::new(ScriptedLlm {
+        extraction,
+        answer: String::from(
+            "Q3 is at risk because Maria is leaving [bd:1] \
+             [edge:Maria -endangers→ Q3 launch]",
+        ),
+        calls: fallback_calls.clone(),
+    });
+    // Fixed clock: the cooldown never expires, so the circuit stays in whatever
+    // state the test drives it to (closed here, since only one transient failure
+    // occurs).
+    let llm = Arc::new(FallbackLlm::new_for_test(
+        primary as Arc<dyn Llm>,
+        fallback as Arc<dyn Llm>,
+        5,
+        60_000,
+        || 1_000u64,
+    ));
+    let app = app_with(db.clone(), llm);
+    let cookie = session_cookie(&db).await;
+
+    // Ingest builds the graph via the primary's clean + extract + embed
+    // (embeddings bypass the circuit, ADR-0001).
+    let _bd = submit(&app, &cookie, "maria leaving tanks the timeline").await;
+
+    let (status, body) = chat(&app, &cookie, "why is Q3 at risk?").await;
+    assert_eq!(status, StatusCode::OK, "chat: {body}");
+    assert_eq!(
+        body["silent"], false,
+        "fallback answer is grounded, not silent"
+    );
+    assert_eq!(
+        body["answer"].as_str().unwrap(),
+        "Q3 is at risk because Maria is leaving [bd:1] [edge:Maria -endangers→ Q3 launch]",
+        "the fallback model's answer is returned to the user (no raw 503)"
+    );
+    assert_eq!(
+        *synthesize_calls.lock().unwrap(),
+        1,
+        "primary was attempted once and failed transiently"
+    );
+    assert_eq!(
+        *fallback_calls.lock().unwrap(),
+        1,
+        "fallback served the eager per-call failover"
     );
 }

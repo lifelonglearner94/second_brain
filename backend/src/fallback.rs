@@ -243,8 +243,17 @@ impl Llm for FallbackLlm {
                     Ok(v)
                 }
                 Err(e) if e.is_transient() => {
+                    // Issue #94: eager per-call failover for chat synthesis. On
+                    // a transient primary failure with the circuit still
+                    // closed, retry the same chat request on the fallback so
+                    // the user never sees a raw 429/5xx. The failure still
+                    // counts toward the consecutive-failure counter and may
+                    // yet open the circuit; this is an addition for the chat
+                    // path, not a replacement of the breaker. Non-transient
+                    // errors fall through to the arm below and propagate as-is.
                     self.record_failure_closed();
-                    Err(e)
+                    self.log_serving_fallback("closed-circuit transient failover");
+                    self.fallback.synthesize(system, user).await
                 }
                 Err(e) => Err(e),
             },
@@ -684,5 +693,117 @@ mod tests {
         assert_eq!(extr.concepts[0].label, "F-concept");
         assert_eq!(fallback.text_calls(), 4);
         assert_eq!(primary.text_calls(), 5, "primary untouched while open");
+    }
+
+    // --- issue #94: chat eager-failover on a transient primary synthesis ---
+
+    /// Issue #94 AC1: on a transient primary `synthesize` failure with the
+    /// circuit still closed, chat retries the same request on the fallback
+    /// and returns the fallback's answer - the user never sees a raw 429/5xx.
+    #[tokio::test]
+    async fn synthesize_transient_primary_failure_failovers_to_fallback_on_closed_circuit() {
+        let primary = Arc::new(ScriptLlm::new("P", vec![1], 64));
+        let fallback = Arc::new(ScriptLlm::new("F", vec![], 48));
+        let (_clock, now) = test_clock(1000);
+        let llm = wrapper(
+            primary.clone() as Arc<dyn Llm>,
+            fallback.clone() as Arc<dyn Llm>,
+            5,
+            60_000,
+            now,
+        );
+        let out = llm.synthesize("sys", "usr").await;
+        assert!(
+            out.is_ok(),
+            "closed-circuit transient should failover, not surface an error: {:?}",
+            out
+        );
+        assert_eq!(
+            out.unwrap(),
+            "F:synthesize:sys:usr",
+            "the fallback's answer (tagged F) is returned to the user"
+        );
+        assert_eq!(primary.text_calls(), 1, "primary was attempted once");
+        assert_eq!(fallback.text_calls(), 1, "fallback served the failover");
+    }
+
+    /// Issue #94 AC2: a non-transient primary `synthesize` error (malformed
+    /// response / auth / bad request) propagates as-is - the fallback is NOT
+    /// called and the circuit counter is NOT advanced.
+    #[tokio::test]
+    async fn synthesize_non_transient_error_propagates_without_tripping_fallback() {
+        let primary = Arc::new(NonTransientLlm);
+        let fallback = Arc::new(ScriptLlm::new("F", vec![], 48));
+        let (_clock, now) = test_clock(1000);
+        let llm = wrapper(
+            primary.clone() as Arc<dyn Llm>,
+            fallback.clone() as Arc<dyn Llm>,
+            5,
+            60_000,
+            now,
+        );
+        let err = llm.synthesize("sys", "usr").await.unwrap_err();
+        assert!(
+            !err.is_transient(),
+            "non-transient error must propagate as-is: {err}"
+        );
+        assert_eq!(
+            fallback.text_calls(),
+            0,
+            "non-transient error must not trigger the fallback"
+        );
+    }
+
+    /// Issue #94 AC3: a transient primary `synthesize` failure still feeds the
+    /// circuit-breaker's consecutive-failure counter. After `max_attempts` (5)
+    /// transient synthesize failures - each eagerly failovered to the fallback
+    /// so the user sees an answer - the circuit opens; the next synthesize call
+    /// goes directly to the fallback without probing the primary.
+    #[tokio::test]
+    async fn synthesize_transient_failover_still_advances_the_circuit_counter() {
+        let primary = Arc::new(ScriptLlm::new("P", vec![1, 2, 3, 4, 5], 64));
+        let fallback = Arc::new(ScriptLlm::new("F", vec![], 48));
+        let (_clock, now) = test_clock(1000);
+        let llm = wrapper(
+            primary.clone() as Arc<dyn Llm>,
+            fallback.clone() as Arc<dyn Llm>,
+            5,
+            60_000,
+            now,
+        );
+        // 5 transient primary failures on `synthesize` - each eagerly failovers
+        // to the fallback so the user sees an answer, not a 429/5xx.
+        for i in 1..=5u32 {
+            let out = llm.synthesize("s", "u").await;
+            assert!(
+                out.is_ok(),
+                "call {i} should failover to the fallback, not error: {out:?}"
+            );
+            assert_eq!(
+                out.unwrap(),
+                "F:synthesize:s:u",
+                "call {i} served by the fallback"
+            );
+        }
+        assert_eq!(
+            primary.text_calls(),
+            5,
+            "primary attempted once per call (5 transient failures)"
+        );
+        assert_eq!(fallback.text_calls(), 5, "fallback served every failover");
+        // The 5 transient failures advanced the counter to the threshold and
+        // opened the circuit. The next synthesize goes straight to the fallback
+        // without touching the primary.
+        assert_eq!(
+            llm.synthesize("s", "u").await.unwrap(),
+            "F:synthesize:s:u",
+            "circuit open -> fallback serves"
+        );
+        assert_eq!(
+            primary.text_calls(),
+            5,
+            "circuit open: primary not probed on the 6th call"
+        );
+        assert_eq!(fallback.text_calls(), 6);
     }
 }
