@@ -169,6 +169,43 @@ describe('DocumentModal - error-correction edit flow (ADR-0003, ADR-0007)', () =
 		expect(editBraindump).toHaveBeenCalledWith(42, EDITED_VERBATIM);
 	});
 
+	it('the creation timestamp is stable across an error-correction edit (ADR-0007, issue #93)', async () => {
+		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
+			async () => BRAINDUMP
+		);
+		const editBraindump = vi.fn<BraindumpApi['editBraindump']>(
+			async () => EDITED
+		);
+		const { getByTestId } = render(DocumentModal, {
+			props: {
+				braindumpId: 42,
+				api: apiStub(getBraindump, editBraindump),
+				onClose: vi.fn()
+			}
+		});
+		await waitFor(() =>
+			expect(getByTestId('document-modal-cleaned')).toBeTruthy()
+		);
+		expect(getByTestId('document-modal-timestamp').textContent).toBe(
+			'November 2023'
+		);
+		getByTestId('document-modal-edit').click();
+		await waitFor(() =>
+			expect(getByTestId('document-modal-edit-input')).toBeTruthy()
+		);
+		await typeInto(getByTestId, 'document-modal-edit-input', EDITED_VERBATIM);
+		getByTestId('document-modal-save').click();
+		await waitFor(() =>
+			expect(getByTestId('document-modal-cleaned').textContent).toBe(
+				EDITED.cleaned
+			)
+		);
+		expect(getByTestId('document-modal-timestamp').textContent).toBe(
+			'November 2023'
+		);
+		expect(EDITED.created_at).toBe(BRAINDUMP.created_at);
+	});
+
 	it('the cleaned rendering is never editable and the modal offers no new-braindump/create control (error-correction only, not thinking-evolution)', async () => {
 		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
 			async () => BRAINDUMP

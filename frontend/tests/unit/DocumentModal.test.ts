@@ -102,6 +102,46 @@ describe('DocumentModal - isolated braindump reader (ADR-0003, ADR-0005)', () =>
 		);
 	});
 
+	it('renders the braindump creation timestamp as month + year (issue #93)', async () => {
+		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
+			async () => BRAINDUMP
+		);
+		const { getByTestId } = render(DocumentModal, {
+			props: { braindumpId: 42, api: apiStub(getBraindump), onClose: vi.fn() }
+		});
+		await waitFor(() =>
+			expect(getByTestId('document-modal-cleaned')).toBeTruthy()
+		);
+		expect(getByTestId('document-modal-timestamp').textContent).toBe(
+			'November 2023'
+		);
+	});
+
+	it('does not render the timestamp while loading or in an error state', async () => {
+		const loadingApi = apiStub(
+			vi.fn<BraindumpApi['getBraindump']>(
+				() => new Promise<Braindump>(() => {})
+			)
+		);
+		const { queryByTestId: loadingQuery } = render(DocumentModal, {
+			props: { braindumpId: 42, api: loadingApi, onClose: vi.fn() }
+		});
+		expect(loadingQuery('document-modal-timestamp')).toBeNull();
+
+		const errorApi = apiStub(
+			vi
+				.fn<BraindumpApi['getBraindump']>()
+				.mockRejectedValue(new Error('GET /braindumps/:id failed: 404'))
+		);
+		const { queryByTestId: errorQuery } = render(DocumentModal, {
+			props: { braindumpId: 9999, api: errorApi, onClose: vi.fn() }
+		});
+		await waitFor(() =>
+			expect(errorQuery('document-modal-error')).toBeTruthy()
+		);
+		expect(errorQuery('document-modal-timestamp')).toBeNull();
+	});
+
 	it('does not render any graph-navigation control - citations are a reading interaction, not navigation (does not move the Spatial View-Graph camera)', async () => {
 		const getBraindump = vi.fn<BraindumpApi['getBraindump']>(
 			async () => BRAINDUMP

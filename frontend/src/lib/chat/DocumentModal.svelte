@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy, tick } from 'svelte';
 	import type { Braindump } from '$lib/api/client';
+	import { formatMonthYear } from '$lib/format/date';
 
 	type BraindumpApi = {
 		getBraindump(id: number): Promise<Braindump>;
@@ -140,6 +141,13 @@
 			</p>
 		{:else if braindump}
 			<div class="document-modal-body">
+				<time
+					class="document-modal-timestamp"
+					data-testid="document-modal-timestamp"
+					datetime={new Date(braindump.created_at * 1000).toISOString()}
+				>
+					{formatMonthYear(braindump.created_at)}
+				</time>
 				{#if editing}
 					<textarea
 						class="textarea document-modal-edit-input"
@@ -284,6 +292,14 @@
 		flex-direction: column;
 		gap: var(--space-4);
 		padding: var(--space-6) var(--space-6) var(--space-8);
+	}
+	.document-modal-timestamp {
+		margin: 0;
+		color: var(--fg-muted);
+		font-size: var(--fs-13);
+		text-transform: uppercase;
+		letter-spacing: var(--tracking-label);
+		font-weight: 600;
 	}
 	.document-modal-controls {
 		display: flex;
