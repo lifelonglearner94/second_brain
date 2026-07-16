@@ -88,6 +88,22 @@ pub async fn read(
     Ok(Json(braindump))
 }
 
+/// `GET /braindumps/:id/ingest-status` - return the background pipeline state
+/// (issue #97) so the frontend can poll until the clean → extract → accrete
+/// task commits and then pull a fresh `GET /graph/delta`. Pure read over
+/// [`crate::db::get_ingest_state`]; `404` if no braindump with `id` exists.
+pub async fn ingest_status(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionInfo>,
+    Path(id): Path<i64>,
+) -> Result<Json<crate::db::IngestState>> {
+    let Some(ingest_state) = crate::db::get_ingest_state(&state.db, &session.user_id, id).await?
+    else {
+        return Err(Error::NotFound(format!("braindump {id} not found")));
+    };
+    Ok(Json(ingest_state))
+}
+
 /// `PATCH /braindumps/:id` - error-correction only (ADR-0007). A thin HTTP
 /// adapter (issue #42): parse + validate non-empty, delegate the full
 /// re-ingest pipeline (clean → overwrite-in-place → ontology → extract →

@@ -180,11 +180,21 @@ pub async fn process_ingest_once(
             return Ok(IngestOutcome::default());
         }
     }
-    let cleaned = llm.clean(&braindump.verbatim).await?;
+    // Issue #97: `extract` runs on the verbatim (not the cleaned rendering),
+    // and `ontology_slugs` is a DB read, so `clean` and the ontology+extract
+    // branch are independent. Run them concurrently with `tokio::try_join!`
+    // so the critical path shrinks from `clean + extract + accrete` to
+    // `max(clean, extract) + accrete`. `cleaned` is still derived and
+    // overwritten in place; `id` + `created_at` untouched; per-user scope
+    // unchanged (ADR-0007).
+    let (cleaned, extraction) = tokio::try_join!(llm.clean(&braindump.verbatim), async {
+        let ontology = graph::ontology_slugs(db, user_id).await?;
+        llm.extract(&braindump.verbatim, &ontology).await
+    })?;
     let updated = overwrite_verbatim(db, user_id, braindump_id, &braindump.verbatim, &cleaned)
         .await?
         .ok_or_else(|| Error::internal("braindump vanished mid-ingest"))?;
-    accrete(db, user_id, llm, &updated).await
+    graph::ingest_extraction(db, user_id, llm, updated.id, &updated.verbatim, extraction).await
 }
 
 /// The background ingest retry loop (issue #84/#85). Attempts

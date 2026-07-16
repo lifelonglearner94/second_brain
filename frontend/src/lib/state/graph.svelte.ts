@@ -87,7 +87,13 @@ export class GraphStore {
 			}),
 			this.fetchedAt
 		);
-		this.cursor = res.cursor;
+		// Issue #97: only advance the cursor when the response actually
+		// carries changes. An empty racing delta (failed/timeout/no-changes)
+		// must NOT advance the cursor, or a same-second background commit can
+		// be permanently skipped by the strict `created_at > since` filter.
+		if (res.concepts.length > 0 || res.edges.length > 0) {
+			this.cursor = res.cursor;
+		}
 		this.data = buildGraphData(this.snapshot);
 	}
 

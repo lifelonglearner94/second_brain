@@ -387,6 +387,23 @@ describe('GraphStore - the canonical Global Topology Snapshot holder (ADR-0002 s
 			expect(before.concepts).toHaveLength(2);
 			expect(before.edges).toHaveLength(1);
 		});
+
+		it('does not advance the cursor when the ingest response carries no concepts/edges (empty racing delta - issue #97)', () => {
+			const store = new GraphStore();
+			store.loadSnapshot(SNAPSHOT);
+			store.cursor = FIXED_CURSOR;
+			const priorCursor = store.cursor;
+
+			store.mergeIngest(
+				ingestResponse({
+					concepts: [],
+					edges: [],
+					cursor: FIXED_CURSOR + 500
+				})
+			);
+
+			expect(store.cursor).toBe(priorCursor);
+		});
 	});
 
 	describe('mergeEndorsedEdge - action-driven optimistic merge of an endorsed chat-inference edge', () => {

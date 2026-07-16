@@ -620,3 +620,102 @@ async fn retry_backs_off_on_the_configured_interval() {
         "retry backed off for the configured interval: {elapsed:?}"
     );
 }
+
+// --- Issue #97: GET /braindumps/:id/ingest-status poll surface ---
+
+async fn ingest_status(
+    app: &axum::Router,
+    cookie: &http::HeaderValue,
+    id: i64,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("GET")
+        .uri(format!("/braindumps/{id}/ingest-status"))
+        .header(COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
+}
+
+#[tokio::test]
+async fn ingest_status_route_reports_pending_then_complete_across_background_pipeline() {
+    let db = Db::open_in_memory().unwrap();
+    let cookie = session_cookie(&db).await;
+    let llm = Arc::new(ScriptedLlm {
+        result: maria_endangers_q3(),
+    });
+    let (app, state) = app_with_spawn_runner(db.clone(), llm);
+
+    let body = submit(&app, &cookie, "maria endangers the q3 launch").await;
+    let id = body["id"].as_i64().unwrap();
+
+    // Immediately after submit the background pipeline has not committed, so
+    // the route reports `pending` (the row's default ingest_status).
+    let (status, pending) = ingest_status(&app, &cookie, id).await;
+    assert_eq!(status, StatusCode::OK, "ingest-status pending: {pending}");
+    assert_eq!(pending["status"], "pending", "{pending:?}");
+    assert_eq!(pending["attempts"], 0, "no attempts yet: {pending:?}");
+
+    // Drain the background ingest; the pipeline commits complete.
+    await_pending_ingests(&state).await;
+
+    let (status, complete) = ingest_status(&app, &cookie, id).await;
+    assert_eq!(status, StatusCode::OK, "ingest-status complete: {complete}");
+    assert_eq!(complete["status"], "complete", "{complete:?}");
+    assert_eq!(
+        complete["attempts"], 1,
+        "one successful attempt recorded: {complete:?}"
+    );
+}
+
+#[tokio::test]
+async fn ingest_status_route_reports_failed_for_non_retryable_error() {
+    let db = Db::open_in_memory().unwrap();
+    let cookie = session_cookie(&db).await;
+    let llm = Arc::new(NonRetryableLlm);
+    let (app, state) = app_with_spawn_runner(db.clone(), llm);
+
+    let body = submit(&app, &cookie, "maria endangers q3 launch").await;
+    let id = body["id"].as_i64().unwrap();
+    await_pending_ingests(&state).await;
+
+    let (status, failed) = ingest_status(&app, &cookie, id).await;
+    assert_eq!(status, StatusCode::OK, "ingest-status failed: {failed}");
+    assert_eq!(failed["status"], "failed", "{failed:?}");
+    assert_eq!(failed["attempts"], 1, "one failed attempt: {failed:?}");
+}
+
+#[tokio::test]
+async fn ingest_status_route_returns_404_for_missing_braindump() {
+    let db = Db::open_in_memory().unwrap();
+    let cookie = session_cookie(&db).await;
+    let llm = Arc::new(ScriptedLlm {
+        result: ExtractionResult::default(),
+    });
+    let (app, _state) = app_with_spawn_runner(db.clone(), llm);
+
+    let (status, body) = ingest_status(&app, &cookie, 9999).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "missing braindump: {body}");
+}
+
+#[tokio::test]
+async fn ingest_status_route_requires_a_session() {
+    let db = Db::open_in_memory().unwrap();
+    let app = routes::router(AppState::for_tests(db));
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/braindumps/1/ingest-status")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "ingest-status without session is rejected"
+    );
+}

@@ -95,31 +95,40 @@
 		let destroyed = false;
 		const idb = createIdb();
 		const savedViewport = loadViewport();
+		const snapshotAlreadyLoaded = !!graphStore.snapshot;
 
-		(async () => {
-			try {
-				const { source, fetchedAt } = await graphStore.loadFromNetworkOrCache(
-					apiClient,
-					idb
-				);
+	(async () => {
+		try {
+			const { source, fetchedAt } = await graphStore.loadFromNetworkOrCache(
+				apiClient,
+				idb
+			);
+			if (destroyed) return;
+			// Issue #97: if the snapshot was already loaded when the page mounted
+			// (loadFromNetworkOrCache short-circuited without a network fetch),
+			// pull a fresh delta so a pending braindump's background ingest
+			// surfaces on navigation to /app/graph even without a window focus.
+			if (snapshotAlreadyLoaded && online) {
+				await graphStore.syncDelta(apiClient);
 				if (destroyed) return;
-				const frozen = frozenGraphStatus(source, fetchedAt, online);
-				fetchedAtLabel = frozen.label;
-				const svg = buildSpatialViewGraph(graphStore.snapshot!);
-				rendererChoice = detectRendererCapability(probeRendererCapability());
-				if (rendererChoice === '2d') {
-					await renderGraph2D(svg, frozen.status);
-				} else {
-					await renderGraph3D(graphStore.data, frozen.status);
-				}
-			} catch (e) {
-				if (destroyed) return;
-				const msg = e instanceof Error ? e.message : String(e);
-				const frozen = frozenGraphStatus('error', null, online, msg);
-				fetchedAtLabel = frozen.label;
-				status = frozen.status;
 			}
-		})();
+			const frozen = frozenGraphStatus(source, fetchedAt, online);
+			fetchedAtLabel = frozen.label;
+			const svg = buildSpatialViewGraph(graphStore.snapshot!);
+			rendererChoice = detectRendererCapability(probeRendererCapability());
+			if (rendererChoice === '2d') {
+				await renderGraph2D(svg, frozen.status);
+			} else {
+				await renderGraph3D(graphStore.data, frozen.status);
+			}
+		} catch (e) {
+			if (destroyed) return;
+			const msg = e instanceof Error ? e.message : String(e);
+			const frozen = frozenGraphStatus('error', null, online, msg);
+			fetchedAtLabel = frozen.label;
+			status = frozen.status;
+		}
+	})();
 
 		void housekeeping.load();
 

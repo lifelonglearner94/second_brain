@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
 	createApiClient,
 	type BraindumpDto,
-	type GraphDelta
+	type GraphDelta,
+	type IngestStatus
 } from '../../src/lib/api/client';
 
 function okResponse(body: unknown): Response {
@@ -114,5 +115,49 @@ describe('apiClient.getGraphDelta - GET /graph/delta (backend #28, ADR-0002 pull
 		fetchMock.mockResolvedValue(new Response('nope', { status: 503 }));
 		const api = createApiClient({ fetch: fetchMock });
 		await expect(api.getGraphDelta(1_780)).rejects.toThrow(/503/);
+	});
+});
+
+describe('apiClient.getIngestStatus - GET /braindumps/:id/ingest-status (issue #97)', () => {
+	let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+
+	const STATUS: IngestStatus = {
+		status: 'pending',
+		attempts: 0,
+		last_attempt_at: null
+	};
+
+	beforeEach(() => {
+		fetchMock = vi.fn<typeof fetch>();
+	});
+
+	it('GETs /braindumps/:id/ingest-status with credentials so the session cookie reaches the authed read path', async () => {
+		fetchMock.mockResolvedValue(okResponse(STATUS));
+		const api = createApiClient({ fetch: fetchMock });
+		await api.getIngestStatus(7);
+		expect(fetchMock.mock.calls[0][0]).toBe(
+			'/api/braindumps/7/ingest-status'
+		);
+		expect(fetchMock.mock.calls[0][1]).toMatchObject({
+			credentials: 'include'
+		});
+	});
+
+	it('parses the IngestStatus body (status + attempts + last_attempt_at)', async () => {
+		const body: IngestStatus = {
+			status: 'complete',
+			attempts: 2,
+			last_attempt_at: 1_795
+		};
+		fetchMock.mockResolvedValue(okResponse(body));
+		const api = createApiClient({ fetch: fetchMock });
+		const status = await api.getIngestStatus(7);
+		expect(status).toEqual(body);
+	});
+
+	it('throws on a non-2xx so the poll loop can stop and defer to the next focus event', async () => {
+		fetchMock.mockResolvedValue(new Response('nope', { status: 404 }));
+		const api = createApiClient({ fetch: fetchMock });
+		await expect(api.getIngestStatus(9999)).rejects.toThrow(/404/);
 	});
 });

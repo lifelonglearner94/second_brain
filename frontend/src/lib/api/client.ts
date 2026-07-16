@@ -203,6 +203,12 @@ export type Braindump = {
 	created_at: number;
 };
 
+export type IngestStatus = {
+	status: string;
+	attempts: number;
+	last_attempt_at: number | null;
+};
+
 export type ConceptMergeSuggestion = {
 	id: number;
 	kind: string;
@@ -287,6 +293,7 @@ export interface ApiClient {
 	getGraphDelta(since?: number): Promise<GraphDelta>;
 	chat(query: string): Promise<ChatResponse>;
 	getBraindump(id: number): Promise<Braindump>;
+	getIngestStatus(id: number): Promise<IngestStatus>;
 	editBraindump(id: number, verbatim: string): Promise<Braindump>;
 	getMergeSuggestions(): Promise<ConceptMergeSuggestion[]>;
 	approveMergeSuggestion(id: number): Promise<void>;
@@ -481,6 +488,12 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 		},
 		async getBraindump(id: number): Promise<Braindump> {
 			return getJson<Braindump>(`/braindumps/${id}`, 'GET /braindumps/:id');
+		},
+		async getIngestStatus(id: number): Promise<IngestStatus> {
+			return getJson<IngestStatus>(
+				`/braindumps/${id}/ingest-status`,
+				'GET /braindumps/:id/ingest-status'
+			);
 		},
 		async editBraindump(id: number, verbatim: string): Promise<Braindump> {
 			return patchJson<Braindump>(

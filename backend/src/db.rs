@@ -726,7 +726,7 @@ pub(crate) fn ensure_vec_tables(conn: &Connection, dim: usize) -> Result<()> {
 /// submit, or awaiting retry after a transient failure); `complete` = the
 /// pipeline finished and the cleaned rendering + concepts + edges landed;
 /// `failed` = a non-retryable error terminal'd the braindump.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct IngestState {
     pub status: String,
     pub attempts: i64,

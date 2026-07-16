@@ -70,6 +70,10 @@ pub fn router(state: AppState) -> Router {
                 .patch(braindump::edit)
                 .delete(braindump::delete),
         )
+        .route(
+            "/braindumps/{id}/ingest-status",
+            get(braindump::ingest_status),
+        )
         .route("/merge-suggestions", get(merge::list))
         .route("/merge-suggestions/{id}/approve", post(merge::approve))
         .route("/merge-suggestions/{id}/reject", post(merge::reject))
