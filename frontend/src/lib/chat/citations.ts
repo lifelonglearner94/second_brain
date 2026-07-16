@@ -57,3 +57,19 @@ function collapseEmptyText(segments: AnswerSegment[]): AnswerSegment[] {
 	}
 	return out;
 }
+
+/**
+ * Normalize a raw answer string for clipboard copy (issue #96): strip
+ * [edge:...] traversal markers and convert [bd:<id>] markers to [1]-style
+ * references (1-based, by first appearance — matching the in-card citation
+ * chips). Returns clean prose that reads naturally when pasted, rather than
+ * the raw citation syntax.
+ */
+export function normalizeAnswerForClipboard(answer: string): string {
+	const segments = parseAnswerCitations(answer);
+	let out = '';
+	for (const seg of segments) {
+		out += seg.kind === 'text' ? seg.text : `[${seg.index}]`;
+	}
+	return out;
+}

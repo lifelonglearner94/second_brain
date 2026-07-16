@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import {
+		normalizeAnswerForClipboard,
 		parseAnswerCitations,
 		type AnswerSegment
 	} from '$lib/chat/citations';
@@ -24,6 +26,8 @@
 	let errorText = $state<string | null>(null);
 	let openCitationId = $state<number | null>(null);
 	let answerEl = $state<HTMLDivElement | null>(null);
+	let copied = $state(false);
+	let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
 	const answer = $derived(
 		segments.length > 0 ? composeAnswer(segments) : { html: '', chips: [] }
@@ -34,6 +38,10 @@
 		const { html, chips } = answer;
 		if (!el || !html) return;
 		mountCitationChips(el, chips, openCitation);
+	});
+
+	onDestroy(() => {
+		if (copyTimer !== null) clearTimeout(copyTimer);
 	});
 
 	const EXPLICIT_SILENCE =
@@ -47,6 +55,7 @@
 		segments = [];
 		errorText = null;
 		openCitationId = null;
+		resetCopyState();
 		try {
 			const res = await api.chat(query);
 			response = res;
@@ -64,6 +73,35 @@
 
 	function closeCitation() {
 		openCitationId = null;
+	}
+
+	function resetCopyState() {
+		copied = false;
+		if (copyTimer !== null) {
+			clearTimeout(copyTimer);
+			copyTimer = null;
+		}
+	}
+
+	// Issue #96: copy the answer text (citation markers normalized to [1]-style
+	// references, edge markers stripped) to the clipboard. Mirrors the invites
+	// page pattern (issue #78): navigator.clipboard.writeText with "Copied"
+	// feedback and a graceful fallback when the clipboard is unavailable in an
+	// insecure context.
+	async function copyAnswer() {
+		if (!response || response.silent) return;
+		const text = normalizeAnswerForClipboard(response.answer);
+		try {
+			await navigator.clipboard.writeText(text);
+			copied = true;
+			if (copyTimer !== null) clearTimeout(copyTimer);
+			copyTimer = setTimeout(() => {
+				copied = false;
+				copyTimer = null;
+			}, 2000);
+		} catch {
+			copied = false;
+		}
 	}
 </script>
 
@@ -150,6 +188,16 @@
 				<div class="answer-text" bind:this={answerEl}>
 					<!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized via DOMPurify in composeAnswer (issue #95) -->
 					{@html answer.html}
+				</div>
+				<div class="answer-actions">
+					<button
+						type="button"
+						class="btn btn-ghost copy-btn"
+						data-testid="chat-copy-answer"
+						onclick={copyAnswer}
+					>
+						{copied ? 'Copied' : 'Copy'}
+					</button>
 				</div>
 			</div>
 		{/if}
@@ -425,5 +473,19 @@
 		background: rgba(122, 183, 255, 0.22);
 		border-color: var(--accent);
 		transform: translateY(-1px);
+	}
+
+	.answer-actions {
+		display: flex;
+		gap: var(--space-2);
+		justify-content: flex-start;
+		margin-top: var(--space-4);
+		padding-top: var(--space-3);
+		border-top: 1px solid var(--border-hairline);
+	}
+	.copy-btn {
+		min-block-size: 32px;
+		font-size: var(--fs-13);
+		padding: 0.3rem 0.7rem;
 	}
 </style>

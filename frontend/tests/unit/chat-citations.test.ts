@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { parseAnswerCitations } from '../../src/lib/chat/citations';
+import {
+	parseAnswerCitations,
+	normalizeAnswerForClipboard
+} from '../../src/lib/chat/citations';
 
 describe('parseAnswerCitations - inline [bd:<id>] chips, [edge:...] hidden (ADR-0004/0005)', () => {
 	it('leaves plain prose with no citations as a single text segment', () => {
@@ -48,5 +51,34 @@ describe('parseAnswerCitations - inline [bd:<id>] chips, [edge:...] hidden (ADR-
 		const segs = parseAnswerCitations('see [bd:1042].');
 		const chip = segs.find((s) => s.kind === 'citation');
 		expect(chip).toEqual({ kind: 'citation', index: 1, braindumpId: 1042 });
+	});
+});
+
+describe('normalizeAnswerForClipboard - clean prose for clipboard copy (issue #96)', () => {
+	it('converts [bd:<id>] markers to [1]-style references and strips [edge:...] markers', () => {
+		const out = normalizeAnswerForClipboard(
+			'Q3 is at risk [bd:42] [edge:Maria -endangers→ Q3 launch].'
+		);
+		expect(out).toBe('Q3 is at risk [1].');
+	});
+
+	it('numbers each unique braindump by order of first appearance', () => {
+		const out = normalizeAnswerForClipboard(
+			'A [bd:7] then B [bd:42] then A again [bd:7].'
+		);
+		expect(out).toBe('A [1] then B [2] then A again [1].');
+	});
+
+	it('leaves plain prose with no citations unchanged', () => {
+		expect(normalizeAnswerForClipboard('Nothing to cite here.')).toBe(
+			'Nothing to cite here.'
+		);
+	});
+
+	it('strips edge markers even when there are no braindump citations', () => {
+		const out = normalizeAnswerForClipboard(
+			'Prose only [edge:some -path→ here].'
+		);
+		expect(out).toBe('Prose only.');
 	});
 });

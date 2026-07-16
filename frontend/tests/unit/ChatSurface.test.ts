@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { tick } from 'svelte';
 import { render, fireEvent, waitFor } from '@testing-library/svelte';
 import ChatSurface from '../../src/lib/chat/ChatSurface.svelte';
 import type { Braindump, ChatResponse } from '../../src/lib/api/client';
@@ -296,5 +297,142 @@ describe('ChatSurface - chat is unavailable offline (ADR-0005, issue #21)', () =
 		expect((getByTestId('chat-query-input') as HTMLInputElement).disabled).toBe(
 			false
 		);
+	});
+});
+
+describe('ChatSurface - copy answer to clipboard (issue #96)', () => {
+	let chat: ReturnType<typeof vi.fn<ChatApi['chat']>>;
+	let getBraindump: ReturnType<typeof vi.fn<ChatApi['getBraindump']>>;
+	let writeText: ReturnType<typeof vi.fn>;
+	const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+		navigator,
+		'clipboard'
+	);
+
+	function installClipboard(value: unknown): void {
+		Object.defineProperty(navigator, 'clipboard', {
+			value,
+			configurable: true,
+			writable: true
+		});
+	}
+
+	beforeEach(() => {
+		chat = vi.fn<ChatApi['chat']>();
+		getBraindump = vi.fn<ChatApi['getBraindump']>();
+		writeText = vi.fn().mockResolvedValue(undefined);
+		installClipboard({ writeText });
+	});
+
+	afterEach(() => {
+		if (clipboardDescriptor) {
+			Object.defineProperty(navigator, 'clipboard', clipboardDescriptor);
+		} else {
+			installClipboard(undefined);
+		}
+		vi.useRealTimers();
+	});
+
+	it('shows a copy button at the bottom of a non-silent answer', async () => {
+		chat.mockResolvedValue(GROUNDED);
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { getByTestId } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump) }
+		});
+		await submitQuery(getByTestId, 'is Q3 at risk?');
+		await waitFor(() => expect(getByTestId('chat-answer')).toBeTruthy());
+		const btn = getByTestId('chat-copy-answer');
+		expect(btn).toBeTruthy();
+		expect(btn.textContent).toBe('Copy');
+	});
+
+	it('clicking copy writes the normalized answer to the clipboard and shows Copied feedback', async () => {
+		chat.mockResolvedValue(GROUNDED);
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { getByTestId } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump) }
+		});
+		await submitQuery(getByTestId, 'is Q3 at risk?');
+		await waitFor(() => expect(getByTestId('chat-copy-answer')).toBeTruthy());
+		await fireEvent.click(getByTestId('chat-copy-answer'));
+		await waitFor(() => expect(writeText).toHaveBeenCalled());
+		// [bd:42] → [1], [edge:...] stripped — same normalization as the chips
+		expect(writeText).toHaveBeenCalledWith(
+			'Q3 launch is at risk because Maria is leaving [1].'
+		);
+		await waitFor(() =>
+			expect(getByTestId('chat-copy-answer').textContent).toBe('Copied')
+		);
+	});
+
+	it('resets the Copied feedback after a timeout', async () => {
+		vi.useFakeTimers();
+		chat.mockResolvedValue(GROUNDED);
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { getByTestId } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump) }
+		});
+		await submitQuery(getByTestId, 'is Q3 at risk?');
+		await tick();
+		await fireEvent.click(getByTestId('chat-copy-answer'));
+		await tick();
+		expect(writeText).toHaveBeenCalled();
+		expect(getByTestId('chat-copy-answer').textContent).toBe('Copied');
+		await vi.advanceTimersByTimeAsync(2000);
+		await tick();
+		expect(getByTestId('chat-copy-answer').textContent).toBe('Copy');
+	});
+
+	it('shows no copy button for the silence state', async () => {
+		chat.mockResolvedValue(SILENT);
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { getByTestId, queryByTestId } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump) }
+		});
+		await submitQuery(getByTestId, 'what is the meaning of life?');
+		await waitFor(() =>
+			expect(getByTestId('chat-explicit-silence')).toBeTruthy()
+		);
+		expect(queryByTestId('chat-copy-answer')).toBeNull();
+	});
+
+	it('shows no copy button for the loading state', async () => {
+		chat.mockReturnValue(new Promise<ChatResponse>(() => {}));
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { getByTestId, queryByTestId } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump) }
+		});
+		await submitQuery(getByTestId, 'is Q3 at risk?');
+		expect(getByTestId('chat-loading')).toBeTruthy();
+		expect(queryByTestId('chat-copy-answer')).toBeNull();
+	});
+
+	it('shows no copy button for the error state', async () => {
+		chat.mockRejectedValue(new Error('POST /chat failed: 503'));
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { getByTestId, queryByTestId } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump) }
+		});
+		await submitQuery(getByTestId, 'is Q3 at risk?');
+		await waitFor(() => expect(getByTestId('chat-error')).toBeTruthy());
+		expect(queryByTestId('chat-copy-answer')).toBeNull();
+	});
+
+	it('does not crash when the clipboard is unavailable (insecure context)', async () => {
+		// Simulate an insecure context where navigator.clipboard is undefined.
+		installClipboard(undefined);
+		chat.mockResolvedValue(GROUNDED);
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { getByTestId } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump) }
+		});
+		await submitQuery(getByTestId, 'is Q3 at risk?');
+		await waitFor(() => expect(getByTestId('chat-copy-answer')).toBeTruthy());
+		// Clicking must not throw; the fallback silently clears copied state.
+		await fireEvent.click(getByTestId('chat-copy-answer'));
+		await waitFor(() =>
+			expect(getByTestId('chat-copy-answer').textContent).toBe('Copy')
+		);
+		expect(writeText).not.toHaveBeenCalled();
 	});
 });
