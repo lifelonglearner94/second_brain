@@ -3,6 +3,7 @@
 		parseAnswerCitations,
 		type AnswerSegment
 	} from '$lib/chat/citations';
+	import { composeAnswer, mountCitationChips } from './markdown';
 	import type { Braindump, ChatResponse } from '$lib/api/client';
 	import DocumentModal from './DocumentModal.svelte';
 
@@ -22,6 +23,18 @@
 	let segments = $state<AnswerSegment[]>([]);
 	let errorText = $state<string | null>(null);
 	let openCitationId = $state<number | null>(null);
+	let answerEl = $state<HTMLDivElement | null>(null);
+
+	const answer = $derived(
+		segments.length > 0 ? composeAnswer(segments) : { html: '', chips: [] }
+	);
+
+	$effect(() => {
+		const el = answerEl;
+		const { html, chips } = answer;
+		if (!el || !html) return;
+		mountCitationChips(el, chips, openCitation);
+	});
 
 	const EXPLICIT_SILENCE =
 		'I cannot find graph-supported evidence to answer this.';
@@ -134,24 +147,10 @@
 			</div>
 		{:else}
 			<div class="answer-card card" data-testid="chat-answer">
-				<p class="answer-text">
-					{#each segments as seg}
-						{#if seg.kind === 'text'}
-							{seg.text}
-						{:else}
-							<button
-								type="button"
-								class="citation-chip"
-								data-testid="chat-citation-chip"
-								data-braindump-id={seg.braindumpId}
-								aria-label={`Open source ${seg.index}`}
-								onclick={() => openCitation(seg.braindumpId)}
-							>
-								[{seg.index}]
-							</button>
-						{/if}
-					{/each}
-				</p>
+				<div class="answer-text" bind:this={answerEl}>
+					<!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized via DOMPurify in composeAnswer (issue #95) -->
+					{@html answer.html}
+				</div>
 			</div>
 		{/if}
 	{/if}
@@ -216,6 +215,122 @@
 		line-height: var(--lh-read);
 		font-size: var(--fs-16);
 		color: var(--fg);
+		word-wrap: break-word;
+	}
+	.answer-text :global(p),
+	.answer-text :global(ul),
+	.answer-text :global(ol),
+	.answer-text :global(pre),
+	.answer-text :global(blockquote),
+	.answer-text :global(hr) {
+		margin: 0 0 var(--space-3);
+	}
+	.answer-text :global(p:last-child),
+	.answer-text :global(ul:last-child),
+	.answer-text :global(ol:last-child),
+	.answer-text :global(pre:last-child),
+	.answer-text :global(blockquote:last-child),
+	.answer-text :global(hr:last-child) {
+		margin-bottom: 0;
+	}
+	.answer-text :global(h1),
+	.answer-text :global(h2),
+	.answer-text :global(h3),
+	.answer-text :global(h4),
+	.answer-text :global(h5),
+	.answer-text :global(h6) {
+		margin: var(--space-4) 0 var(--space-2);
+		font-weight: 600;
+		line-height: var(--lh-tight);
+		color: var(--fg);
+		text-wrap: balance;
+	}
+	.answer-text :global(h1) {
+		font-size: var(--fs-22);
+	}
+	.answer-text :global(h2) {
+		font-size: var(--fs-18);
+	}
+	.answer-text :global(h3) {
+		font-size: var(--fs-16);
+	}
+	.answer-text :global(h4),
+	.answer-text :global(h5),
+	.answer-text :global(h6) {
+		font-size: var(--fs-14);
+		color: var(--fg-muted);
+	}
+	.answer-text :global(h1:first-child),
+	.answer-text :global(h2:first-child),
+	.answer-text :global(h3:first-child),
+	.answer-text :global(h4:first-child),
+	.answer-text :global(h5:first-child),
+	.answer-text :global(h6:first-child) {
+		margin-top: 0;
+	}
+	.answer-text :global(ul),
+	.answer-text :global(ol) {
+		padding-left: 1.4rem;
+	}
+	.answer-text :global(li) {
+		margin: var(--space-1) 0;
+	}
+	.answer-text :global(li::marker) {
+		color: var(--fg-subtle);
+	}
+	.answer-text :global(code) {
+		font-family: var(--font-mono);
+		font-size: 0.875em;
+		color: var(--accent-strong);
+		background: var(--bg-sunken);
+		padding: 0.1rem 0.35rem;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--border-hairline);
+	}
+	.answer-text :global(pre) {
+		background: var(--bg-sunken);
+		border: 1px solid var(--border-hairline);
+		border-radius: var(--radius-md);
+		padding: var(--space-3) var(--space-4);
+		overflow-x: auto;
+	}
+	.answer-text :global(pre code) {
+		color: var(--fg);
+		background: none;
+		border: none;
+		padding: 0;
+		font-size: var(--fs-14);
+		line-height: var(--lh-body);
+	}
+	.answer-text :global(blockquote) {
+		border-left: 3px solid var(--border-accent);
+		padding: var(--space-1) var(--space-4);
+		color: var(--fg-muted);
+	}
+	.answer-text :global(blockquote p) {
+		margin: 0;
+	}
+	.answer-text :global(strong) {
+		font-weight: 600;
+	}
+	.answer-text :global(em) {
+		font-style: italic;
+	}
+	.answer-text :global(del),
+	.answer-text :global(s) {
+		color: var(--fg-subtle);
+	}
+	.answer-text :global(a) {
+		color: var(--accent);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+	.answer-text :global(a:hover) {
+		color: var(--accent-strong);
+	}
+	.answer-text :global(hr) {
+		border: none;
+		border-top: 1px solid var(--border-hairline);
 	}
 	.loading {
 		display: flex;
@@ -287,7 +402,7 @@
 		line-height: var(--lh-body);
 	}
 
-	.citation-chip {
+	.answer-text :global(.citation-chip) {
 		display: inline-flex;
 		align-items: center;
 		padding: 0 0.35rem;
@@ -306,7 +421,7 @@
 			border-color var(--dur-1) var(--ease),
 			transform var(--dur-1) var(--ease);
 	}
-	.citation-chip:hover {
+	.answer-text :global(.citation-chip:hover) {
 		background: rgba(122, 183, 255, 0.22);
 		border-color: var(--accent);
 		transform: translateY(-1px);

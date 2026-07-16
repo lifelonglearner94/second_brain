@@ -44,6 +44,40 @@ const SILENT: ChatResponse = {
 	mode: 'no_seed_fallback'
 };
 
+const MARKDOWN: ChatResponse = {
+	answer: '**Risk** confirmed for Q3 [bd:42].',
+	citations: [
+		{
+			id: 42,
+			verbatim: 'maria leaving tanks the timeline',
+			cleaned: 'Maria leaving tanks the timeline.',
+			created_at: 1_700_000_000,
+			score: 1.0,
+			source: 'subgraph'
+		}
+	],
+	paths: [],
+	silent: false,
+	mode: 'seed_then_expand'
+};
+
+const XSS: ChatResponse = {
+	answer: '<script>alert(1)</script> safe answer [bd:42].',
+	citations: [
+		{
+			id: 42,
+			verbatim: 'maria leaving tanks the timeline',
+			cleaned: 'Maria leaving tanks the timeline.',
+			created_at: 1_700_000_000,
+			score: 1.0,
+			source: 'subgraph'
+		}
+	],
+	paths: [],
+	silent: false,
+	mode: 'seed_then_expand'
+};
+
 type ChatApi = {
 	chat(query: string): Promise<ChatResponse>;
 	getBraindump(id: number): Promise<Braindump>;
@@ -96,6 +130,43 @@ describe('ChatSurface - conversational read surface (ADR-0005, backend #10)', ()
 		const chip = getByTestId('chat-citation-chip');
 		expect(chip.textContent).toBe('[1]');
 		expect(chip.getAttribute('data-braindump-id')).toBe('42');
+	});
+
+	it('renders the answer as formatted markdown while keeping citation chips inline and clickable (issue #95)', async () => {
+		chat.mockResolvedValue(MARKDOWN);
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { getByTestId, container } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump) }
+		});
+		await submitQuery(getByTestId, 'is Q3 at risk?');
+		await waitFor(() => expect(getByTestId('chat-answer')).toBeTruthy());
+		const strong = container.querySelector('strong');
+		expect(strong?.textContent).toBe('Risk');
+		const chip = await waitFor(() => getByTestId('chat-citation-chip'));
+		expect(chip.textContent).toBe('[1]');
+		expect(chip.getAttribute('data-braindump-id')).toBe('42');
+		await fireEvent.click(chip);
+		await waitFor(() =>
+			expect(getByTestId('document-modal-cleaned')).toBeTruthy()
+		);
+		expect(getBraindump).toHaveBeenCalledWith(42);
+	});
+
+	it('sanitizes LLM-produced HTML so scripts cannot render, while chips still work (issue #95)', async () => {
+		chat.mockResolvedValue(XSS);
+		getBraindump.mockResolvedValue(BRAINDUMP);
+		const { getByTestId, container } = render(ChatSurface, {
+			props: { api: apiStub(chat, getBraindump) }
+		});
+		await submitQuery(getByTestId, 'is Q3 at risk?');
+		await waitFor(() => expect(getByTestId('chat-answer')).toBeTruthy());
+		expect(container.querySelector('script')).toBeNull();
+		expect(container.innerHTML).not.toContain('alert(1)');
+		const chip = await waitFor(() => getByTestId('chat-citation-chip'));
+		await fireEvent.click(chip);
+		await waitFor(() =>
+			expect(getByTestId('document-modal-cleaned')).toBeTruthy()
+		);
 	});
 
 	it('clicking a citation chip opens the Document Modal showing the cited braindump\u2019s cleaned text (fetched via GET /braindumps/:id, backend #5)', async () => {
