@@ -22,6 +22,15 @@
 //! **exception** to that guarantee - it exists only because the free tier
 //! forces it, and it is observable via tracing so the degradation is never
 //! silent. The ADR's free-tier-fallback addendum records the exception.
+//!
+//! Issue #99: the consecutive-failure counter is NOT reset by a primary
+//! success while the circuit is closed - several text-gen paths (ingest, chat,
+//! retrieval, refactor) share one breaker, and a success in one path must not
+//! mask sustained failures in another. The counter only increments on a
+//! transient failure and only resets when a half-open probe succeeds and closes
+//! the circuit. Every counter transition is logged so the breaker state is
+//! fully auditable. See the ADR-0003 issue #99 addendum for the root cause and
+//! the rejected alternatives.
 
 use std::sync::{Arc, Mutex};
 
@@ -135,12 +144,20 @@ impl FallbackLlm {
         let mut st = self.state.lock().expect("circuit mutex poisoned");
         if probe {
             tracing::info!(
+                failures = st.consecutive_failures,
                 "fallback circuit closed: half-open primary probe succeeded, \
-                 retiring the fallback model"
+                 consecutive-failure counter reset to 0 and the fallback model retired"
+            );
+            st.consecutive_failures = 0;
+            st.opened_at = None;
+        } else {
+            tracing::debug!(
+                consecutive_failures = st.consecutive_failures,
+                "fallback circuit closed-path primary success: consecutive-failure \
+                 counter left unchanged (a success in one text-gen path must not mask \
+                 sustained failures in another - issue #99)"
             );
         }
-        st.consecutive_failures = 0;
-        st.opened_at = None;
     }
 
     fn record_failure_closed(&self) {
@@ -150,8 +167,15 @@ impl FallbackLlm {
             st.opened_at = Some((self.now)());
             tracing::warn!(
                 failures = st.consecutive_failures,
+                threshold = self.max_attempts,
                 "fallback circuit opened: primary hit the consecutive-transient-failure \
                  threshold; subsequent text-generation calls route to the fallback model"
+            );
+        } else {
+            tracing::debug!(
+                consecutive_failures = st.consecutive_failures,
+                threshold = self.max_attempts,
+                "fallback circuit still closed: primary transient failure recorded"
             );
         }
     }
@@ -161,6 +185,7 @@ impl FallbackLlm {
         st.opened_at = Some((self.now)());
         st.consecutive_failures = self.max_attempts;
         tracing::warn!(
+            consecutive_failures = st.consecutive_failures,
             "fallback circuit re-opened: half-open primary probe failed; \
              falling back for this call and restarting the cooldown"
         );
@@ -471,9 +496,14 @@ mod tests {
         assert_eq!(fallback.text_calls(), 1);
     }
 
+    /// Issue #99: a successful text-gen call from one path (here `synthesize`,
+    /// simulating chat) must NOT reset the consecutive-failure counter that
+    /// failures from another path (here `clean`, simulating ingest) are
+    /// accumulating. The circuit opens after 5 transient failures regardless of
+    /// interspersed successes - the production incident root cause.
     #[tokio::test]
-    async fn primary_success_resets_the_consecutive_failure_counter() {
-        let primary = Arc::new(ScriptLlm::new("P", vec![1, 2, 3, 4, 6, 7, 8, 9], 64));
+    async fn five_transient_failures_open_the_circuit_even_with_an_intervening_success() {
+        let primary = Arc::new(ScriptLlm::new("P", vec![1, 3, 4, 5, 6], 64));
         let fallback = Arc::new(ScriptLlm::new("F", vec![], 48));
         let (_clock, now) = test_clock(1000);
         let llm = wrapper(
@@ -483,18 +513,36 @@ mod tests {
             60_000,
             now,
         );
-        for _ in 0..4 {
-            assert!(llm.clean("x").await.is_err());
-        }
-        assert_eq!(llm.clean("ok").await.unwrap(), "P:clean:ok");
-        for _ in 0..4 {
-            assert!(llm.clean("x").await.is_err());
-        }
-        assert_eq!(llm.clean("ok2").await.unwrap(), "P:clean:ok2");
+        // Ingest path fails (counter 1).
+        assert!(llm.clean("ingest1").await.is_err());
+        // Chat path SUCCEEDS against the primary - must not reset the counter.
+        assert_eq!(
+            llm.synthesize("sys", "usr").await.unwrap(),
+            "P:synthesize:sys:usr",
+            "the success came from the primary, not the fallback"
+        );
+        // Ingest path keeps failing (counter 2, 3, 4, 5 -> open on the 5th).
+        assert!(llm.clean("ingest2").await.is_err());
+        assert!(llm.clean("ingest3").await.is_err());
+        assert!(llm.clean("ingest4").await.is_err());
+        assert!(llm.clean("ingest5").await.is_err());
+        // Circuit is now open: the next call routes to the fallback without
+        // probing the primary, even though a chat success sat between the
+        // ingest failures.
+        assert_eq!(
+            llm.clean("ingest6").await.unwrap(),
+            "F:clean:ingest6",
+            "circuit opened despite the intervening success -> fallback serves"
+        );
+        assert_eq!(
+            primary.text_calls(),
+            6,
+            "primary attempted 6 times (5 transient failures + 1 success)"
+        );
         assert_eq!(
             fallback.text_calls(),
-            0,
-            "circuit never opened: counter reset by the success at call 5"
+            1,
+            "fallback served exactly once, after the circuit opened"
         );
     }
 
