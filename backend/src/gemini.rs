@@ -15,6 +15,8 @@
 //! decoded Gemini JSON and yields an [`ExtractionResult`]; only the network
 //! call is untestable without a key.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -30,6 +32,18 @@ const DEFAULT_TEXT_MODEL: &str = "gemini-2.0-flash";
 /// `GEMINI_TEXT_MODEL_FALLBACK`.
 const DEFAULT_FALLBACK_TEXT_MODEL: &str = "gemini-3.1-flash-lite";
 const DEFAULT_EMBED_MODEL: &str = "text-embedding-004";
+
+/// Issue #100: default TCP/TLS handshake timeout (secs) for the Gemini HTTP
+/// client. Configurable via `GEMINI_CONNECT_TIMEOUT_SECS`.
+const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
+/// Issue #100: default total-request timeout (secs) for a Gemini call. A hung
+/// connection (server accepts TCP but never responds) becomes a
+/// `reqwest::Error::is_timeout()`, which `map_reqwest` maps to
+/// `Error::TransientLlm` so the ingest retry loop handles it instead of
+/// parking forever. Flash-class generation completes in seconds; 60s is a
+/// generous ceiling that won't trip on legitimate slow responses. Configurable
+/// via `GEMINI_REQUEST_TIMEOUT_SECS`.
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
 
 /// Output dimensionality for a Gemini embedding model. Used to size the
 /// `vec0` virtual tables at startup (`ensure_vec_tables`) BEFORE any embed
@@ -113,6 +127,9 @@ pub struct GeminiClient {
     embed_dim: usize,
     /// `None` = `GEMINI_REASONING_EFFORT` unset → don't send `thinkingConfig`.
     reasoning: Option<ReasoningEffort>,
+    /// Gemini API base URL; configurable via `GEMINI_BASE` (default: the public
+    /// endpoint) so tests can point at a mock server.
+    base: String,
     http: reqwest::Client,
 }
 
@@ -147,7 +164,18 @@ impl GeminiClient {
             },
             Err(_) => None,
         };
+        let base = std::env::var("GEMINI_BASE").unwrap_or_else(|_| GEMINI_BASE.to_string());
+        let connect_timeout_secs = std::env::var("GEMINI_CONNECT_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS);
+        let request_timeout_secs = std::env::var("GEMINI_REQUEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
         let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(connect_timeout_secs))
+            .timeout(Duration::from_secs(request_timeout_secs))
             .build()
             .map_err(|e| Error::Internal(format!("reqwest client build failed: {e}")))?;
         Ok(Some(Self {
@@ -156,6 +184,7 @@ impl GeminiClient {
             embed_model,
             embed_dim,
             reasoning,
+            base,
             http,
         }))
     }
@@ -175,6 +204,7 @@ impl GeminiClient {
             embed_model: self.embed_model.clone(),
             embed_dim: self.embed_dim,
             reasoning: None,
+            base: self.base.clone(),
             http: self.http.clone(),
         }
     }
@@ -189,8 +219,8 @@ impl GeminiClient {
             }
         }
         let url = format!(
-            "{GEMINI_BASE}/models/{}:generateContent?key={}",
-            self.text_model, self.api_key
+            "{}/models/{}:generateContent?key={}",
+            self.base, self.text_model, self.api_key
         );
         let body = json!({
             "contents": [{"parts": [{"text": user}]}],
@@ -221,8 +251,8 @@ impl GeminiClient {
 
     async fn embed(&self, text: &str, task_type: &str) -> Result<Vec<f32>> {
         let url = format!(
-            "{GEMINI_BASE}/models/{}:embedContent?key={}",
-            self.embed_model, self.api_key
+            "{}/models/{}:embedContent?key={}",
+            self.base, self.embed_model, self.api_key
         );
         let body = json!({
             "content": {"parts": [{"text": text}]},
