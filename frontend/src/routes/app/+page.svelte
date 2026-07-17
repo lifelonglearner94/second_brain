@@ -5,6 +5,8 @@
 	import { createIngestApi, type IngestResponse } from '$lib/capture/ingest';
 	import { pendingCaptures } from '$lib/state/pending-captures.svelte';
 	import { graphStore } from '$lib/state/graph.svelte';
+	import { createIdb } from '$lib/state/idb';
+	import { onWindowFocus } from '$lib/graph/delta-sync';
 	import ActiveCapture from '$lib/capture/ActiveCapture.svelte';
 	import { onMount } from 'svelte';
 
@@ -49,9 +51,28 @@
 		globalThis.addEventListener('online', handleConnectivity);
 		globalThis.addEventListener('offline', handleConnectivity);
 		void pendingCaptures.load();
+
+		void (async () => {
+			try {
+				await graphStore.loadFromNetworkOrCache(apiClient, createIdb());
+			} catch {
+				// Offline or no cached snapshot: focus-sync retries later.
+			}
+		})();
+
+		const stopFocusSync = onWindowFocus(globalThis, () => {
+			void reconcileOnFocus();
+		});
+
+		async function reconcileOnFocus(): Promise<void> {
+			if (!graphStore.snapshot) return;
+			await graphStore.syncDelta(apiClient);
+		}
+
 		return () => {
 			globalThis.removeEventListener('online', handleConnectivity);
 			globalThis.removeEventListener('offline', handleConnectivity);
+			stopFocusSync();
 		};
 	});
 </script>
