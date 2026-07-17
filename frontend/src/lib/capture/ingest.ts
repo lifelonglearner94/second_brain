@@ -1,9 +1,7 @@
 import type {
 	BraindumpDto,
-	GraphDelta,
 	GraphConcept,
-	GraphEdge,
-	IngestStatus
+	GraphEdge
 } from '$lib/api/client';
 
 export type IngestResponse = {
@@ -13,21 +11,21 @@ export type IngestResponse = {
 	cursor: number;
 };
 
+// Issue #102: the submit hot path is fire-and-forget. The backend persists the
+// verbatim in milliseconds and runs clean → extract → accrete in a background
+// IngestRunner; the frontend must NOT block on that pipeline. Graph visibility
+// for late commits is handled by the /app focus-triggered syncDelta (issue #98)
+// and hard-reload (loadFromNetworkOrCache), not by polling here.
+//
+// `getIngestStatus` stays on ApiClient for diagnostics / optional hints, but
+// the submit hot path no longer calls it.
 export type IngestClient = {
 	submitBraindump(verbatim: string): Promise<BraindumpDto>;
-	getGraphDelta(since?: number): Promise<GraphDelta>;
-	getIngestStatus(id: number): Promise<IngestStatus>;
 };
 
 export interface IngestApi {
 	ingest(verbatim: string): Promise<IngestResponse>;
 }
-
-// Issue #97: backoff schedule for the ingest-status poll. Each delay doubles
-// the previous; the cumulative cap (~12s) bounds the poll so a stuck
-// background pipeline does not block the UI forever. Kept as a module-level
-// constant so tests can substitute short delays via the `delays` parameter.
-const DEFAULT_POLL_DELAYS_MS = [400, 800, 1600, 3200, 6400];
 
 function emptyResponse(
 	braindump: BraindumpDto,
@@ -43,42 +41,17 @@ function emptyResponse(
 
 export function createIngestApi(
 	client: IngestClient,
-	getCursor: () => number,
-	delays: number[] = DEFAULT_POLL_DELAYS_MS
+	getCursor: () => number
 ): IngestApi {
 	return {
 		async ingest(verbatim: string): Promise<IngestResponse> {
+			// Fire-and-forget: persist the verbatim and return immediately with
+			// an empty delta + the cursor unchanged. The background pipeline's
+			// commits are surfaced later by the /app focus-sync (issue #98) or a
+			// hard-reload. GraphStore.mergeIngest only advances the cursor when
+			// the response carries changes, so an empty response is a no-op on
+			// the graph (the #97 cursor-advance invariant).
 			const braindump = await client.submitBraindump(verbatim);
-			const id = Number(braindump.id);
-
-			// Issue #97: poll the backend ingest-status until the background
-			// clean → extract → accrete pipeline commits (or fails, or the
-			// backoff budget runs out). The single racing `getGraphDelta` the
-			// old code fired immediately is replaced by a final delta pull on
-			// `complete`; on `failed`/timeout the cursor is NOT advanced so
-			// the next focus/submit sync still catches the background commit.
-			for (const delay of delays) {
-				const status = await client.getIngestStatus(id);
-				if (status.status === 'complete') {
-					const delta = await client.getGraphDelta(getCursor());
-					return {
-						braindump: {
-							id: braindump.id,
-							created_at: braindump.created_at
-						},
-						concepts: delta.added_concepts,
-						edges: delta.added_edges,
-						cursor: delta.cursor
-					};
-				}
-				if (status.status === 'failed') {
-					return emptyResponse(braindump, getCursor());
-				}
-				await new Promise((r) => setTimeout(r, delay));
-			}
-			// Backoff budget exhausted: the background pipeline has not
-			// committed yet. Stop without advancing the cursor so the next
-			// focus/submit sync still catches it.
 			return emptyResponse(braindump, getCursor());
 		}
 	};

@@ -155,7 +155,7 @@ describe('apiClient.getIngestStatus - GET /braindumps/:id/ingest-status (issue #
 		expect(status).toEqual(body);
 	});
 
-	it('throws on a non-2xx so the poll loop can stop and defer to the next focus event', async () => {
+	it('throws on a non-2xx so a diagnostics caller can surface the error (the submit hot path no longer calls this - issue #102)', async () => {
 		fetchMock.mockResolvedValue(new Response('nope', { status: 404 }));
 		const api = createApiClient({ fetch: fetchMock });
 		await expect(api.getIngestStatus(9999)).rejects.toThrow(/404/);
